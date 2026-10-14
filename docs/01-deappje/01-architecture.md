@@ -1,0 +1,161 @@
+# Architecture
+
+One Rust binary, four nanoservices, one Postgres database with a schema per nanoservice, blobs
+in the platform's private bucket, Kratos for identity. The server never holds a group key and
+never reads a payload: every `value` is ciphertext, every blob is ciphertext, and the plaintext
+columns are the minimum needed to route, order, authorise and expire.
+
+## Nanoservices
+
+### `group`
+
+Owns groups and who is in them. Plain executor: nothing here waits on anything.
+
+- **Tables**: `group` (id, `parent_group_id`, creator, timestamps), `membership` (group, user,
+  role, joined), `invite` (group, code, creator, expiry, max uses, uses, revoked). Directive §2.
+- **Invariants**: a user is in a group at most once; a member of a subgroup is a member of its
+  parent (checked on accept, cascaded on leave/remove); only an admin removes members or revokes
+  invites; the creator is the first admin.
+- **Handles**: `CreateGroupRequest`, `GetGroupRequest`, `ListGroupsRequest`, `CreateInviteRequest`,
+  `AcceptInviteRequest`, `ListMembersRequest`, `RemoveMemberRequest`, `LeaveGroupRequest`, and
+  `CheckMembershipRequest` → `MembershipCheck`, the authorisation question every other
+  nanoservice asks before it touches anything in a group.
+- **Sends**: `MemberRemoved` (void event) so `device` can revoke wrapped keys and push a rotation
+  prompt.
+- **API**: `GroupService`.
+
+### `device`
+
+Owns devices, their public keys, push tokens, the wrapped group keys, and key requests. Plain
+executor. Group keys are opaque bytes to this nanoservice: it stores what a member's device wrapped
+for another device and hands it back.
+
+- **Tables**: `device` (user, public key, platform, push token), `wrapped_key` (group, key id,
+  device, ciphertext, wrapped by), `key_request` (group, device, status). Directive §2.
+- **Invariants**: a device belongs to one user; a wrapped key exists only for a device whose user
+  is a member (checked through `CheckMembershipRequest` at write time); on `MemberRemoved` the
+  removed user's wrapped keys for that group are deleted and every other member's devices are
+  pushed so one of them rotates.
+- **External**: APNs and FCM, one `send_push` call each, strategy `idempotent`: the only push the
+  server sends is a silent "group X advanced" or "key request pending" wake-up, and a duplicate is
+  harmless. Directive §6.
+- **Handles**: device registration, push token, device listing (so members can wrap keys for
+  new devices), key requests and fulfilment, publishing a rotated key set, fetching wrapped keys;
+  plus three void events: `GroupHeadAdvanced` (from `ledger`), `MemberRemoved` (from `group`),
+  `BlobRequested` (from `storage`), each turned into pushes.
+- **API**: `DeviceService`.
+
+### `ledger`
+
+Owns the object log. Plain executor; the one piece of concurrency control in the system is here.
+
+- **Tables**: `object` (id, group, parent, type, schema version, key id, value, blob id, version,
+  seq, creator device, deleted flag and time), `group_head` (group, head seq): the counter row.
+  Directive §2, §7 (serialize on a counter row under `FOR UPDATE`).
+- **Push**: one transaction per batch: lock `group_head`, then per object compare the caller's
+  `base_version` with the stored version (absent ⇒ 0); on match write the row with
+  `version + 1` and `seq = head + 1`, advance head; on mismatch report a conflict for that object
+  and leave it. A delete is a push with `deleted = true`: the row keeps id, group, parent, type
+  and seq, drops `value` and `blob_id`, and the same transaction tombstones every descendant by
+  `parent_id`. Commit, then send `GroupHeadAdvanced` and, per deleted object with a blob,
+  `ObjectDeleted` (both after the transaction: Directive invariant 7).
+- **Pull**: `PullChangesRequest` returns rows with `seq > cursor` in seq order, tombstones
+  included, paged; `BackfillRequest` returns rows of one type with `seq < before`, newest first,
+  limited; `GetHeadsRequest` returns `(group, head)` for every group the caller is in;
+  `ListObjectIdsRequest` returns `(id, version, deleted)` for a group for full reconciliation.
+- **Schedule**: `gc_tombstones` daily, deletes tombstone rows older than the retention window.
+  A client whose cursor is older than the window is told so and reconciles.
+- **Sends**: `CheckMembershipRequest`, `CheckBlobRequest` (a pushed object may only reference a
+  blob of its own group that is uploaded), `GroupHeadAdvanced`, `ObjectDeleted`.
+- **API**: `LedgerService`.
+
+### `storage`
+
+Owns blobs. This is the one nanoservice with a processing-object type, because a blob has a
+lifecycle the server drives against a third party: wait for the upload to land in the bucket,
+expire it after its retention, delete it from the bucket, and wait for a re-upload when a member
+asks for it again.
+
+- **Processing object `blob`** (prefix `blb`). Spec: group, object, kind, storage key, expected
+  hash, uploader device, retention days. Status: phase (`pending_upload`, `available`, `expired`,
+  `requested`), size, uploaded at, last access, expires at, requested at. Directive §3, §5, §6.
+- **Reconcile pass**: deleting ⇒ confirm absence in the bucket, delete if present, `Delete`.
+  `pending_upload` ⇒ `HEAD` the key; present and hash matches ⇒ `available` with
+  `expires_at = now + retention`, `Converged.after(retention)`; absent ⇒ `Converged.after(5m)`
+  (the `ConfirmUploadRequest` handler nudges it, so the poll is a fallback). `available` past
+  `expires_at` ⇒ `delete_object`, phase `expired`, `Settled`. `requested` ⇒ `Settled` until
+  `ConfirmUploadRequest` nudges it back through `pending_upload`. Downloads and re-upload
+  requests are unclaimed input, so the request path never writes status (invariant 3): it writes
+  `last_access_at` / `requested_at` into the plain `blob_access` side table and nudges; the
+  pass reads that table and extends `expires_at` or moves to `requested`.
+- **Config type `blob_kind`**: `full` (30 days, 25 MB max), `thumbnail` (3650 days, 200 KB max),
+  `attachment` (365 days, 25 MB max). Retention and size cap per kind, edited by a human.
+- **External**: the platform's object storage. `delete_object` is the only effect
+  (`idempotent`: S3 delete of a missing key succeeds). Presigning and `HEAD` are reads.
+- **Handles**: `CreateUploadRequest` (creates the object in `pending_upload`, returns a presigned
+  PUT moved onto `S3_PRIVATE_URL`), `ConfirmUploadRequest` (nudge), `GetDownloadRequest`
+  (presigned GET if `available`, otherwise the phase), `RequestBlobRequest` (`expired` ⇒
+  `requested`, sends `BlobRequested`), `CheckBlobRequest` (from `ledger`), `ObjectDeleted` (void,
+  from `ledger`: `mark_deleted`).
+- **Sends**: `CheckMembershipRequest`, `BlobRequested`.
+- **API**: `StorageService`.
+
+## Deployment shape
+
+- One binary, `replicas: 1` in preview and `2` in live (deviation from the default of 2
+  everywhere, for cost; the frameworks are multi-replica safe so live gets two).
+- `frontend: react`: the web client is an application, not a page, with local-first state in a
+  wasm build of the shared Rust core and React rendering it. Served from an nginx-unprivileged
+  container by the scaffold; `05-deployment.md` records the later move to the public bucket
+  (`website: true`), which the environment already has for blobs.
+- CloudNativePG, `instances: 1`, one application database with schemas `group`, `device`,
+  `ledger`, `storage`; a separate `kratos` database.
+- Kratos: email code and passkeys. Users are Kratos identity ids.
+- API: protobuf over Connect, four services. The Rust core on every client speaks it.
+- Object storage declared in both environments: blobs in the private bucket, nothing in the public
+  bucket until the web client moves there.
+
+## Topology
+
+| Message | Response | Sender(s) | Handler |
+|---|---|---|---|
+| CreateGroupRequest | Group | api | group |
+| GetGroupRequest | Group | api | group |
+| ListGroupsRequest | GroupList | api | group |
+| CreateInviteRequest | Invite | api | group |
+| AcceptInviteRequest | Membership | api | group |
+| ListMembersRequest | MemberList | api | group |
+| RemoveMemberRequest | Membership | api | group |
+| LeaveGroupRequest | Membership | api | group |
+| CheckMembershipRequest | MembershipCheck | device, ledger, storage | group |
+| MemberRemoved | (void) | group | device |
+| RegisterDeviceRequest | Device | api | device |
+| SetPushTokenRequest | Device | api | device |
+| ListDevicesRequest | DeviceList | api | device |
+| RequestGroupKeysRequest | KeyRequest | api | device |
+| ListKeyRequestsRequest | KeyRequestList | api | device |
+| FulfilKeyRequestRequest | KeyRequest | api | device |
+| PublishWrappedKeysRequest | WrappedKeyList | api | device |
+| GetWrappedKeysRequest | WrappedKeyList | api | device |
+| GroupHeadAdvanced | (void) | ledger | device |
+| BlobRequested | (void) | storage | device |
+| PushObjectsRequest | PushResult | api | ledger |
+| PullChangesRequest | ChangeSet | api | ledger |
+| BackfillRequest | ChangeSet | api | ledger |
+| GetHeadsRequest | HeadList | api | ledger |
+| ListObjectIdsRequest | ObjectIdList | api | ledger |
+| ObjectDeleted | (void) | ledger | storage |
+| CheckBlobRequest | Blob | ledger | storage |
+| CreateUploadRequest | UploadGrant | api | storage |
+| ConfirmUploadRequest | Blob | api | storage |
+| GetDownloadRequest | DownloadGrant | api | storage |
+| RequestBlobRequest | Blob | api | storage |
+
+Every cross-nanoservice message binds Directive §7. The only derived state that crosses is a
+boolean (`MembershipCheck`, `Blob.phase`) or an id; no nanoservice re-derives another's rule.
+
+## What is deliberately not on the server
+
+Merge, validation of payloads, invariants inside a type (one vote per poll, shares summing to
+the total), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
+geocoding. All of it is the client's, because all of it needs plaintext.

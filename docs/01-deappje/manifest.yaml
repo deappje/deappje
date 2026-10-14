@@ -1,0 +1,236 @@
+apiVersion: basable.com/v1
+kind: ProjectPlan
+project:
+  language: rust
+  frontend: react
+  auth: kratos
+  database: { instances: 1 }
+nanoservices:
+  - name: group
+    description: Owns groups, memberships and invites; answers every membership check.
+    owns:
+      tables:
+        - name: group
+          columns:
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: parent_group_id, type: uuid, nullable: true }
+            - { name: created_by, type: uuid }
+            - { name: created_at, type: timestamp }
+            - { name: deleted_at, type: timestamp, nullable: true }
+          indexes: [ { columns: [parent_group_id] } ]
+        - name: membership
+          columns:
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: group_id, type: uuid }
+            - { name: user_id, type: uuid }
+            - { name: role, type: string }
+            - { name: joined_at, type: timestamp }
+          indexes: [ { columns: [group_id, user_id] }, { columns: [user_id] } ]
+        - name: invite
+          columns:
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: group_id, type: uuid }
+            - { name: code, type: string, unique: true }
+            - { name: created_by, type: uuid }
+            - { name: expires_at, type: timestamp }
+            - { name: max_uses, type: int32 }
+            - { name: uses, type: int32 }
+            - { name: revoked, type: bool }
+          indexes: [ { columns: [group_id] } ]
+    handles:
+      - { message: CreateGroupRequest, response: Group }
+      - { message: GetGroupRequest, response: Group }
+      - { message: ListGroupsRequest, response: GroupList }
+      - { message: CreateInviteRequest, response: Invite }
+      - { message: AcceptInviteRequest, response: Membership }
+      - { message: ListMembersRequest, response: MemberList }
+      - { message: RemoveMemberRequest, response: Membership }
+      - { message: LeaveGroupRequest, response: Membership }
+      - { message: CheckMembershipRequest, response: MembershipCheck }
+    sends:
+      - { message: MemberRemoved }
+    api:
+      service: GroupService
+      methods:
+        - { name: CreateGroup, request: CreateGroupRequest, response: CreateGroupResponse }
+        - { name: GetGroup, request: GetGroupRequest, response: GetGroupResponse }
+        - { name: ListGroups, request: ListGroupsRequest, response: ListGroupsResponse }
+        - { name: CreateInvite, request: CreateInviteRequest, response: CreateInviteResponse }
+        - { name: AcceptInvite, request: AcceptInviteRequest, response: AcceptInviteResponse }
+        - { name: ListMembers, request: ListMembersRequest, response: ListMembersResponse }
+        - { name: RemoveMember, request: RemoveMemberRequest, response: RemoveMemberResponse }
+        - { name: LeaveGroup, request: LeaveGroupRequest, response: LeaveGroupResponse }
+
+  - name: device
+    description: Owns devices, push tokens, wrapped group keys and key requests; sends silent pushes.
+    owns:
+      tables:
+        - name: device
+          columns:
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: user_id, type: uuid }
+            - { name: public_key, type: bytes }
+            - { name: platform, type: string }
+            - { name: push_provider, type: string, nullable: true }
+            - { name: push_token, type: string, nullable: true }
+            - { name: created_at, type: timestamp }
+            - { name: last_seen_at, type: timestamp }
+          indexes: [ { columns: [user_id] } ]
+        - name: wrapped_key
+          columns:
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: group_id, type: uuid }
+            - { name: key_id, type: int32 }
+            - { name: device_id, type: uuid }
+            - { name: wrapped, type: bytes }
+            - { name: wrapped_by_device, type: uuid }
+            - { name: created_at, type: timestamp }
+          indexes: [ { columns: [group_id, key_id, device_id] }, { columns: [device_id] } ]
+        - name: key_request
+          columns:
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: group_id, type: uuid }
+            - { name: device_id, type: uuid }
+            - { name: status, type: string }
+            - { name: created_at, type: timestamp }
+            - { name: fulfilled_at, type: timestamp, nullable: true }
+          indexes: [ { columns: [group_id, status] } ]
+    externalSystems:
+      - name: apns
+        calls:
+          - { name: send_push, strategy: idempotent }
+      - name: fcm
+        calls:
+          - { name: send_push, strategy: idempotent }
+    handles:
+      - { message: RegisterDeviceRequest, response: Device }
+      - { message: SetPushTokenRequest, response: Device }
+      - { message: ListDevicesRequest, response: DeviceList }
+      - { message: RequestGroupKeysRequest, response: KeyRequest }
+      - { message: ListKeyRequestsRequest, response: KeyRequestList }
+      - { message: FulfilKeyRequestRequest, response: KeyRequest }
+      - { message: PublishWrappedKeysRequest, response: WrappedKeyList }
+      - { message: GetWrappedKeysRequest, response: WrappedKeyList }
+      - { message: GroupHeadAdvanced }
+      - { message: MemberRemoved }
+      - { message: BlobRequested }
+    sends:
+      - { message: CheckMembershipRequest, response: MembershipCheck }
+    api:
+      service: DeviceService
+      methods:
+        - { name: RegisterDevice, request: RegisterDeviceRequest, response: RegisterDeviceResponse }
+        - { name: SetPushToken, request: SetPushTokenRequest, response: SetPushTokenResponse }
+        - { name: ListDevices, request: ListDevicesRequest, response: ListDevicesResponse }
+        - { name: RequestGroupKeys, request: RequestGroupKeysRequest, response: RequestGroupKeysResponse }
+        - { name: ListKeyRequests, request: ListKeyRequestsRequest, response: ListKeyRequestsResponse }
+        - { name: FulfilKeyRequest, request: FulfilKeyRequestRequest, response: FulfilKeyRequestResponse }
+        - { name: PublishWrappedKeys, request: PublishWrappedKeysRequest, response: PublishWrappedKeysResponse }
+        - { name: GetWrappedKeys, request: GetWrappedKeysRequest, response: GetWrappedKeysResponse }
+
+  - name: ledger
+    description: Owns the per-group object log with versions, sequence numbers and tombstones.
+    owns:
+      tables:
+        - name: object
+          columns:
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: group_id, type: uuid }
+            - { name: parent_id, type: uuid, nullable: true }
+            - { name: type, type: int32 }
+            - { name: schema_version, type: int32 }
+            - { name: key_id, type: int32 }
+            - { name: value, type: bytes, nullable: true }
+            - { name: blob_id, type: uuid, nullable: true }
+            - { name: version, type: int64 }
+            - { name: seq, type: int64 }
+            - { name: created_by_device, type: uuid }
+            - { name: deleted, type: bool }
+            - { name: deleted_at, type: timestamp, nullable: true }
+            - { name: updated_at, type: timestamp }
+          indexes:
+            - { columns: [group_id, seq] }
+            - { columns: [group_id, type, seq] }
+            - { columns: [parent_id] }
+            - { columns: [deleted_at] }
+        - name: group_head
+          columns:
+            - { name: group_id, type: uuid, primaryKey: true }
+            - { name: head_seq, type: int64 }
+    schedules:
+      - { name: gc_tombstones, every: 24h }
+    handles:
+      - { message: PushObjectsRequest, response: PushResult }
+      - { message: PullChangesRequest, response: ChangeSet }
+      - { message: BackfillRequest, response: ChangeSet }
+      - { message: GetHeadsRequest, response: HeadList }
+      - { message: ListObjectIdsRequest, response: ObjectIdList }
+    sends:
+      - { message: CheckMembershipRequest, response: MembershipCheck }
+      - { message: CheckBlobRequest, response: Blob }
+      - { message: GroupHeadAdvanced }
+      - { message: ObjectDeleted }
+    api:
+      service: LedgerService
+      methods:
+        - { name: PushObjects, request: PushObjectsRequest, response: PushObjectsResponse }
+        - { name: PullChanges, request: PullChangesRequest, response: PullChangesResponse }
+        - { name: Backfill, request: BackfillRequest, response: BackfillResponse }
+        - { name: GetHeads, request: GetHeadsRequest, response: GetHeadsResponse }
+        - { name: ListObjectIds, request: ListObjectIdsRequest, response: ListObjectIdsResponse }
+
+  - name: storage
+    description: Owns blobs in the private bucket and drives their upload, retention, expiry and re-upload lifecycle.
+    owns:
+      processingObjects:
+        - name: blob
+          prefix: blb
+          spec:
+            - { name: group_id, type: uuid, immutable: true }
+            - { name: object_id, type: uuid, nullable: true }
+            - { name: kind, type: string, immutable: true }
+            - { name: storage_key, type: string, immutable: true }
+            - { name: sha256, type: bytes, immutable: true }
+            - { name: declared_size, type: int64, immutable: true }
+            - { name: uploader_device, type: uuid, immutable: true }
+            - { name: retention_days, type: int32 }
+          status:
+            - { name: phase, type: string }
+            - { name: size_bytes, type: int64, nullable: true }
+            - { name: uploaded_at, type: timestamp, nullable: true }
+            - { name: expires_at, type: timestamp, nullable: true }
+            - { name: requested_at, type: timestamp, nullable: true }
+            - { name: last_error, type: string, nullable: true }
+      tables:
+        - name: blob_access
+          columns:
+            - { name: blob_id, type: uuid, primaryKey: true }
+            - { name: last_access_at, type: timestamp }
+            - { name: requested_at, type: timestamp, nullable: true }
+      configTypes:
+        - name: blob_kind
+          prefix: bkind
+          fields:
+            - { name: retention_days, type: int32 }
+            - { name: max_size_bytes, type: int64 }
+    externalSystems:
+      - name: object_storage
+        calls:
+          - { name: delete_object, strategy: idempotent }
+    handles:
+      - { message: CreateUploadRequest, response: UploadGrant }
+      - { message: ConfirmUploadRequest, response: Blob }
+      - { message: GetDownloadRequest, response: DownloadGrant }
+      - { message: RequestBlobRequest, response: Blob }
+      - { message: CheckBlobRequest, response: Blob }
+      - { message: ObjectDeleted }
+    sends:
+      - { message: CheckMembershipRequest, response: MembershipCheck }
+      - { message: BlobRequested }
+    api:
+      service: StorageService
+      methods:
+        - { name: CreateUpload, request: CreateUploadRequest, response: CreateUploadResponse }
+        - { name: ConfirmUpload, request: ConfirmUploadRequest, response: ConfirmUploadResponse }
+        - { name: GetDownload, request: GetDownloadRequest, response: GetDownloadResponse }
+        - { name: RequestBlob, request: RequestBlobRequest, response: RequestBlobResponse }
