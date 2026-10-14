@@ -52,11 +52,12 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
-| Create group, invite by link/code, accept | include | | Load-bearing. |
+| Create group, invite by link/code, accept | include | code with expiry and max uses; no admin approval of joins | Load-bearing. Approval of join requests was not asked for; an admin controls exposure through max uses and revocation. |
 | Leave group, remove member (admin) | include | triggers key rotation | Load-bearing. |
 | Subgroups (members ⊆ parent, own key) | include | | Requested; cheap once groups exist. |
 | Roles beyond admin/member | exclude | | Not asked for. |
-| Group deletion | later | needs purge across ledger, storage, keys | Open candidate below. |
+| Group deletion | include | a `group_purge` processing object in `group` drives the purge of ledger, storage and device until each reports nothing left; subgroups are purged first | Round 1. A purge must finish, so it is driven by a reconciler with direct requests, not an event. |
+| Data export | include | client-side: pull since 0 plus a download per blob, bundled on the device | Round 1. No server work: the server cannot produce a readable export. |
 | Group metadata (name, avatar) | include | stored as an encrypted object of a `group_profile` type, not in the group table | The server stays blind. |
 
 ### Devices and keys
@@ -94,10 +95,10 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 |---|---|---|---|
 | Timeline posts, photo album, todo lists, calendar events and birthdays, polls, datepicker (scheduling poll), messaging, venue recommendations on a map, splitser expenses, tickets as expenses with per-share blob | include | | All are object types; none need backend logic. |
 | Notes: conflicted copy on collision | include | | Cheapest correct behaviour. |
-| Notes: CRDT (yrs/automerge) | later | | Open candidate below. |
-| Ticket payments (moving money) | later | | Open candidate below. |
+| Notes: CRDT (yrs/automerge) | exclude | | Round 1. Conflicted copies are enough; a CRDT note would be a new type number if ever wanted. |
+| Ticket payments (moving money) | exclude | | Round 1. Tracking only; a ticket is an expense with one share per person. |
 | Cross-group friend graph for recommendations | exclude | | Needs a server-visible social graph; incompatible with E2E. Recommendations are per group. |
-| Read receipts, typing indicators | later | needs pubsub/SSE | Open candidate below. |
+| Read receipts, typing indicators | exclude | | Round 1. No live presence; silent push plus pull is the delivery model. |
 
 ### Platform
 
@@ -109,12 +110,11 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 
 ## Open candidates (not yet asked)
 
-1. **Ticket payments**: tracking only, or does the app collect money (Stripe Connect)?
-2. **Collaborative note editing**: conflicted copy only, or a CRDT for the note type?
-3. **Read receipts and typing indicators**: needs cross-replica broadcast (`basable-pubsub`) and an SSE route.
-4. **Group deletion and data export**: purge across all nanoservices; export of a group's objects for a member.
-5. **Invite model**: link with a code anyone can use (max uses, expiry) vs. admin approval of join requests.
+None. Round 1 (2026-10-14) decided ticket payments, collaborative notes, presence and group
+deletion; the invite model was defaulted (code with expiry and max uses). What remains is
+tuning (retention numbers, worker policy), which the implementing session owns.
 
 ## Status
 
-Not ready. Round 1 questions pending.
+ready
+

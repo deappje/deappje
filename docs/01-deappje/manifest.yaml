@@ -7,8 +7,20 @@ project:
   database: { instances: 1 }
 nanoservices:
   - name: group
-    description: Owns groups, memberships and invites; answers every membership check.
+    description: Owns groups, memberships and invites; answers every membership check; drives group deletion.
     owns:
+      processingObjects:
+        - name: group_purge
+          prefix: gpr
+          spec:
+            - { name: group_id, type: uuid, immutable: true }
+            - { name: parent_purge_id, type: uuid, nullable: true, immutable: true }
+          status:
+            - { name: phase, type: string }
+            - { name: subgroups_remaining, type: int32 }
+            - { name: objects_remaining, type: int64, nullable: true }
+            - { name: blobs_remaining, type: int64, nullable: true }
+            - { name: keys_remaining, type: int64, nullable: true }
       tables:
         - name: group
           columns:
@@ -46,13 +58,18 @@ nanoservices:
       - { message: ListMembersRequest, response: MemberList }
       - { message: RemoveMemberRequest, response: Membership }
       - { message: LeaveGroupRequest, response: Membership }
+      - { message: DeleteGroupRequest, response: Group }
       - { message: CheckMembershipRequest, response: MembershipCheck }
     sends:
       - { message: MemberRemoved }
+      - { message: PurgeGroupObjectsRequest, response: PurgeResult }
+      - { message: PurgeGroupBlobsRequest, response: PurgeResult }
+      - { message: PurgeGroupKeysRequest, response: PurgeResult }
     api:
       service: GroupService
       methods:
         - { name: CreateGroup, request: CreateGroupRequest, response: CreateGroupResponse }
+        - { name: DeleteGroup, request: DeleteGroupRequest, response: DeleteGroupResponse }
         - { name: GetGroup, request: GetGroupRequest, response: GetGroupResponse }
         - { name: ListGroups, request: ListGroupsRequest, response: ListGroupsResponse }
         - { name: CreateInvite, request: CreateInviteRequest, response: CreateInviteResponse }
@@ -114,6 +131,7 @@ nanoservices:
       - { message: GroupHeadAdvanced }
       - { message: MemberRemoved }
       - { message: BlobRequested }
+      - { message: PurgeGroupKeysRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
     api:
@@ -165,6 +183,7 @@ nanoservices:
       - { message: BackfillRequest, response: ChangeSet }
       - { message: GetHeadsRequest, response: HeadList }
       - { message: ListObjectIdsRequest, response: ObjectIdList }
+      - { message: PurgeGroupObjectsRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
       - { message: CheckBlobRequest, response: Blob }
@@ -224,6 +243,7 @@ nanoservices:
       - { message: RequestBlobRequest, response: Blob }
       - { message: CheckBlobRequest, response: Blob }
       - { message: ObjectDeleted }
+      - { message: PurgeGroupBlobsRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
       - { message: BlobRequested }

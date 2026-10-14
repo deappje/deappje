@@ -98,6 +98,13 @@ Schedule `gc_tombstones`, every 24h: delete `object` rows with `deleted = true` 
 | BackfillRequest | ChangeSet |
 | GetHeadsRequest | HeadList |
 | ListObjectIdsRequest | ObjectIdList |
+| PurgeGroupObjectsRequest | PurgeResult |
+
+`PurgeGroupObjectsRequest { group_id }` (from `group`'s purge pass): delete every `object` row
+and the `group_head` row for the group in one transaction, batched (10k rows per statement so a
+large group does not hold the lock long), and answer `PurgeResult { remaining }` with the count
+still present. No tombstones are written: memberships are already gone, so no client can pull
+the group; a client with a stale cursor gets "not a member" and purges locally. Idempotent.
 
 | Sends | Response | To |
 |---|---|---|

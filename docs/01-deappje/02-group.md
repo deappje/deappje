@@ -1,8 +1,8 @@
 # `group`
 
-Owns groups, memberships and invites. Plain executor over three tables; no processing-object
-type (nothing here waits, polls or drives another system). Directive §2 for every table, §7 for
-every message.
+Owns groups, memberships and invites, and one processing-object type: `group_purge`, the
+deletion of a group, which drives three other nanoservices until nothing of the group remains.
+Directive §2 for every table, §3 and §5 for the type, §7 for every message.
 
 ## Tables
 
@@ -56,11 +56,42 @@ leave while other members remain.
 Accepting locks the invite row, checks expiry, revocation and `uses < max_uses`, inserts the
 membership, increments `uses`, commits. A subgroup invite also checks parent membership.
 
+## Processing object `group_purge` (prefix `gpr`)
+
+Created by `DeleteGroupRequest` (caller must be admin): in one transaction the handler stamps
+`group.deleted_at`, deletes the group's memberships and invites, and `TypedStore::create`s one
+purge object for the group and one per subgroup (recursively). From that commit on,
+`CheckMembershipRequest` answers "not a member" for everyone, so no client can read or write
+the group; a client that was offline learns of the deletion from that answer and purges locally.
+
+Spec: `group_id` (immutable), `parent_purge_id` (nullable, immutable: set on a subgroup's purge).
+Status: `phase` (`purging`, `done`), `objects_remaining`, `blobs_remaining`, `keys_remaining`
+(int64, nullable), `subgroups_remaining` (int32).
+
+Reconcile pass (level-triggered, one `Outcome`):
+
+1. `meta.deleting()` ⇒ `Delete` (a purge object is only ever deleted by its own pass; nothing
+   external to confirm).
+2. Count purge objects whose `parent_purge_id` is this one (own table, repository query). If
+   any ⇒ status `subgroups_remaining = n`, `Converged.after(30s)`.
+3. Send `PurgeGroupObjectsRequest`, `PurgeGroupBlobsRequest`, `PurgeGroupKeysRequest` (between
+   fences, invariant 7), each returning `PurgeResult { remaining }`. A failed send ⇒ `Retry`.
+4. All three zero ⇒ delete the `group` row (repository, own table), status `phase = done`,
+   `Delete`. Otherwise record the counts and `Converged.after(1m)`: blobs drain through their
+   own reconcilers in `storage`, so a group with many photos takes minutes.
+
+Worker policy: `resync` 1h, `backoff` 10s to 5m, `max_attempts` 0 (unbounded: a purge must
+finish and is surfaced by age if it does not), `attempt_timeout` 60s.
+
+Every purge request is idempotent on the receiver (delete where `group_id = $1`, report what is
+left), so a repeated pass after a lost response is harmless.
+
 ## Messages
 
 | Handles | Response | Behaviour |
 |---|---|---|
 | CreateGroupRequest | Group | insert group + admin membership; for a subgroup, caller must be a parent member |
+| DeleteGroupRequest | Group | see `group_purge` above |
 | GetGroupRequest | Group | caller must be a member |
 | ListGroupsRequest | GroupList | all groups of the caller, with parent ids |
 | CreateInviteRequest | Invite | caller must be admin |
@@ -73,6 +104,9 @@ membership, increments `uses`, commits. A subgroup invite also checks parent mem
 | Sends | Response | To |
 |---|---|---|
 | MemberRemoved | (void) | device |
+| PurgeGroupObjectsRequest | PurgeResult | ledger |
+| PurgeGroupBlobsRequest | PurgeResult | storage |
+| PurgeGroupKeysRequest | PurgeResult | device |
 
 `MemberRemoved` carries `(group_id, user_id, removed_at)`. It is an event (Directive §7: "an event
 is not a cascade"): `device` acting on it is desirable, not required for `group`'s own
@@ -82,13 +116,16 @@ correctness. A messenger send is remote I/O, so it happens after the transaction
 ## API
 
 `GroupService`: CreateGroup, GetGroup, ListGroups, CreateInvite, AcceptInvite, ListMembers,
-RemoveMember, LeaveGroup. Every method requires a Kratos session; the api crate passes the identity
-id as the caller.
+RemoveMember, LeaveGroup, DeleteGroup. Every method requires a Kratos session; the api crate
+passes the identity id as the caller.
 
 ## Tests
 
 - Unit: invite acceptance under expiry, revocation and max uses; subgroup accept without parent
-  membership is refused; last-admin rule.
+  membership is refused; last-admin rule; the purge pass as a function of
+  `(subgroups_remaining, three counts)` → `Outcome`.
 - Integration (testkit, database per test): remove from parent cascades to subgroups in one
   transaction; two concurrent accepts of a single-use invite admit exactly one; `MemberRemoved`
-  is sent exactly once per removal.
+  is sent exactly once per removal; deleting a parent with a subgroup purges the subgroup first
+  and the parent's pass waits; a lost `PurgeResult` is retried and the receiver's purge is
+  idempotent.

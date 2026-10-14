@@ -82,6 +82,7 @@ holds all of them.
 | GroupHeadAdvanced | (void) | silent push to every member device except the writer's |
 | MemberRemoved | (void) | delete wrapped keys; push `rotate` to remaining devices |
 | BlobRequested | (void) | push `blob` wake-up to the uploader device (and, later, other known holders) |
+| PurgeGroupKeysRequest | PurgeResult | from `group`'s purge pass: delete every `wrapped_key` and `key_request` row of the group; answer `remaining`. Idempotent. |
 
 | Sends | Response | To |
 |---|---|---|

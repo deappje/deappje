@@ -105,6 +105,7 @@ bucket with `put`, `head`, `delete` and ack loss on delete; the `effecttest` aud
 | RequestBlobRequest | Blob | member check; write `requested_at` into `blob_access`, `nudge`; the pass moves `expired` → `requested` and sends `BlobRequested` |
 | CheckBlobRequest | Blob | from `ledger`: group and phase |
 | ObjectDeleted | (void) | `mark_deleted` for `blob_id` |
+| PurgeGroupBlobsRequest | PurgeResult | from `group`'s purge pass: `mark_deleted` every blob of the group not already deleting; answer `remaining` = blobs of the group still present (deleting ones included, since the bucket delete is confirmed by their own passes). Idempotent. |
 
 Phase is status and status is written only under claim, so neither the download nor the
 re-request handler touches it: both write the `blob_access` side table and nudge, and the next

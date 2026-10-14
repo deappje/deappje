@@ -9,19 +9,27 @@ columns are the minimum needed to route, order, authorise and expire.
 
 ### `group`
 
-Owns groups and who is in them. Plain executor: nothing here waits on anything.
+Owns groups and who is in them, and the one lifecycle a group has: its deletion.
 
 - **Tables**: `group` (id, `parent_group_id`, creator, timestamps), `membership` (group, user,
   role, joined), `invite` (group, code, creator, expiry, max uses, uses, revoked). Directive §2.
 - **Invariants**: a user is in a group at most once; a member of a subgroup is a member of its
   parent (checked on accept, cascaded on leave/remove); only an admin removes members or revokes
   invites; the creator is the first admin.
+- **Processing object `group_purge`** (prefix `gpr`): created by `DeleteGroupRequest`, one per
+  group being deleted. Its pass drives `ledger`, `storage` and `device` to hold nothing of the
+  group, by direct requests (`PurgeGroupObjectsRequest`, `PurgeGroupBlobsRequest`,
+  `PurgeGroupKeysRequest`, each → `PurgeResult { remaining }`), retrying until all three report
+  zero, then removes the group row and returns `Delete`. A purge must finish, so it is a
+  reconciler with requests, not an event (Directive §7: "an event is not a cascade"). Subgroups
+  are purged first: deleting a parent creates one purge object per subgroup and the parent's pass
+  waits for them. Directive §3, §5.
 - **Handles**: `CreateGroupRequest`, `GetGroupRequest`, `ListGroupsRequest`, `CreateInviteRequest`,
-  `AcceptInviteRequest`, `ListMembersRequest`, `RemoveMemberRequest`, `LeaveGroupRequest`, and
-  `CheckMembershipRequest` → `MembershipCheck`, the authorisation question every other
-  nanoservice asks before it touches anything in a group.
+  `AcceptInviteRequest`, `ListMembersRequest`, `RemoveMemberRequest`, `LeaveGroupRequest`,
+  `DeleteGroupRequest`, and `CheckMembershipRequest` → `MembershipCheck`, the authorisation
+  question every other nanoservice asks before it touches anything in a group.
 - **Sends**: `MemberRemoved` (void event) so `device` can revoke wrapped keys and push a rotation
-  prompt.
+  prompt; the three purge requests above.
 - **API**: `GroupService`.
 
 ### `device`
@@ -127,8 +135,12 @@ asks for it again.
 | ListMembersRequest | MemberList | api | group |
 | RemoveMemberRequest | Membership | api | group |
 | LeaveGroupRequest | Membership | api | group |
+| DeleteGroupRequest | Group | api | group |
 | CheckMembershipRequest | MembershipCheck | device, ledger, storage | group |
 | MemberRemoved | (void) | group | device |
+| PurgeGroupObjectsRequest | PurgeResult | group | ledger |
+| PurgeGroupBlobsRequest | PurgeResult | group | storage |
+| PurgeGroupKeysRequest | PurgeResult | group | device |
 | RegisterDeviceRequest | Device | api | device |
 | SetPushTokenRequest | Device | api | device |
 | ListDevicesRequest | DeviceList | api | device |

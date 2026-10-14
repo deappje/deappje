@@ -34,6 +34,10 @@ definitive rejection is classified as such.
   re-request, on two worker replicas.
 - **Cross-nanoservice fencing**: `ObjectDeleted` arriving for a blob already deleting is a no-op;
   `GroupHeadAdvanced` fan-out excludes the writer device.
+- **Group purge**: a parent with a subgroup, objects, blobs and keys; after deletion every table
+  in every nanoservice holds nothing for either group, the bucket simulator holds no keys, the
+  purge objects are gone, and a member check answers "not a member" from the first commit on.
+  A `PurgeResult` dropped once is retried and the end state is the same.
 
 ## Client core conformance (outside this repository, noted for completeness)
 
