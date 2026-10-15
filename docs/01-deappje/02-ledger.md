@@ -45,7 +45,8 @@ key_id, value?, blob_id?, base_version, deleted }] }`.
 
 Before the transaction: `CheckMembershipRequest`; for every `blob_id`, `CheckBlobRequest` must
 answer the blob is in this group and `available` or `pending_upload` (remote I/O stays outside the
-transaction, invariant 7).
+transaction, invariant 7). A `value` larger than 1 MiB is rejected for the whole batch (a CRDT
+note state grows with its text; anything bigger belongs in a blob).
 
 One transaction:
 
@@ -54,7 +55,9 @@ One transaction:
    stored `version` (0 when absent). On accept: `version + 1`, `seq = head + 1`, head advances.
    If `deleted`, null `value` and `blob_id`, set `deleted_at`, and tombstone every descendant
    (recursive by `parent_id`) each with its own next `seq`. On a mismatch: record a conflict
-   `{ id, current_version, current_seq }`, change nothing.
+   `{ id, current: Object }` with the stored row as it is (ciphertext included), change nothing.
+   The caller must learn the row either way, so returning it saves the pull a merging client
+   would otherwise make before it can retry.
 3. Commit.
 
 After commit: `GroupHeadAdvanced { group_id, head_seq, writer_device }` once; `ObjectDeleted
@@ -67,6 +70,10 @@ commit after a higher one and a client that pulled in between misses it forever 
 
 Deletes always win: a push with `deleted = true` is accepted regardless of `base_version`. An edit
 whose `base_version` matches a tombstone is a conflict; the client shows "deleted".
+
+The server does not know which types merge: a merging client (notes, see `01-architecture.md`)
+simply pushes again with `current.version` as `base_version` after folding `current.value` into
+its local document. The retry is an ordinary push.
 
 ## Pull, backfill, heads, reconciliation
 
@@ -127,4 +134,8 @@ untouched.
   pull during a concurrent push never returns a seq the next pull skips; delete cascades in one
   transaction; gc removes only expired tombstones.
 - Property test: random interleavings of push/pull across N simulated clients converge to the
-  same id/version set after reconciliation.
+  same id/version set after reconciliation; with merging clients on one object, every retry
+  carries a `base_version` the server has seen and the object's final version equals the number
+  of accepted pushes.
+- Unit: a conflict returns the stored row unchanged; a batch with an oversized `value` is refused
+  as a whole.

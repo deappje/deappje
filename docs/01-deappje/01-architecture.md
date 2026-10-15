@@ -63,7 +63,7 @@ Owns the object log. Plain executor; the one piece of concurrency control in the
 - **Push**: one transaction per batch: lock `group_head`, then per object compare the caller's
   `base_version` with the stored version (absent ⇒ 0); on match write the row with
   `version + 1` and `seq = head + 1`, advance head; on mismatch report a conflict for that object
-  and leave it. A delete is a push with `deleted = true`: the row keeps id, group, parent, type
+  carrying the current row, and leave it. A delete is a push with `deleted = true`: the row keeps id, group, parent, type
   and seq, drops `value` and `blob_id`, and the same transaction tombstones every descendant by
   `parent_id`. Commit, then send `GroupHeadAdvanced` and, per deleted object with a blob,
   `ObjectDeleted` (both after the transaction: Directive invariant 7).
@@ -107,6 +107,27 @@ asks for it again.
   from `ledger`: `mark_deleted`).
 - **Sends**: `CheckMembershipRequest`, `BlobRequested`.
 - **API**: `StorageService`.
+
+## Conflict policies (client core)
+
+The server has one rule: compare-and-set on `version`, and a conflict returns the current row.
+What the client does with a conflict is a policy keyed on the type number, implemented once in
+the Rust core:
+
+| Policy | Types | On conflict |
+|---|---|---|
+| `cas` (default) | everything else | keep the local edit as a conflicted copy (a new object of the same type with `conflict_of` in its payload), adopt the server row, show both. |
+| `merge` | `note` | decrypt the returned row, merge it into the local `yrs` document (commutative, so order does not matter), re-encrypt the full state, push again with the returned `version` as `base_version`. Bounded to a few immediate retries, then left in the outbox for the next sync. Converges because every retry folds in strictly more of the group's edits. |
+
+`note` uses `yrs` (the Rust Yjs port): its state encoding is compact, deleted text is garbage-
+collected inside the document so a note stays about the size of its text, rich text is native
+(`Text` with attributes) for the editor, and it compiles to wasm for the browser shell. The
+payload is `Note { bytes state; uint32 format }` with `format = 1` meaning the `yrs` v1 state
+encoding; the bytes are opaque to the schema patches, so a different encoding or a different
+CRDT (automerge, if a JSON-document CRDT is ever wanted) is a new type number, never a
+`schema_version` bump. Offline edits accumulate in the local document and go up as one state on
+the next sync; the server sees one ciphertext per push, exactly as for any other type. Deletes
+still win over a merge.
 
 ## Deployment shape
 
@@ -168,6 +189,6 @@ boolean (`MembershipCheck`, `Blob.phase`) or an id; no nanoservice re-derives an
 
 ## What is deliberately not on the server
 
-Merge, validation of payloads, invariants inside a type (one vote per poll, shares summing to
-the total), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
+Merge (including the CRDT merge for notes), validation of payloads, invariants inside a type
+(one vote per poll, shares summing to the total), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
 geocoding. All of it is the client's, because all of it needs plaintext.
