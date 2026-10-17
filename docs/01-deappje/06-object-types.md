@@ -21,7 +21,7 @@ next free number in its block.
 | 30 | `note` | none | title, body (Text with attributes) | | the type that motivated the CRDT |
 | 40 | `expense` | none | amount (minor units), currency, paid_by, participants (map), split (`equal` / `weights` / `exact`), kind (`expense` / `ticket`), description, date | | shares and balances are derived (`01-architecture.md`); a ticket is an equal split, one share per participant |
 | 41 | `settlement` | none | from, to, amount, currency, date | | records a payment made outside the app; money never moves here |
-| 42 | `ticket_share` | expense | holder, status (`held` / `transferred` / `used`) | attachment | the ticket file for one participant |
+| 42 | `ticket_share` | expense | holder (member id, or a name for a plus-one), status (`held` / `offered` / `used`) | attachment | the ticket file for one participant; a transfer is a holder change plus the matching participant change on the expense; the client pins the attachment of every share whose holder is the local user (downloaded at once, never evicted) so the gate needs no network |
 | 50 | `event` | none | title, starts, ends, all_day, location, geo, yearly | | a birthday for someone not in the app is a yearly all-day event |
 | 60 | `poll` | none | question, kind (`choice` / `dates`), options (map id → { text or slot, pos }), multi, closes_at | | the datepicker is kind `dates` |
 | 61 | `vote` | poll | answers (map option_id → `yes` / `maybe` / `no`, or chosen) | | one per user: id = UUIDv5(poll_id, user_id) |
