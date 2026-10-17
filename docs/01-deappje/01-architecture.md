@@ -9,7 +9,8 @@ columns are the minimum needed to route, order, authorise and expire.
 
 ### `group`
 
-Owns groups and who is in them, and the one lifecycle a group has: its deletion.
+Owns groups and who is in them, and two lifecycles: a group's deletion and a user's account
+deletion.
 
 - **Tables**: `group` (id, `parent_group_id`, creator, timestamps), `membership` (group, user,
   role, joined), `invite` (group, code, creator, expiry, max uses, uses, revoked). Directive §2.
@@ -24,12 +25,20 @@ Owns groups and who is in them, and the one lifecycle a group has: its deletion.
   reconciler with requests, not an event (Directive §7: "an event is not a cascade"). Subgroups
   are purged first: deleting a parent creates one purge object per subgroup and the parent's pass
   waits for them. Directive §3, §5.
+- **Processing object `user_purge`** (prefix `upr`): created by `DeleteAccountRequest`, one per
+  user. Its pass leaves one group per pass (promoting the longest-standing member where the user
+  was the only admin, creating a `group_purge` where they were the only member, sending
+  `MemberRemoved` so keys rotate), then sends `PurgeUserDevicesRequest` → `PurgeResult` to
+  `device` until zero, then calls Kratos admin `delete_identity` (external, `idempotent`), then
+  `Delete`. Directive §3, §5, §6.
 - **Handles**: `CreateGroupRequest`, `GetGroupRequest`, `ListGroupsRequest`, `CreateInviteRequest`,
   `AcceptInviteRequest`, `ListMembersRequest`, `RemoveMemberRequest`, `LeaveGroupRequest`,
-  `DeleteGroupRequest`, and `CheckMembershipRequest` → `MembershipCheck`, the authorisation
-  question every other nanoservice asks before it touches anything in a group.
+  `DeleteGroupRequest`, `DeleteAccountRequest`, and `CheckMembershipRequest` → `MembershipCheck`,
+  the authorisation question every other nanoservice asks before it touches anything in a group.
 - **Sends**: `MemberRemoved` (void event) so `device` can revoke wrapped keys and push a rotation
-  prompt; the three purge requests above.
+  prompt; the three group purge requests above; `PurgeUserDevicesRequest`.
+- **External**: Kratos admin API, `delete_identity`, strategy `idempotent` (a 404 on a repeat is
+  success). The only server-side effect against identity.
 - **API**: `GroupService`.
 
 ### `device`
@@ -44,13 +53,21 @@ for another device and hands it back.
   is a member (checked through `CheckMembershipRequest` at write time); on `MemberRemoved` the
   removed user's wrapped keys for that group are deleted and every other member's devices are
   pushed so one of them rotates.
+- **Trust rule**: the server never seeds trust. A device holds a group's keys only because a
+  person on a device that already holds them approved its key request (the requester's own
+  devices that hold the key approve silently). A rotation wraps the new key only for devices that
+  hold the previous one. So a device row the server inserted on its own never receives a key: no
+  human sees it, and `ListDevicesRequest` for a group lists only key holders. The approver sees
+  the requesting device's platform and the fingerprint of its public key, which the requester
+  reads off their own screen.
 - **External**: APNs and FCM, one `send_push` call each, strategy `idempotent`: the only push the
   server sends is a silent "group X advanced" or "key request pending" wake-up, and a duplicate is
   harmless. Directive §6.
 - **Handles**: device registration, push token, device listing (so members can wrap keys for
   new devices), key requests and fulfilment, publishing a rotated key set, fetching wrapped keys;
   plus three void events: `GroupHeadAdvanced` (from `ledger`), `MemberRemoved` (from `group`),
-  `BlobRequested` (from `storage`), each turned into pushes.
+  `BlobRequested` (from `storage`), each turned into pushes; and `PurgeUserDevicesRequest` from
+  `group`'s account purge.
 - **API**: `DeviceService`.
 
 ### `ledger`
@@ -96,8 +113,17 @@ asks for it again.
   requests are unclaimed input, so the request path never writes status (invariant 3): it writes
   `last_access_at` / `requested_at` into the plain `blob_access` side table and nudges; the
   pass reads that table and extends `expires_at` or moves to `requested`.
-- **Config type `blob_kind`**: `full` (30 days, 25 MB max), `thumbnail` (3650 days, 200 KB max),
-  `attachment` (365 days, 25 MB max). Retention and size cap per kind, edited by a human.
+- **Side table `blob_holder`**: which devices downloaded a blob. Written by `GetDownloadRequest`,
+  removed by `DropBlobHoldRequest` (a phone evicting under storage pressure, or woken for bytes it
+  no longer has). `BlobRequested` wakes every holder and the uploader, since after the cache
+  window the bucket no longer has the bytes and any device that viewed them does. After each
+  download the pass asks `device` `CheckHolderCoverageRequest` → `HolderCoverage { complete }`;
+  complete means every key-holding device of the group has the blob and the bucket copy is
+  deleted at once.
+- **Config type `blob_kind`**: `full` (2 days, 25 MB max), `thumbnail` (3650 days, 200 KB max),
+  `attachment` (2 days, 25 MB max). Retention after upload or last download, and size cap, per
+  kind. **Config type `storage_quota`**: `max_group_bytes` 20 GiB; `CreateUploadRequest` refuses
+  when the group's blobs in `pending_upload` or `available` already sum to it. Edited by a human.
 - **External**: the platform's object storage. `delete_object` is the only effect
   (`idempotent`: S3 delete of a missing key succeeds). Presigning and `HEAD` are reads.
 - **Handles**: `CreateUploadRequest` (creates the object in `pending_upload`, returns a presigned
@@ -168,7 +194,11 @@ browser shell. Time travel is not a requirement.
 - One binary, `replicas: 1` in preview and `2` in live (deviation from the default of 2
   everywhere, for cost; the frameworks are multi-replica safe so live gets two).
 - `frontend: react`: the web client is an application, not a page, with local-first state in a
-  wasm build of the shared Rust core and React rendering it. Served from an nginx-unprivileged
+  wasm build of the shared Rust core and React rendering it. The core is a `core/` crate in this
+  repository's Bazel workspace (sync, store, `yrs` documents and projections, keyring, crypto, key
+  schemas), built to wasm for the web client in the same workflow; the Swift and Kotlin
+  repositories pin a commit of this repository and build the crate with UniFFI. Server contract
+  and client core are versioned together. Served from an nginx-unprivileged
   container by the scaffold; `05-deployment.md` records the later move to the public bucket
   (`website: true`), which the environment already has for blobs.
 - CloudNativePG, `instances: 1`, one application database with schemas `group`, `device`,
@@ -191,11 +221,13 @@ browser shell. Time travel is not a requirement.
 | RemoveMemberRequest | Membership | api | group |
 | LeaveGroupRequest | Membership | api | group |
 | DeleteGroupRequest | Group | api | group |
+| DeleteAccountRequest | AccountDeletion | api | group |
 | CheckMembershipRequest | MembershipCheck | device, ledger, storage | group |
 | MemberRemoved | (void) | group | device |
 | PurgeGroupObjectsRequest | PurgeResult | group | ledger |
 | PurgeGroupBlobsRequest | PurgeResult | group | storage |
 | PurgeGroupKeysRequest | PurgeResult | group | device |
+| PurgeUserDevicesRequest | PurgeResult | group | device |
 | RegisterDeviceRequest | Device | api | device |
 | SetPushTokenRequest | Device | api | device |
 | ListDevicesRequest | DeviceList | api | device |
@@ -206,6 +238,7 @@ browser shell. Time travel is not a requirement.
 | GetWrappedKeysRequest | WrappedKeyList | api | device |
 | GroupHeadAdvanced | (void) | ledger | device |
 | BlobRequested | (void) | storage | device |
+| CheckHolderCoverageRequest | HolderCoverage | storage | device |
 | PushObjectsRequest | PushResult | api | ledger |
 | PullChangesRequest | ChangeSet | api | ledger |
 | BackfillRequest | ChangeSet | api | ledger |
@@ -217,6 +250,7 @@ browser shell. Time travel is not a requirement.
 | ConfirmUploadRequest | Blob | api | storage |
 | GetDownloadRequest | DownloadGrant | api | storage |
 | RequestBlobRequest | Blob | api | storage |
+| DropBlobHoldRequest | Blob | api | storage |
 
 Every cross-nanoservice message binds Directive §7. The only derived state that crosses is a
 boolean (`MembershipCheck`, `Blob.phase`) or an id; no nanoservice re-derives another's rule.

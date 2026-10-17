@@ -31,7 +31,7 @@ These were settled in discussion before this plan was written; they are not open
 | Decision | Choice | Why |
 |---|---|---|
 | Durability | The server is the durable store, not a cache. No fill-on-miss for objects. | Fill-on-miss needs presence, a request queue and a holder of last resort; encrypted JSON is nearly free to keep. |
-| Blobs | Full-size blobs expire from the bucket after a retention period and can be re-requested from a device that still holds them (the author's camera roll is the holder of last resort). Thumbnails are kept long-term. | Photos are the only real cost line. |
+| Blobs | The bucket is a 48-hour cache for full-size blobs and attachments, extended on every download and emptied early once every key-holding device of the group has downloaded it; after that a blob can be re-requested from any device that downloaded it (the server records holders; a device that evicts under storage pressure tells the server; the author's camera roll is the holder of last resort). Thumbnails are kept long-term. Each group has a 20 GiB cap on what is in the bucket. | Photos are the only real cost line, and every device that viewed a photo already holds it. |
 | Change detection | A per-group commit log: every accepted write takes the next sequence number of its group, assigned under a locked counter row. Clients keep a cursor per group. | One query answers "anything new?"; batched across groups in one call. |
 | Conflicts | Per-object version with compare-and-set on push; a conflict returns the current row. Every value is a `yrs` CRDT document, so the client merges the returned row into its local document and pushes again. No conflicted copies anywhere. Deletes always win. | The server cannot merge ciphertext, so the merge runs on the device; a CRDT makes it automatic and deterministic for every type, not only notes. |
 | Deletes | Tombstones in the log, garbage-collected after a retention window; a client with an older cursor does a full id/version reconciliation. | The only way an offline client learns about a deletion. |
@@ -58,6 +58,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Roles beyond admin/member | exclude | | Not asked for. |
 | Group deletion | include | a `group_purge` processing object in `group` drives the purge of ledger, storage and device until each reports nothing left; subgroups are purged first | Round 1. A purge must finish, so it is driven by a reconciler with direct requests, not an event. |
 | Data export | include | client-side: pull since 0 plus a download per blob, bundled on the device | Round 1. No server work: the server cannot produce a readable export. |
+| Account deletion | include | a `user_purge` processing object in `group`: leave every group (promoting the longest-standing member where the user was the only admin, deleting groups where they were the only member), purge the user's devices and keys, delete the Kratos identity | Round 4 (2026-10-17). App stores require it; a purge must finish, so it is a reconciler. |
 | Group metadata (name, avatar) | include | stored as an encrypted object of a `group_profile` type, not in the group table | The server stays blind. |
 
 ### Devices and keys
@@ -65,7 +66,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Device registration with public key | include | | Required for key wrapping. |
-| Key request from a new device, fulfilled by a member | include | needs another member online at some point | Accepted by the user. |
+| Key request from a new device, approved by a person | include | a member sees "new <platform> device of <user>, fingerprint ABCD-EFGH wants keys to <group>" and taps approve; the requester's own devices that already hold the key approve silently. Rotation wraps only for devices that already hold a key. | Round 4. Automatic fulfilment would let a server that inserted a device row obtain the group key; with approval the server never seeds trust, it only relays it. Costs one tap per new device. |
 | Key rotation on removal | include | | Cheap; closes the ex-member hole. |
 | Push tokens (APNs, FCM) | include | silent push on group head advance | Replaces polling. |
 | Key backup / recovery without another member | exclude | | Rejoin via another member's device is the chosen path. |
@@ -85,8 +86,10 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Presigned upload/download via the private bucket | include | | Traffic never touches the app. |
-| Retention and expiry per blob kind | include | full-size 30 days, thumbnails long-term | The user proposed 3 days; 30 costs cents and avoids the holiday cliff. |
-| Re-upload request to a holder device | include | | The one place fill-on-miss pays. |
+| Retention and expiry per blob kind | include | full-size and attachments 48 hours after upload or last download; thumbnails long-term | Round 4: the user wants the bucket to be a short cache. |
+| Re-upload request to a holder device | include | the server records which devices downloaded a blob and wakes all of them plus the uploader; a device drops its hold when it evicts, or when woken for bytes it no longer has | The one place fill-on-miss pays; with a 48-hour cache the holder set must be wider than the uploader, and phones with little storage must be free to evict. |
+| Early eviction once every device holds it | include | the pass asks `device` whether the holders cover every key-holding device of the group; if so the bucket copy goes before the 48 hours | Round 4, the user's rule: a blob everyone has is pure cost. A device joining later re-requests. |
+| Per-group storage cap | include | 20 GiB in the bucket per group, a `storage_quota` config value; `CreateUpload` refuses beyond it | Round 4. Bounds the bill; retention keeps real usage far below it. |
 | Wifi-only sync, local resize, native album export | n/a | client-side preferences | Nothing for the backend. |
 
 ### Feature types (all client-side; the server sees only a type number)
@@ -106,6 +109,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Web client (React + wasm core) in this repo | include | `frontend: react` | Requested. |
+| Shared Rust client core in this repo | include | a `core/` crate in the Bazel workspace, compiled to wasm for the web client in the same build; the mobile repositories pin a commit of this repository and build it with UniFFI | Round 4. One repository versions server contract and client core together. |
 | Database backups | later | private bucket exists once `objectStorage` is declared | Add before live has users. |
 | Email delivery for Kratos codes | include | user-supplied SMTP secret | Required for login. |
 
@@ -115,8 +119,10 @@ None. Round 1 (2026-10-14) decided ticket payments, presence and group deletion;
 model was defaulted (code with expiry and max uses). Round 2 (2026-10-15) reversed round 1 on
 notes: a CRDT with merge-on-conflict. Round 3 (2026-10-17) extended that to every type: every
 value is a `yrs` document, conflicted copies are gone, and payload schemas are key schemas over
-the document instead of protobuf messages. What remains is tuning (retention numbers, worker
-policy, the value size cap), which the implementing session owns.
+the document instead of protobuf messages. Round 4 (2026-10-17) decided human approval of key
+requests, account deletion, a 20 GiB per-group cap with 48-hour blob retention, and the client
+core living in this repository. What remains is tuning (worker policy, the value size cap),
+which the implementing session owns.
 
 ## Status
 

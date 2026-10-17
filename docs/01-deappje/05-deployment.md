@@ -44,6 +44,7 @@ web client moves there (below).
 | `app-secrets` / `APNS_KEY_P8`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` | **user** | `device`, from the Apple Developer account's push key |
 | `app-secrets` / `FCM_SERVICE_ACCOUNT_JSON` | **user** | `device`, a Firebase service account with the Messaging role |
 | kratos cookie/cipher secrets | generated in-cluster | kratos |
+| Kratos admin API | in-cluster service address, no secret | `group`, for `delete_identity` |
 
 Each user secret is its own non-optional `secretKeyRef`; the first preview deploy waits at the
 secrets step until the user adds them, per environment. The push secrets can be added later than
@@ -87,4 +88,5 @@ with digests → upload `rendered-manifests`) with `paths-ignore: ["docs/**"]`.
 
 Email delivery configuration for Kratos's courier (SMTP secret above), database backups, the
 public-bucket website move, and the mobile apps themselves, which live in their own repositories
-and consume this API through the shared Rust core.
+and build the `core/` crate from a pinned commit of this repository with UniFFI. The web client
+in this repository compiles the same crate to wasm in the build workflow.

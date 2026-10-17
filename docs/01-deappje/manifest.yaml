@@ -7,9 +7,18 @@ project:
   database: { instances: 1 }
 nanoservices:
   - name: group
-    description: Owns groups, memberships and invites; answers every membership check; drives group deletion.
+    description: Owns groups, memberships and invites; answers every membership check; drives group deletion and account deletion.
     owns:
       processingObjects:
+        - name: user_purge
+          prefix: upr
+          spec:
+            - { name: user_id, type: uuid, immutable: true }
+          status:
+            - { name: phase, type: string }
+            - { name: groups_remaining, type: int32 }
+            - { name: devices_remaining, type: int64, nullable: true }
+            - { name: identity_deleted, type: bool }
         - name: group_purge
           prefix: gpr
           spec:
@@ -49,6 +58,10 @@ nanoservices:
             - { name: uses, type: int32 }
             - { name: revoked, type: bool }
           indexes: [ { columns: [group_id] } ]
+    externalSystems:
+      - name: kratos
+        calls:
+          - { name: delete_identity, strategy: idempotent }
     handles:
       - { message: CreateGroupRequest, response: Group }
       - { message: GetGroupRequest, response: Group }
@@ -59,17 +72,20 @@ nanoservices:
       - { message: RemoveMemberRequest, response: Membership }
       - { message: LeaveGroupRequest, response: Membership }
       - { message: DeleteGroupRequest, response: Group }
+      - { message: DeleteAccountRequest, response: AccountDeletion }
       - { message: CheckMembershipRequest, response: MembershipCheck }
     sends:
       - { message: MemberRemoved }
       - { message: PurgeGroupObjectsRequest, response: PurgeResult }
       - { message: PurgeGroupBlobsRequest, response: PurgeResult }
       - { message: PurgeGroupKeysRequest, response: PurgeResult }
+      - { message: PurgeUserDevicesRequest, response: PurgeResult }
     api:
       service: GroupService
       methods:
         - { name: CreateGroup, request: CreateGroupRequest, response: CreateGroupResponse }
         - { name: DeleteGroup, request: DeleteGroupRequest, response: DeleteGroupResponse }
+        - { name: DeleteAccount, request: DeleteAccountRequest, response: DeleteAccountResponse }
         - { name: GetGroup, request: GetGroupRequest, response: GetGroupResponse }
         - { name: ListGroups, request: ListGroupsRequest, response: ListGroupsResponse }
         - { name: CreateInvite, request: CreateInviteRequest, response: CreateInviteResponse }
@@ -131,7 +147,9 @@ nanoservices:
       - { message: GroupHeadAdvanced }
       - { message: MemberRemoved }
       - { message: BlobRequested }
+      - { message: CheckHolderCoverageRequest, response: HolderCoverage }
       - { message: PurgeGroupKeysRequest, response: PurgeResult }
+      - { message: PurgeUserDevicesRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
     api:
@@ -226,12 +244,22 @@ nanoservices:
             - { name: blob_id, type: uuid, primaryKey: true }
             - { name: last_access_at, type: timestamp }
             - { name: requested_at, type: timestamp, nullable: true }
+        - name: blob_holder
+          columns:
+            - { name: blob_id, type: uuid }
+            - { name: device_id, type: uuid }
+            - { name: downloaded_at, type: timestamp }
+          indexes: [ { columns: [blob_id, device_id] }, { columns: [device_id] } ]
       configTypes:
         - name: blob_kind
           prefix: bkind
           fields:
             - { name: retention_days, type: int32 }
             - { name: max_size_bytes, type: int64 }
+        - name: storage_quota
+          prefix: squo
+          fields:
+            - { name: max_group_bytes, type: int64 }
     externalSystems:
       - name: object_storage
         calls:
@@ -241,11 +269,13 @@ nanoservices:
       - { message: ConfirmUploadRequest, response: Blob }
       - { message: GetDownloadRequest, response: DownloadGrant }
       - { message: RequestBlobRequest, response: Blob }
+      - { message: DropBlobHoldRequest, response: Blob }
       - { message: CheckBlobRequest, response: Blob }
       - { message: ObjectDeleted }
       - { message: PurgeGroupBlobsRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
+      - { message: CheckHolderCoverageRequest, response: HolderCoverage }
       - { message: BlobRequested }
     api:
       service: StorageService
@@ -254,3 +284,4 @@ nanoservices:
         - { name: ConfirmUpload, request: ConfirmUploadRequest, response: ConfirmUploadResponse }
         - { name: GetDownload, request: GetDownloadRequest, response: GetDownloadResponse }
         - { name: RequestBlob, request: RequestBlobRequest, response: RequestBlobResponse }
+        - { name: DropBlobHold, request: DropBlobHoldRequest, response: DropBlobHoldResponse }

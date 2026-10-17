@@ -14,14 +14,26 @@ Seed, `config/base/storage/blob_kind.json`, namespace `default`:
 
 | name | retention_days | max_size_bytes |
 |---|---|---|
-| full | 30 | 26214400 |
+| full | 2 | 26214400 |
 | thumbnail | 3650 | 204800 |
-| attachment | 365 | 26214400 |
+| attachment | 2 | 26214400 |
+
+Two days is the user's choice: the bucket is a 48-hour cache, and every device that downloaded a
+blob is a holder it can be re-requested from.
 
 Read by `storage`'s `CreateUploadRequest` handler (to copy `retention_days` into the blob's spec
 and to enforce the cap). Written only by a human editing the seed; the app loads it at boot in one
 transaction through `basable-config`. Changing a kind's retention affects blobs created after the
 change; existing blobs keep the value in their spec.
+
+## `storage_quota` (owner: `storage`, prefix `squo`)
+
+| field | type | meaning |
+|---|---|---|
+| max_group_bytes | int64 | `CreateUploadRequest` refuses when the group's pending and available blobs would exceed it |
+
+Seed, `config/base/storage/storage_quota.json`, namespace `default`: one entry, `default`,
+`21474836480` (20 GiB).
 
 ## Not config
 

@@ -1,8 +1,9 @@
 # `group`
 
-Owns groups, memberships and invites, and one processing-object type: `group_purge`, the
-deletion of a group, which drives three other nanoservices until nothing of the group remains.
-Directive §2 for every table, §3 and §5 for the type, §7 for every message.
+Owns groups, memberships and invites, and two processing-object types: `group_purge`, the
+deletion of a group, which drives three other nanoservices until nothing of the group remains,
+and `user_purge`, the deletion of an account. Directive §2 for every table, §3 and §5 for the
+types, §6 for the Kratos call, §7 for every message.
 
 ## Tables
 
@@ -14,7 +15,7 @@ Directive §2 for every table, §3 and §5 for the type, §7 for every message.
 | parent_group_id | uuid, nullable | the parent for a subgroup |
 | created_by | uuid | Kratos identity id |
 | created_at | timestamp | |
-| deleted_at | timestamp, nullable | reserved for group deletion (`later`) |
+| deleted_at | timestamp, nullable | stamped by `DeleteGroupRequest`; the row goes when the purge finishes |
 
 Invariants: `parent_group_id` never forms a cycle (depth is checked on create; one level is
 enough for now, but the column allows deeper). No name, no avatar: those are an encrypted object
@@ -86,12 +87,39 @@ finish and is surfaced by age if it does not), `attempt_timeout` 60s.
 Every purge request is idempotent on the receiver (delete where `group_id = $1`, report what is
 left), so a repeated pass after a lost response is harmless.
 
+## Processing object `user_purge` (prefix `upr`)
+
+Created by `DeleteAccountRequest` (the caller deletes only themself). The handler creates the
+object and returns; from then on the api crate refuses every other call from that identity
+(`CheckMembershipRequest` still answers truthfully until the memberships are gone, so in-flight
+sync finishes cleanly). Spec: `user_id` (immutable). Status: `phase` (`leaving`, `devices`,
+`identity`, `done`), `groups_remaining`, `devices_remaining`, `identity_deleted`.
+
+Reconcile pass:
+
+1. `meta.deleting()` ⇒ `Delete`.
+2. Memberships of the user remain ⇒ take one (deepest subgroup first, so a parent leave never
+   has to cascade). If the user is the only member: stamp `deleted_at` and create a `group_purge`
+   for that group (and its subgroups). Otherwise, if they are the only admin: promote the member
+   with the earliest `joined_at`. Delete the membership, commit, send `MemberRemoved`. Status
+   `groups_remaining`, `Converged.after(0)` (one group per pass keeps each transaction small).
+3. Send `PurgeUserDevicesRequest { user_id }` → `PurgeResult { remaining }`; non-zero ⇒ record and
+   `Converged.after(30s)`.
+4. `identity_deleted` false ⇒ `kratos.delete_identity(user_id)` through `Call::dispatch`, fenced
+   on the claim; `Retry` (confirm on the next pass by reading the identity: absent ⇒
+   `identity_deleted = true`).
+5. `Delete`.
+
+Worker policy as `group_purge`. Objects the user authored stay: they belong to their groups and
+are ciphertext; `created_by_device` becomes a dangling id, which clients already tolerate.
+
 ## Messages
 
 | Handles | Response | Behaviour |
 |---|---|---|
 | CreateGroupRequest | Group | insert group + admin membership; for a subgroup, caller must be a parent member |
 | DeleteGroupRequest | Group | see `group_purge` above |
+| DeleteAccountRequest | AccountDeletion | see `user_purge` above |
 | GetGroupRequest | Group | caller must be a member |
 | ListGroupsRequest | GroupList | all groups of the caller, with parent ids |
 | CreateInviteRequest | Invite | caller must be admin |
@@ -107,16 +135,25 @@ left), so a repeated pass after a lost response is harmless.
 | PurgeGroupObjectsRequest | PurgeResult | ledger |
 | PurgeGroupBlobsRequest | PurgeResult | storage |
 | PurgeGroupKeysRequest | PurgeResult | device |
+| PurgeUserDevicesRequest | PurgeResult | device |
 
 `MemberRemoved` carries `(group_id, user_id, removed_at)`. It is an event (Directive §7: "an event
 is not a cascade"): `device` acting on it is desirable, not required for `group`'s own
 correctness. A messenger send is remote I/O, so it happens after the transaction commits
 (invariant 7).
 
+## External calls
+
+| System | Call | Strategy | Irreversible | Argument |
+|---|---|---|---|---|
+| kratos | delete_identity | idempotent | yes, but the user asked for exactly this | Kratos admin `DELETE /admin/identities/{id}`; a 404 on repeat is success. Dispatched from the `user_purge` pass under its claim. |
+
+The admin API is reached over the in-cluster service address; no secret.
+
 ## API
 
 `GroupService`: CreateGroup, GetGroup, ListGroups, CreateInvite, AcceptInvite, ListMembers,
-RemoveMember, LeaveGroup, DeleteGroup. Every method requires a Kratos session; the api crate
+RemoveMember, LeaveGroup, DeleteGroup, DeleteAccount. Every method requires a Kratos session; the api crate
 passes the identity id as the caller.
 
 ## Tests
@@ -128,4 +165,7 @@ passes the identity id as the caller.
   transaction; two concurrent accepts of a single-use invite admit exactly one; `MemberRemoved`
   is sent exactly once per removal; deleting a parent with a subgroup purges the subgroup first
   and the parent's pass waits; a lost `PurgeResult` is retried and the receiver's purge is
-  idempotent.
+  idempotent; an account purge for a user who is sole admin of one group, sole member of
+  another and plain member of a third ends with a promoted admin, a group purge, a rotation
+  push, no device rows and one `delete_identity` call.
+- `effecttest`: `kratos.delete_identity` with ack loss and a 404 on repeat.
