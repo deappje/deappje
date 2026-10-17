@@ -116,8 +116,10 @@ one policy for every type:
 
 1. Decrypt the returned row and apply its state to the local document. The merge is commutative
    and idempotent, so order and repeats do not matter.
-2. Validate the typed projection against the type's invariants. A failure does not block the
-   push; it flags the object "needs attention" for a person to fix.
+2. Validate the typed projection against the type's invariants that live in inputs (an event
+   ending before it starts, a vote naming an option deleted concurrently, a participant no longer
+   in the group). A failure does not block the push; it flags the object "needs attention" for a
+   person to fix.
 3. Encode the full state, encrypt, push again with the returned `version` as `base_version`. A
    few immediate retries, then the object waits in the outbox for the next sync. The loop
    converges because every retry carries strictly more of the group's edits.
@@ -134,8 +136,11 @@ order is derived on projection. A move is one LWW write to `pos`, so two concurr
 same item pick one position and a concurrent edit of the item's fields survives the move. A `yrs`
 `Array` is not used for user-ordered lists: it has no move, so a move is delete plus insert and
 two concurrent moves leave two copies. Prose (note body, post text) is `Text`
-with attributes. Values that must change together (an expense's total and its shares) live under
-one key as a nested map replaced atomically, so a merge cannot tear them apart.
+with attributes. Documents store inputs, never derived values: an expense stores amount, payer,
+participants and a split rule (`equal`, `weights`, `exact`), and the shares are computed in the
+projection, so a merge cannot produce shares that do not sum (in `exact` mode the total is the
+sum of the stored amounts). Balances, tallies and sort orders are derived the same way. The few
+inputs that must change together live under one key as a nested map replaced atomically.
 
 The encrypted bytes are `Payload { uint32 format; bytes state }`, `format = 1` meaning the `yrs`
 v1 state encoding. Deleted content is garbage-collected inside the document, so an object stays
