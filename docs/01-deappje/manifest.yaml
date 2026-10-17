@@ -125,6 +125,8 @@ nanoservices:
             - { name: group_id, type: uuid }
             - { name: device_id, type: uuid }
             - { name: status, type: string }
+            - { name: invite_id, type: uuid, nullable: true }
+            - { name: invite_tag, type: bytes, nullable: true }
             - { name: created_at, type: timestamp }
             - { name: fulfilled_at, type: timestamp, nullable: true }
           indexes: [ { columns: [group_id, status] } ]

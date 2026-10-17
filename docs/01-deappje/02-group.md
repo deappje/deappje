@@ -47,7 +47,7 @@ leave while other members remain.
 |---|---|---|
 | id | uuid | primary key |
 | group_id | uuid | |
-| code | string | unique, 10 characters from a 32-symbol alphabet, server-minted |
+| code | string | unique, 10 characters from a 32-symbol alphabet, server-minted. The shared link is `/join/<code>#<secret>`: the fragment is 16 random bytes minted on the creating device, kept in that device's local store, never sent to the server; it authenticates the joiner's key request (`02-device.md`). |
 | created_by | uuid | |
 | expires_at | timestamp | |
 | max_uses | int32 | 0 = unbounded |

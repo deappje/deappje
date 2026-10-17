@@ -49,6 +49,8 @@ a bad wrap is detected on the receiving device and re-requested.
 | group_id | uuid | |
 | device_id | uuid | the device asking |
 | status | string | `pending`, `fulfilled`, `cancelled` |
+| invite_id | uuid, nullable | set when the request follows an invite |
+| invite_tag | bytes, nullable | `HMAC-SHA256(invite_secret, device_public_key)`; opaque to the server |
 | created_at | timestamp | |
 | fulfilled_at | timestamp, nullable | |
 
@@ -56,13 +58,26 @@ Unique `(group_id, device_id)` where pending. A request is created by a device w
 member but which holds no key; every device that holds a key for the group is pushed. Fulfilment
 is a human act: the holder's client shows the requesting user, platform and the fingerprint of
 the requesting device's public key (the requester reads it off their own screen), and a tap
-wraps the keys and calls `FulfilKeyRequestRequest`. The normal path is a scan: the requesting
-device shows `{ device_id, fingerprint }` as a QR, the holder scans it and approves the pending
-request whose public key hashes to that fingerprint. There is no silent path, not even for the
-same user's devices: a server could insert a device row under the victim's own user id and the
-victim's phone would wrap for it. The server cannot tell a scan from automation; what it enforces
-is the trust rule below, and what the clients enforce is that nothing is wrapped for a device
-whose fingerprint a person did not scan or compare.
+wraps the keys and calls `FulfilKeyRequestRequest`. Three ways the holder's client verifies the
+requesting device's public key before the tap, in order of how often they happen:
+
+1. **Through an invite** (remote, the normal join and the rejoin after a lost phone). The invite
+   link carries a secret in its URL fragment that the server never sees. The joiner's device
+   attaches `invite_tag = HMAC-SHA256(secret, its public key)` to the request. The device that
+   created the invite (or any device it shared the secret with inside the group, as an encrypted
+   `invite_secret` object) recomputes the tag; a match proves the request came through that link
+   and that the key is the one the joining device holds. A server cannot forge it.
+2. **By QR scan** (same room: a user's own new device, a friend sitting next to them). The
+   requesting device shows `{ device_id, fingerprint }`; the holder scans and approves the pending
+   request whose public key hashes to it.
+3. **By comparing the code** over a channel the two people trust, as the fallback. Until compared
+   the holder's client marks the device unverified and does not wrap.
+
+There is no silent path, not even for the same user's devices: a server could insert a device row
+under the victim's own user id and the victim's phone would wrap for it. The server cannot tell a
+verified tap from automation; what it enforces is the trust rule below, and what the clients
+enforce is that nothing is wrapped for a device whose key a person did not verify one of these
+three ways.
 
 The browser is one of these devices: it pairs by showing the QR after a passkey login (WebAuthn
 cross-device authentication is already a QR the phone scans, so login and pairing are two scans
@@ -117,7 +132,7 @@ holds all of them.
 | RegisterDeviceRequest | Device | upsert for the caller |
 | SetPushTokenRequest | Device | |
 | ListDevicesRequest | DeviceList | the devices holding a key for a group, with public keys; caller must be a holder |
-| RequestGroupKeysRequest | KeyRequest | caller's user must be a member; insert pending; push every holder device |
+| RequestGroupKeysRequest | KeyRequest | caller's user must be a member; insert pending with optional `invite_id` and `invite_tag`, relayed opaque; push every holder device |
 | ListKeyRequestsRequest | KeyRequestList | pending requests in groups the caller holds a key for, with the requesting device's platform and public key |
 | FulfilKeyRequestRequest | KeyRequest | caller must hold a key for the group; insert the wrapped keys for the requesting device, mark fulfilled, push it |
 | PublishWrappedKeysRequest | WrappedKeyList | batch insert, rotation rule above |
@@ -161,7 +176,8 @@ FulfilKeyRequest, PublishWrappedKeys, GetWrappedKeys.
 
 - Unit: rotation batch rule (same key id, different wrapper ⇒ refused); wrapped key for a
   non-member device refused; `FulfilKeyRequest` from a non-holder refused; `ListDevices` omits a
-  registered device with no key.
+  registered device with no key. Client core vectors: a request with a tag under the wrong secret
+  or the wrong public key is not verified; the right one is.
 - Integration: `MemberRemoved` deletes exactly that user's rows and pushes every other device
   once; two racing `PublishWrappedKeysRequest`s for the same key id end with one wrapper.
 - `effecttest`: both push adapters, including ack loss.
