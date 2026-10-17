@@ -56,10 +56,18 @@ Unique `(group_id, device_id)` where pending. A request is created by a device w
 member but which holds no key; every device that holds a key for the group is pushed. Fulfilment
 is a human act: the holder's client shows the requesting user, platform and the fingerprint of
 the requesting device's public key (the requester reads it off their own screen), and a tap
-wraps the keys and calls `FulfilKeyRequestRequest`. A holder device of the *same* user fulfils
-without asking. The server cannot tell a tap from automation; what it enforces is the trust rule
-below, and what the clients enforce is that no device wraps for another user's device without a
-person approving.
+wraps the keys and calls `FulfilKeyRequestRequest`. The normal path is a scan: the requesting
+device shows `{ device_id, fingerprint }` as a QR, the holder scans it and approves the pending
+request whose public key hashes to that fingerprint. There is no silent path, not even for the
+same user's devices: a server could insert a device row under the victim's own user id and the
+victim's phone would wrap for it. The server cannot tell a scan from automation; what it enforces
+is the trust rule below, and what the clients enforce is that nothing is wrapped for a device
+whose fingerprint a person did not scan or compare.
+
+The browser is one of these devices: it pairs by showing the QR after a passkey login (WebAuthn
+cross-device authentication is already a QR the phone scans, so login and pairing are two scans
+in a row, or one when the client chains them). Without "remember this browser" its device key and
+local store live in memory for the session and the device row is deleted on logout.
 
 ## Trust rule
 

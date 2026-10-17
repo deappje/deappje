@@ -54,8 +54,10 @@ for another device and hands it back.
   removed user's wrapped keys for that group are deleted and every other member's devices are
   pushed so one of them rotates.
 - **Trust rule**: the server never seeds trust. A device holds a group's keys only because a
-  person on a device that already holds them approved its key request (the requester's own
-  devices that hold the key approve silently). A rotation wraps the new key only for devices that
+  person on a device that already holds them approved its key request, by scanning the new
+  device's fingerprint QR or comparing the code. That includes the user's own new devices: a
+  silent same-user approval would let a server-inserted row under the victim's user id obtain
+  keys from the victim's own phone. A rotation wraps the new key only for devices that
   hold the previous one. So a device row the server inserted on its own never receives a key: no
   human sees it, and `ListDevicesRequest` for a group lists only key holders. The approver sees
   the requesting device's platform and the fingerprint of its public key, which the requester
@@ -195,7 +197,10 @@ browser shell. Time travel is not a requirement.
 - One binary, `replicas: 1` in preview and `2` in live (deviation from the default of 2
   everywhere, for cost; the frameworks are multi-replica safe so live gets two).
 - `frontend: react`: the web client is an application, not a page, with local-first state in a
-  wasm build of the shared Rust core and React rendering it. The core is a `core/` crate in this
+  wasm build of the shared Rust core and React rendering it. The browser is a full device of the
+  user (own device key, paired by QR, syncs from the server), never a mirror of the phone; login
+  is a passkey, which with WebAuthn cross-device authentication is itself a QR scanned by the
+  phone. The core is a `core/` crate in this
   repository's Bazel workspace (sync, store, `yrs` documents and projections, keyring, crypto, key
   schemas), built to wasm for the web client in the same workflow; the Swift and Kotlin
   repositories pin a commit of this repository and build the crate with UniFFI. Server contract

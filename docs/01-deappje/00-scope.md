@@ -66,7 +66,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Device registration with public key | include | | Required for key wrapping. |
-| Key request from a new device, approved by a person | include | a member sees "new <platform> device of <user>, fingerprint ABCD-EFGH wants keys to <group>" and taps approve; the requester's own devices that already hold the key approve silently. Rotation wraps only for devices that already hold a key. | Round 4. Automatic fulfilment would let a server that inserted a device row obtain the group key; with approval the server never seeds trust, it only relays it. Costs one tap per new device. |
+| Key request from a new device, approved by a person | include | the new device shows its fingerprint as a QR; a device that holds the keys scans it (or a person compares the code) and approves the matching request; the same for the user's own new devices, never silently. Rotation wraps only for devices that already hold a key. | Round 4. Automatic fulfilment would let a server that inserted a device row obtain the group key, and a silent same-user approval would let it do so under the victim's own user id; with a scan the server never seeds trust, it only relays it. Costs one scan per new device. |
 | Key rotation on removal | include | | Cheap; closes the ex-member hole. |
 | Push tokens (APNs, FCM) | include | silent push on group head advance | Replaces polling. |
 | Key backup / recovery without another member | exclude | | Rejoin via another member's device is the chosen path. |
@@ -108,7 +108,8 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
-| Web client (React + wasm core) in this repo | include | `frontend: react` | Requested. |
+| Web client (React + wasm core) in this repo | include | `frontend: react`; the browser is a full device of the same user: its own device key, paired by QR, syncing from the server like a phone. Login is a passkey, and WebAuthn cross-device authentication is the QR-scanned-by-phone login for free. "Remember this browser" is optional: without it keys stay in memory for the session. | Round 5 (2026-10-17). A companion that mirrors the phone over wifi dies when the phone locks and needs a second sync protocol; a separate user would be another person in every group. |
+| Direct device-to-device blob transfer (WebRTC) | later | an optimisation of the holder re-request path, signalled through the server so it works on any network | Not needed: a re-request through the bucket already moves photos from phone to browser. |
 | Shared Rust client core in this repo | include | a `core/` crate in the Bazel workspace, compiled to wasm for the web client in the same build; the mobile repositories pin a commit of this repository and build it with UniFFI | Round 4. One repository versions server contract and client core together. |
 | Database backups | later | private bucket exists once `objectStorage` is declared | Add before live has users. |
 | Email delivery for Kratos codes | include | user-supplied SMTP secret | Required for login. |
@@ -121,8 +122,9 @@ notes: a CRDT with merge-on-conflict. Round 3 (2026-10-17) extended that to ever
 value is a `yrs` document, conflicted copies are gone, and payload schemas are key schemas over
 the document instead of protobuf messages. Round 4 (2026-10-17) decided human approval of key
 requests, account deletion, a 20 GiB per-group cap with 48-hour blob retention, and the client
-core living in this repository. What remains is tuning (worker policy, the value size cap),
-which the implementing session owns.
+core living in this repository. Round 5 (2026-10-17) made the browser a full device paired by
+QR and removed silent same-user approval. What remains is tuning (worker policy, the value size
+cap), which the implementing session owns.
 
 ## Status
 
