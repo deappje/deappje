@@ -128,8 +128,12 @@ Deletes still win: a tombstone in the returned row ends the loop and the local e
 
 A `Map` at the root; each key is a field of the type. Scalars are last-writer-wins registers (two
 concurrent edits to the same key pick one deterministically, edits to different keys both
-survive). Lists are `Array`s of maps with a `pos` key for ordering, so a concurrent reorder cannot
-duplicate an item (a move is otherwise delete plus insert). Prose (note body, post text) is `Text`
+survive). Lists (todo items, poll options) are a `Map` keyed by item id, each item a nested map
+with a `pos` key holding a fractional index (a string that sorts between its neighbours), and the
+order is derived on projection. A move is one LWW write to `pos`, so two concurrent moves of the
+same item pick one position and a concurrent edit of the item's fields survives the move. A `yrs`
+`Array` is not used for user-ordered lists: it has no move, so a move is delete plus insert and
+two concurrent moves leave two copies. Prose (note body, post text) is `Text`
 with attributes. Values that must change together (an expense's total and its shares) live under
 one key as a nested map replaced atomically, so a merge cannot tear them apart.
 
