@@ -1,0 +1,33 @@
+# Object types (client-defined; the server stores a number)
+
+Every object is one `yrs` document (`01-architecture.md`, "Values are CRDT documents"). Common
+keys on every type: `author` (user id), `authored_at`, `edited_at`. Ordering of lists is a `pos`
+fractional index. Blob references are `{ blob_id, key, sha256, size }` with the blob's content key
+inside the document. Numbers are spaced by tens per feature area; a breaking change takes the
+next free number in its block.
+
+| # | Type | Parent | Keys | Blobs | Notes |
+|---|---|---|---|---|---|
+| 1 | `group_profile` | none | name, description, avatar | thumbnail | singleton: id = UUIDv5(group_id, "profile") |
+| 2 | `member_profile` | none | display_name, avatar, birthday (month, day, year?) | thumbnail | one per member: id = UUIDv5(group_id, user_id); the calendar derives birthdays from it |
+| 3 | `invite_secret` | none | invite_id, secret | | lets any holder verify a key request that came through the invite (`02-device.md`) |
+| 10 | `post` | none | text (Text) | | timeline entry; photos are children |
+| 11 | `photo` | post, album or message | width, height, taken_at, caption, full, thumbnail | full, thumbnail | the one photo type everywhere |
+| 12 | `album` | none | title, cover_photo_id | | |
+| 13 | `comment` | any | text (Text) | | |
+| 14 | `reaction` | any | emoji | | one per user per target: id = UUIDv5(parent_id, user_id); changing it is an edit |
+| 20 | `todo_list` | none | title | | |
+| 21 | `todo_item` | todo_list | text, done, assignee, due, pos | | |
+| 30 | `note` | none | title, body (Text with attributes) | | the type that motivated the CRDT |
+| 40 | `expense` | none | amount (minor units), currency, paid_by, participants (map), split (`equal` / `weights` / `exact`), kind (`expense` / `ticket`), description, date | | shares and balances are derived (`01-architecture.md`); a ticket is an equal split, one share per participant |
+| 41 | `settlement` | none | from, to, amount, currency, date | | records a payment made outside the app; money never moves here |
+| 42 | `ticket_share` | expense | holder, status (`held` / `transferred` / `used`) | attachment | the ticket file for one participant |
+| 50 | `event` | none | title, starts, ends, all_day, location, geo, yearly | | a birthday for someone not in the app is a yearly all-day event |
+| 60 | `poll` | none | question, kind (`choice` / `dates`), options (map id → { text or slot, pos }), multi, closes_at | | the datepicker is kind `dates` |
+| 61 | `vote` | poll | answers (map option_id → `yes` / `maybe` / `no`, or chosen) | | one per user: id = UUIDv5(poll_id, user_id) |
+| 70 | `message` | none, or a message (thread) | text (Text), reply_to | | photos as children; edits are CRDT edits, deletion a tombstone |
+| 80 | `venue` | none | name, category (`bar` / `pub` / `club` / `restaurant` / `other`), address, geo, url, notes | | recommendations; comments and reactions are children |
+
+Derived on the client, never stored: balances, poll tallies, the calendar (events plus member
+birthdays), unread counts, sort orders. Deleting a parent tombstones its children server-side
+(`02-ledger.md`), so deleting a post removes its photos and comments.

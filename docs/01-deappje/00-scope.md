@@ -96,7 +96,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
-| Timeline posts, photo album, todo lists, calendar events and birthdays, polls, datepicker (scheduling poll), messaging, venue recommendations on a map, splitser expenses, tickets as expenses with per-share blob | include | | All are object types; none need backend logic. |
+| Timeline posts, photo album, todo lists, calendar events and birthdays, polls, datepicker (scheduling poll), messaging, venue recommendations on a map, splitser expenses, tickets as expenses with per-share blob | include | catalogue with type numbers and keys in `06-object-types.md` | All are object types; none need backend logic. |
 | CRDT (`yrs`) for every type, merge-on-conflict | include | every value is a `yrs` document, full state per push, merged on the client when the push conflicts; nothing on the server beyond the conflict carrying the current row | Round 2 (2026-10-15) added it for notes; round 3 (2026-10-17) made it the only model. Two members editing different fields of one object offline both keep their edits, and one code path serves all types. |
 | Post-merge validation ("needs attention") | include | documents store inputs only (an expense stores amount, payer, participants and a split rule; shares and balances are derived), so most invariants hold by construction; the rest (dates ordered, a vote naming a deleted option) are checked after every merge and a failing object is flagged for a person to fix, never silently accepted or rewritten | A CRDT guarantees convergence, not validity. |
 | Conflicted copy on collision | exclude | | Round 3. Superseded by the CRDT merge. |
