@@ -200,7 +200,11 @@ browser shell. Time travel is not a requirement.
   wasm build of the shared Rust core and React rendering it. The browser is a full device of the
   user (own device key, paired by QR, syncs from the server), never a mirror of the phone; login
   is a passkey, which with WebAuthn cross-device authentication is itself a QR scanned by the
-  phone. The core is a `core/` crate in this
+  phone. Browser storage: object and blob ciphertext at rest in the Origin Private File System
+  (blobs byte for byte as the bucket holds them, so the browser is a real holder), decrypted into
+  memory by the core at startup; the device key is a non-extractable WebCrypto key to which the
+  core delegates the X25519 step of HPKE; `navigator.storage.persist()` is requested; eviction by
+  the browser only costs a dropped hold or a re-pair. The core is a `core/` crate in this
   repository's Bazel workspace (sync, store, `yrs` documents and projections, keyring, crypto, key
   schemas), built to wasm for the web client in the same workflow; the Swift and Kotlin
   repositories pin a commit of this repository and build the crate with UniFFI. Server contract
