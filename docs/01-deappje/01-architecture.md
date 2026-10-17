@@ -108,26 +108,51 @@ asks for it again.
 - **Sends**: `CheckMembershipRequest`, `BlobRequested`.
 - **API**: `StorageService`.
 
-## Conflict policies (client core)
+## Values are CRDT documents (client core)
 
-The server has one rule: compare-and-set on `version`, and a conflict returns the current row.
-What the client does with a conflict is a policy keyed on the type number, implemented once in
-the Rust core:
+Every `value` is one `yrs` document (the Rust port of Yjs), encrypted. The server has one rule,
+compare-and-set on `version` with the current row returned on a conflict, and the client core has
+one policy for every type:
 
-| Policy | Types | On conflict |
-|---|---|---|
-| `cas` (default) | everything else | keep the local edit as a conflicted copy (a new object of the same type with `conflict_of` in its payload), adopt the server row, show both. |
-| `merge` | `note` | decrypt the returned row, merge it into the local `yrs` document (commutative, so order does not matter), re-encrypt the full state, push again with the returned `version` as `base_version`. Bounded to a few immediate retries, then left in the outbox for the next sync. Converges because every retry folds in strictly more of the group's edits. |
+1. Decrypt the returned row and apply its state to the local document. The merge is commutative
+   and idempotent, so order and repeats do not matter.
+2. Validate the typed projection against the type's invariants. A failure does not block the
+   push; it flags the object "needs attention" for a person to fix.
+3. Encode the full state, encrypt, push again with the returned `version` as `base_version`. A
+   few immediate retries, then the object waits in the outbox for the next sync. The loop
+   converges because every retry carries strictly more of the group's edits.
 
-`note` uses `yrs` (the Rust Yjs port): its state encoding is compact, deleted text is garbage-
-collected inside the document so a note stays about the size of its text, rich text is native
-(`Text` with attributes) for the editor, and it compiles to wasm for the browser shell. The
-payload is `Note { bytes state; uint32 format }` with `format = 1` meaning the `yrs` v1 state
-encoding; the bytes are opaque to the schema patches, so a different encoding or a different
-CRDT (automerge, if a JSON-document CRDT is ever wanted) is a new type number, never a
-`schema_version` bump. Offline edits accumulate in the local document and go up as one state on
-the next sync; the server sees one ciphertext per push, exactly as for any other type. Deletes
-still win over a merge.
+Deletes still win: a tombstone in the returned row ends the loop and the local edit is dropped.
+
+### Document shape per type
+
+A `Map` at the root; each key is a field of the type. Scalars are last-writer-wins registers (two
+concurrent edits to the same key pick one deterministically, edits to different keys both
+survive). Lists are `Array`s of maps with a `pos` key for ordering, so a concurrent reorder cannot
+duplicate an item (a move is otherwise delete plus insert). Prose (note body, post text) is `Text`
+with attributes. Values that must change together (an expense's total and its shares) live under
+one key as a nested map replaced atomically, so a merge cannot tear them apart.
+
+The encrypted bytes are `Payload { uint32 format; bytes state }`, `format = 1` meaning the `yrs`
+v1 state encoding. Deleted content is garbage-collected inside the document, so an object stays
+about the size of its fields plus roughly a hundred bytes of CRDT metadata. Offline edits
+accumulate locally and go up as one state on the next sync; the server sees one ciphertext per
+push.
+
+### Key schemas and versions
+
+Per type the core holds a key schema: key name, kind (`string`, `int`, `bool`, `bytes`, `map`,
+`array`, `text`), required, default. `schema_version` in plaintext metadata says which schema a
+writer used. Rules: add keys freely; never repurpose a key; a breaking change is a new type
+number. An old client reads a newer document by ignoring keys it does not know (the CRDT keeps
+them) and may write to it, touching only keys it knows. Upgrade steps are declarative key
+operations: add with default, rename by copy (the old key stays until every writer is past the
+old version), drop. No executable converters, so no code travels. The projection from document to
+typed struct is where defaults are filled and invariants checked.
+
+Why `yrs` and not automerge: automerge keeps the full history of every object forever, so every
+edit grows the value; `yrs` garbage-collects, has native rich text, and compiles to wasm for the
+browser shell. Time travel is not a requirement.
 
 ## Deployment shape
 
@@ -189,6 +214,6 @@ boolean (`MembershipCheck`, `Blob.phase`) or an id; no nanoservice re-derives an
 
 ## What is deliberately not on the server
 
-Merge (including the CRDT merge for notes), validation of payloads, invariants inside a type
-(one vote per poll, shares summing to the total), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
+The CRDT merge, validation of payloads, invariants inside a type (one vote per poll, shares
+summing to the total), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
 geocoding. All of it is the client's, because all of it needs plaintext.

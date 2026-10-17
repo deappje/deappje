@@ -41,12 +41,13 @@ definitive rejection is classified as such.
 
 ## Client core conformance (outside this repository, noted for completeness)
 
-The Rust client core carries vectors for the schema patch chain (forward and backward), the
-keyring (wrap/unwrap round trips), the `note` merge policy (two documents edited offline, pushed
-in both orders, end identical and keep both edits; a delete during a merge retry wins), and a
-simulated multi-client sync harness that drives random push/pull/offline interleavings against
-an in-memory model of `ledger`'s contract and asserts convergence for both the `cas` and the
-`merge` policy. The server-side contract those vectors assume is this plan's `02-ledger.md`.
+The Rust client core carries vectors for the key-schema upgrade steps (an old writer and a new
+reader on one document, both directions), the keyring (wrap/unwrap round trips), the merge loop
+(two documents edited offline, pushed in both orders, end identical and keep both edits; a
+delete during a merge retry wins; an invariant broken by a merge is flagged, not rewritten;
+a concurrent reorder of a list never duplicates an item), and a simulated multi-client sync
+harness that drives random push/pull/offline interleavings against an in-memory model of
+`ledger`'s contract and asserts that every client's document for every object converges. The server-side contract those vectors assume is this plan's `02-ledger.md`.
 
 ## CI gate
 

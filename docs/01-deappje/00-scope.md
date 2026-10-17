@@ -33,15 +33,15 @@ These were settled in discussion before this plan was written; they are not open
 | Durability | The server is the durable store, not a cache. No fill-on-miss for objects. | Fill-on-miss needs presence, a request queue and a holder of last resort; encrypted JSON is nearly free to keep. |
 | Blobs | Full-size blobs expire from the bucket after a retention period and can be re-requested from a device that still holds them (the author's camera roll is the holder of last resort). Thumbnails are kept long-term. | Photos are the only real cost line. |
 | Change detection | A per-group commit log: every accepted write takes the next sequence number of its group, assigned under a locked counter row. Clients keep a cursor per group. | One query answers "anything new?"; batched across groups in one call. |
-| Conflicts | Per-object version with compare-and-set on push: first to sync wins, the loser is told and gets the current row back. Per type the client core then either keeps a conflicted copy (`cas`, the default) or merges and re-pushes (`merge`, for CRDT payloads). Deletes always win. | The server cannot merge ciphertext, so merging is a client policy keyed on the type number; the server contract is the same for both. |
+| Conflicts | Per-object version with compare-and-set on push; a conflict returns the current row. Every value is a `yrs` CRDT document, so the client merges the returned row into its local document and pushes again. No conflicted copies anywhere. Deletes always win. | The server cannot merge ciphertext, so the merge runs on the device; a CRDT makes it automatic and deterministic for every type, not only notes. |
 | Deletes | Tombstones in the log, garbage-collected after a retention window; a client with an older cursor does a full id/version reconciliation. | The only way an offline client learns about a deletion. |
 | Children | No child lists or counts on parents; `parent_id` on the child, indexed. | Derived state on the parent is a conflict magnet. |
 | Fetch shape | Catch-up (all types since cursor) plus per-type backfill (e.g. the last 200 messages). | Message-like types must not force a full history pull. |
 | Keys | A group key per group, a keyring with key ids; rotate on member removal; new devices get keys wrapped for them by an existing member's device. New members get full history. | MLS is designed to deny history to new members, the opposite of the requirement. |
 | Subgroups | A separate group with its own key and `parent_group_id`; members ⊆ parent, enforced server-side; leaving the parent cascades. | A key boundary is a group boundary. |
 | Identity | Kratos, email code and passkeys. Identity never carries keys. | Platform default; exactly the requested login. |
-| Payloads | Protobuf per type, `schema_version` in plaintext metadata. Add fields, never move them; a breaking change is a new type number. Old clients may read newer objects (display-only downgrade) but never write them. Declarative upgrade/downgrade patches ported from rootline's `JsonPatch` vocabulary, minus `JsonTransform`, over a dynamic message that preserves unknown fields. | Preserving unknown fields is what makes old writers safe; rootline's JSON round trip would strip them. |
-| Client core | One Rust core (sync, store, merge, keyring, crypto, schema patches) bound to Swift and Kotlin through UniFFI and to the browser through wasm. Three UI shells. | Three sync engines and three crypto implementations diverge. |
+| Payloads | Every value is a `yrs` document: a `Map` at the root whose keys are the type's fields, `Array` for lists, `Text` for prose. Per type a key schema (name, kind, required, default) with `schema_version` in plaintext metadata. Add keys, never repurpose them; a breaking change is a new type number. Old clients read newer documents (unknown keys are ignored for display and preserved by the CRDT) and may write to them, touching only keys they know. Upgrade steps are declarative key operations (add with default, rename by copy, drop), replacing the rootline `JsonPatch` port. | The CRDT preserves unknown keys by construction, which is what made the protobuf plan need a dynamic-message layer; with every value a document the layer is gone and old writers are safe. |
+| Client core | One Rust core (sync, store, `yrs` documents and their typed projections, post-merge validation, keyring, crypto, key-schema upgrades) bound to Swift and Kotlin through UniFFI and to the browser through wasm. Three UI shells. | Three sync engines and three crypto implementations diverge. |
 | Cost | Single CNPG instance, one app replica in preview, blob traffic never touches the app (presigned URLs), push instead of polling, client-side resize before upload. | |
 
 ## Scope ledger
@@ -94,8 +94,9 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Timeline posts, photo album, todo lists, calendar events and birthdays, polls, datepicker (scheduling poll), messaging, venue recommendations on a map, splitser expenses, tickets as expenses with per-share blob | include | | All are object types; none need backend logic. |
-| Notes: CRDT (`yrs`) with merge-on-conflict | include | type `note`; value is a `yrs` document state, full state per push, merged on the client when the push conflicts; nothing on the server beyond the conflict carrying the current row | Round 2 (2026-10-15). Two members editing one note offline must both keep their edits; a conflicted copy makes a person merge by hand. |
-| Conflicted copy on collision | include | the default policy for every other type (posts, events, expenses, poll votes) | Cheapest correct behaviour where a whole-object edit is the unit. |
+| CRDT (`yrs`) for every type, merge-on-conflict | include | every value is a `yrs` document, full state per push, merged on the client when the push conflicts; nothing on the server beyond the conflict carrying the current row | Round 2 (2026-10-15) added it for notes; round 3 (2026-10-17) made it the only model. Two members editing different fields of one object offline both keep their edits, and one code path serves all types. |
+| Post-merge validation ("needs attention") | include | after every merge the typed projection is validated against the type's invariants (shares sum to the total, dates ordered); a failing object is flagged for a person to fix, never silently accepted or rewritten | A CRDT guarantees convergence, not validity. |
+| Conflicted copy on collision | exclude | | Round 3. Superseded by the CRDT merge. |
 | Ticket payments (moving money) | exclude | | Round 1. Tracking only; a ticket is an expense with one share per person. |
 | Cross-group friend graph for recommendations | exclude | | Needs a server-visible social graph; incompatible with E2E. Recommendations are per group. |
 | Read receipts, typing indicators | exclude | | Round 1. No live presence; silent push plus pull is the delivery model. |
@@ -112,8 +113,10 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 
 None. Round 1 (2026-10-14) decided ticket payments, presence and group deletion; the invite
 model was defaulted (code with expiry and max uses). Round 2 (2026-10-15) reversed round 1 on
-notes: they are a CRDT with merge-on-conflict in the client core. What remains is tuning
-(retention numbers, worker policy, the value size cap), which the implementing session owns.
+notes: a CRDT with merge-on-conflict. Round 3 (2026-10-17) extended that to every type: every
+value is a `yrs` document, conflicted copies are gone, and payload schemas are key schemas over
+the document instead of protobuf messages. What remains is tuning (retention numbers, worker
+policy, the value size cap), which the implementing session owns.
 
 ## Status
 

@@ -46,7 +46,7 @@ key_id, value?, blob_id?, base_version, deleted }] }`.
 Before the transaction: `CheckMembershipRequest`; for every `blob_id`, `CheckBlobRequest` must
 answer the blob is in this group and `available` or `pending_upload` (remote I/O stays outside the
 transaction, invariant 7). A `value` larger than 1 MiB is rejected for the whole batch (a CRDT
-note state grows with its text; anything bigger belongs in a blob).
+document grows with its content; anything bigger belongs in a blob).
 
 One transaction:
 
@@ -71,9 +71,9 @@ commit after a higher one and a client that pulled in between misses it forever 
 Deletes always win: a push with `deleted = true` is accepted regardless of `base_version`. An edit
 whose `base_version` matches a tombstone is a conflict; the client shows "deleted".
 
-The server does not know which types merge: a merging client (notes, see `01-architecture.md`)
-simply pushes again with `current.version` as `base_version` after folding `current.value` into
-its local document. The retry is an ordinary push.
+The server does not merge anything: every value is a CRDT document (see `01-architecture.md`),
+so the client folds `current.value` into its local document and pushes again with
+`current.version` as `base_version`. The retry is an ordinary push.
 
 ## Pull, backfill, heads, reconciliation
 
@@ -134,8 +134,8 @@ untouched.
   pull during a concurrent push never returns a seq the next pull skips; delete cascades in one
   transaction; gc removes only expired tombstones.
 - Property test: random interleavings of push/pull across N simulated clients converge to the
-  same id/version set after reconciliation; with merging clients on one object, every retry
-  carries a `base_version` the server has seen and the object's final version equals the number
-  of accepted pushes.
+  same id/version set after reconciliation; with several clients merging on one object, every
+  retry carries a `base_version` the server has seen and the object's final version equals the
+  number of accepted pushes.
 - Unit: a conflict returns the stored row unchanged; a batch with an oversized `value` is refused
   as a whole.
