@@ -70,6 +70,27 @@ inserted on its own therefore never receives a key: it appears in no list a wrap
 reads, and no person approves it. The first device in a group is the creator's, which mints key
 1 and wraps it for itself.
 
+## Key exchange protocol (client core; the server relays bytes)
+
+| Key | Where | Algorithm |
+|---|---|---|
+| device key | one X25519 keypair per device, generated on the device, private half in the Secure Enclave-backed keychain / Android Keystore / a non-extractable WebCrypto key; the public half is `device.public_key` | X25519 |
+| group key | 32 random bytes per `(group_id, key_id)`, minted on a member's device | XChaCha20-Poly1305 for object values, random 24-byte nonce, associated data = the plaintext metadata (`group_id`, `id`, `type`, `schema_version`, `key_id`) so the server cannot re-label a ciphertext |
+| blob key | 32 random bytes per blob, stored inside the referencing object's document | XChaCha20-Poly1305 over the blob; unchanged by rotation, so a holder re-uploads the same bytes |
+
+A wrap (`wrapped_key.wrapped`) is HPKE (RFC 9180) in **Auth mode**: DHKEM(X25519, HKDF-SHA256),
+HKDF-SHA256, ChaCha20-Poly1305, sender = the wrapping device's static key, recipient = the target
+device's public key, `info` = `group_id ‖ key_id ‖ device_id ‖ wrapped_by_device`. Auth mode
+makes the recipient verify which device produced the wrap, matching `wrapped_by_device`. A new
+holder receives one wrap per `key_id`, so a new member gets the full history.
+
+Trust in the client core: the fingerprint shown at approval is SHA-256 of the device public key
+as a short code; a device **pins** the public key of every device it has wrapped for or received
+from, and a different key under a known device id is refused and surfaced (a changed safety
+number), which is what stops a server from swapping a holder's public key before a rotation.
+Kratos sessions authorise API calls and carry no key material. Crates: `hpke`,
+`chacha20poly1305`, both wasm-capable.
+
 ## Key rotation
 
 On `MemberRemoved`, after deleting the removed user's wrapped keys, `device` pushes a

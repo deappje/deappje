@@ -59,7 +59,8 @@ for another device and hands it back.
   hold the previous one. So a device row the server inserted on its own never receives a key: no
   human sees it, and `ListDevicesRequest` for a group lists only key holders. The approver sees
   the requesting device's platform and the fingerprint of its public key, which the requester
-  reads off their own screen.
+  reads off their own screen. The exchange itself is HPKE Auth mode over X25519 (`02-device.md`),
+  and clients pin peer device keys.
 - **External**: APNs and FCM, one `send_push` call each, strategy `idempotent`: the only push the
   server sends is a silent "group X advanced" or "key request pending" wake-up, and a duplicate is
   harmless. Directive §6.
