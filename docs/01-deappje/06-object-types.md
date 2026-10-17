@@ -29,5 +29,27 @@ next free number in its block.
 | 80 | `venue` | none | name, category (`bar` / `pub` / `club` / `restaurant` / `other`), address, geo, url, notes | | recommendations; comments and reactions are children |
 
 Derived on the client, never stored: balances, poll tallies, the calendar (events plus member
-birthdays), unread counts, sort orders. Deleting a parent tombstones its children server-side
-(`02-ledger.md`), so deleting a post removes its photos and comments.
+birthdays), unread counts, sort orders, and the timeline. Deleting a parent tombstones its
+children server-side (`02-ledger.md`), so deleting a post removes its photos and comments.
+
+## The timeline is the log, rendered
+
+There is no `activity` type. The object log already records every change in group order with
+its author and time inside the document, so the timeline is a projection of it:
+
+1. **Classify.** `version = 1` is a create, higher is an edit, a tombstone a delete. Type and
+   parent name the event: a `photo` under an `album` is "added a photo to <album>", a `message`
+   under a `message` is "replied in a thread", a `todo_item` whose `done` flipped is "ticked off
+   <text>", an `expense` create is "added <amount> for <description>", a `poll` create is
+   "started a poll", a `vote` is "voted".
+2. **Collapse.** Same author, same event kind, same parent, within one hour fold into one entry
+   ("Anna added 12 photos to Summer"). Edits collapse hardest: with the CRDT every push is an
+   edit, so a note shows one "edited" entry per author per hour at most. Deletes are hidden by
+   default (a tombstone carries no plaintext to describe anyway).
+3. **Interleave** with `post` entries, sorted by `authored_at` / `edited_at`, newest first.
+4. **Filter** per group by event kind (client preference). Activity in a subgroup appears in the
+   parent's timeline for members of that subgroup only, since nobody else holds its key.
+
+Scrolling back past local history calls `BackfillRequest` with no type (`02-ledger.md`), so the
+feed fills across types in `seq` order. The same classification produces the local notification
+text after a silent push; the server never knows what happened.

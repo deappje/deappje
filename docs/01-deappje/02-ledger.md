@@ -81,8 +81,9 @@ so the client folds `current.value` into its local document and pushes again wit
   tombstones included), head_seq, more }`. If `since_seq` is older than the oldest retained
   tombstone's seq for that group, the response carries `reconcile_required = true` and the
   client runs reconciliation.
-- `BackfillRequest { group_id, type, before_seq, limit }` → `ChangeSet` with rows of that type
-  and `seq < before_seq`, descending, not deleted.
+- `BackfillRequest { group_id, type?, before_seq, limit }` → `ChangeSet` with rows of that type
+  (or of every type when `type` is absent: the timeline scrolling back) and `seq < before_seq`,
+  descending, not deleted. Uses `(group_id, type, seq)` or `(group_id, seq)` accordingly.
 - `GetHeadsRequest {}` → `HeadList [{ group_id, head_seq }]` for every group the caller is a
   member of (`ListGroupsRequest` is api-only, so `ledger` asks `group` through
   `CheckMembershipRequest` for the group ids the caller supplies; the client supplies the ids it

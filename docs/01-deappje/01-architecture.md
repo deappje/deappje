@@ -88,8 +88,8 @@ Owns the object log. Plain executor; the one piece of concurrency control in the
   `parent_id`. Commit, then send `GroupHeadAdvanced` and, per deleted object with a blob,
   `ObjectDeleted` (both after the transaction: Directive invariant 7).
 - **Pull**: `PullChangesRequest` returns rows with `seq > cursor` in seq order, tombstones
-  included, paged; `BackfillRequest` returns rows of one type with `seq < before`, newest first,
-  limited; `GetHeadsRequest` returns `(group, head)` for every group the caller is in;
+  included, paged; `BackfillRequest` returns rows of one type, or of all types, with
+  `seq < before`, newest first, limited; `GetHeadsRequest` returns `(group, head)` for every group the caller is in;
   `ListObjectIdsRequest` returns `(id, version, deleted)` for a group for full reconciliation.
 - **Schedule**: `gc_tombstones` daily, deletes tombstone rows older than the retention window.
   A client whose cursor is older than the window is told so and reconciles.

@@ -76,7 +76,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Push with CAS, pull since cursor, heads for all groups | include | | The core. |
-| Per-type backfill | include | | Messages. |
+| Per-type backfill, and across types | include | `type` optional on backfill | Messages; the timeline scrolling back across every type. |
 | Tombstones with retention + full reconciliation | include | 90 days | |
 | Server-side cascade on parent delete | include | tombstones the subtree in the same transaction | The server sees `parent_id`. |
 | Per-object ACL within a group | exclude | | A group is the permission boundary. |
@@ -97,6 +97,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Timeline posts, photo album, todo lists, calendar events and birthdays, polls, datepicker (scheduling poll), messaging, venue recommendations on a map, splitser expenses, tickets as expenses with per-share blob | include | catalogue with type numbers and keys in `06-object-types.md` | All are object types; none need backend logic. |
+| Timeline shows every kind of activity (photos added, threads, todos ticked, expenses, polls) | include | derived from the object log on the device, collapsed per author/kind/parent/hour, interleaved with posts; no `activity` type (`06-object-types.md`) | Round 6 (2026-10-17). The log is already the activity stream; storing it twice would break "inputs only". |
 | CRDT (`yrs`) for every type, merge-on-conflict | include | every value is a `yrs` document, full state per push, merged on the client when the push conflicts; nothing on the server beyond the conflict carrying the current row | Round 2 (2026-10-15) added it for notes; round 3 (2026-10-17) made it the only model. Two members editing different fields of one object offline both keep their edits, and one code path serves all types. |
 | Post-merge validation ("needs attention") | include | documents store inputs only (an expense stores amount, payer, participants and a split rule; shares and balances are derived), so most invariants hold by construction; the rest (dates ordered, a vote naming a deleted option) are checked after every merge and a failing object is flagged for a person to fix, never silently accepted or rewritten | A CRDT guarantees convergence, not validity. |
 | Conflicted copy on collision | exclude | | Round 3. Superseded by the CRDT merge. |
@@ -123,7 +124,8 @@ value is a `yrs` document, conflicted copies are gone, and payload schemas are k
 the document instead of protobuf messages. Round 4 (2026-10-17) decided human approval of key
 requests, account deletion, a 20 GiB per-group cap with 48-hour blob retention, and the client
 core living in this repository. Round 5 (2026-10-17) made the browser a full device paired by
-QR and removed silent same-user approval. What remains is tuning (worker policy, the value size
+QR and removed silent same-user approval. Round 6 (2026-10-17) made the timeline a projection of
+the log and the backfill type optional. What remains is tuning (worker policy, the value size
 cap), which the implementing session owns.
 
 ## Status
