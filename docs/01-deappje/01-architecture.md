@@ -97,7 +97,9 @@ tombstone until every device has acked it.
   stale base conflict), on match write it at `seq = head + 1`, on mismatch report a conflict
   carrying the current row. There is no per-object version: a row's seq identifies its state. A
   delete tombstones the subtree by `parent_id` in the same transaction. A tombstone's deletion
-  mark is its own seq; there is no second counter and no "pull before you push" check. Commit,
+  mark is its own seq; there is no second counter, no "pull before you push" check, and no rule
+  about editing a tombstone: a stale base conflicts on the seq, and a deliberate un-delete is the
+  client's call. Commit,
   then `GroupHeadAdvanced` and, per deleted object with a blob, `ObjectDeleted` (invariant 7).
 - **Pull and ack**: `PullChangesRequest` returns entries with `seq > cursor`, tombstones included,
   with the minimum acked cursor and the eviction floor; a device whose cursor is below the floor

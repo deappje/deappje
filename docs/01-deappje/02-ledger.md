@@ -81,13 +81,16 @@ One transaction:
 1. `SELECT ... FROM group_head WHERE group_id = $1 FOR UPDATE` (insert if absent).
 2. Per object, in request order, read the current row:
    - **No row** (new, or evicted) ⇒ accept.
-   - **Tombstone** ⇒ a delete is a no-op accept; anything else is a conflict carrying the
-     tombstone (the client shows "deleted").
-   - **Live row, `base_seq == seq`** ⇒ accept: `seq = head + 1`, head advances. If `deleted`:
-     null `value` and `blob_id`, `deleted = true`, and tombstone every descendant (recursive by
-     `parent_id`) each with its own next `seq`.
-   - **Live row, mismatch** ⇒ conflict `{ id, current }` with the stored row as it is.
+   - **`base_seq == seq`** ⇒ accept: write the object at `seq = head + 1`, head advances. If
+     `deleted`: null `value` and `blob_id`, `deleted = true`, and tombstone every descendant
+     (recursive by `parent_id`) each with its own next `seq`.
+   - **Mismatch** ⇒ conflict `{ id, current }` with the stored row as it is, tombstone or not.
 3. Commit.
+
+That is the whole rule. A tombstone is not special on the server: a device that has not seen the
+delete holds an older seq and conflicts; a device that has seen it and pushes a live object with
+the tombstone's seq as its base is un-deleting, which is the client's decision. A delete whose
+base is stale conflicts like any edit and is pushed again with the current seq.
 
 After commit: `GroupHeadAdvanced { group_id, head_seq, writer_device }` once; `ObjectDeleted
 { group_id, object_id, blob_id }` per tombstoned row that had a blob.
@@ -98,10 +101,11 @@ already holds at that seq.
 
 A tombstone's deletion mark is its seq, so "device acked cursor `c`" means "device has applied
 every tombstone with `seq ≤ c`", with no second counter. There is no "pull before you push"
-check: an edit or a re-creation of a deleted object conflicts on the tombstone, which stays until
-this very device has acked past it, and a child added under a parent the device did not know was
-deleted is handled by the clients (a child whose parent is a tombstone is dead; the first client
-to notice pushes its tombstone). The server cannot check parents anyway once they are evicted.
+check: a stale edit or re-creation of a deleted object conflicts on the seq, and the tombstone
+stays until this very device has acked past it. A child added under a parent the device did not
+know was deleted is handled by the clients (a child whose parent is a tombstone is dead; the
+first client to notice pushes its tombstone). The server cannot check parents anyway once they
+are evicted.
 
 Why a locked counter row and not a sequence: a sequence is non-transactional, so a lower value can
 commit after a higher one and a client that pulled in between misses it forever (Directive §7).
@@ -201,8 +205,8 @@ ListHistoryRequests. The api crate maps the proto entry to the plain Rust struct
 
 ## Tests
 
-- Unit: CAS-on-seq acceptance matrix (no row, match, mismatch, tombstone, delete of a tombstone,
-  re-creation of a tombstoned id); cascade collects the full subtree; eviction floor arithmetic.
+- Unit: CAS-on-seq acceptance matrix (no row, match, mismatch, the same three on a tombstone);
+  cascade collects the full subtree; eviction floor arithmetic.
 - Integration: two replicas pushing to one group concurrently produce a gap-free sequence; a pull
   during a concurrent push never returns a seq the next pull skips; delete cascades in one
   transaction; **the ack invariant**: after N devices interleave pushes, deletes, pulls and acks

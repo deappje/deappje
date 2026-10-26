@@ -26,8 +26,9 @@ definitive rejection is classified as such.
   single-use invite.
 - **Sequence integrity**: N tasks push to one group concurrently; the resulting `seq` set is
   `1..=N` with no gaps; a reader polling during the run never observes a seq it later misses.
-- **Delete semantics**: tombstone cascade; delete wins over a concurrent edit; a stale device's
-  edit or re-creation of a deleted object conflicts; the **ack invariant** under random
+- **Delete semantics**: tombstone cascade; a delete and an edit racing on one object leave
+  exactly one of them accepted and the other holding the current row; a stale device's edit or
+  re-creation of a deleted object conflicts; the **ack invariant** under random
   interleavings of push, delete, pull, ack and evict across N devices (every tombstone the gc
   removed was at or below every device's acked cursor, and no device ever holds a live copy of
   an object whose tombstone it has acked past); an ack that goes backwards gets
@@ -58,7 +59,8 @@ definitive rejection is classified as such.
 The Rust client core carries vectors for schema upgrades (an old reader on a newer object shows
 it and refuses to write it), the keyring (wrap/unwrap round trips), the rebase loop (two devices
 editing different fields of one object offline both keep their edits; the same field goes to the
-later push; a delete during a retry wins; an invalid rebase result is shown, not pushed), notes
+later push; a tombstone returned during a retry ends the edit; an invalid rebase result is
+shown, not pushed), notes
 (two devices typing offline produce two `note_update` children that combine to the same text in
 either order), the orphan rule (a child of a tombstoned parent is dead and gets tombstoned), the
 invite tag, and a simulated multi-device sync harness that drives random
