@@ -13,7 +13,7 @@ feature area; a breaking change takes the next free number in its block.
 | 2 | `member_profile` | none | display_name, avatar, birthday (month, day, year?) | thumb | one per member: id = UUIDv5(group_id, user_id); the calendar derives birthdays from it |
 | 3 | `invite_secret` | none | invite_id, secret | | lets any holder verify a key request that came through the invite (`02-device.md`) |
 | 10 | `post` | none | text | | timeline entry; photos are children |
-| 11 | `photo` | post, album or message | width, height, taken_at, caption, full, thumb | full, thumb | the one photo type everywhere |
+| 11 | `photo` | post, album or message | width, height, taken_at, caption, full, thumb | full, thumb | the one photo type everywhere; `full` is whatever the uploader's upload-quality setting produced, and its hash is of those bytes, so only a device that kept them exactly can re-upload; `thumb` is always generated at a fixed size under its cap |
 | 12 | `album` | none | title, cover_photo_id | | |
 | 13 | `comment` | any | text | | |
 | 14 | `reaction` | any | emoji | | one per user per target: id = UUIDv5(parent_id, user_id); changing it is an edit |

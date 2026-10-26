@@ -93,7 +93,9 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Re-upload of an expired file | include | a history request for the object wakes every key holder; one re-uploads to the same key, confirms with the request id, and the requester is woken | Round 10. One mechanism for old history and expired files; no holder bookkeeping. |
 | Early eviction once every device holds it | exclude | | Round 10. Needed holder tracking; two days bounds the cost anyway. |
 | Per-group upload cap | include | 20 GiB per rolling 48 hours, from an hourly counter table | Round 10. The server cannot know what expired without blob rows, so it bounds what goes in, which is the cost that matters. |
-| Wifi-only sync, local resize, native album export | n/a | client-side preferences | Nothing for the backend. |
+| Wifi-only sync, native album export | n/a | client-side preferences | Nothing for the backend. |
+| Upload quality per device (and per group) | n/a | applied before encryption, so it sets what everyone gets; the uploaded bytes are the file; the thumbnail slot is always generated at a fixed size under its cap | Round 11 (2026-10-26). Client-side; nothing for the backend. |
+| Local quality per device for downloaded photos | n/a | applied after decryption, affects only that device's copy; a device that keeps a reduced copy is no longer a holder of that file (the reference's hash is of the uploaded ciphertext), so it answers history requests but cannot re-upload it; a device always keeps its own uploads byte for byte | Round 11. Client-side; the holder rule is what keeps re-uploads correct. |
 
 ### Feature types (all client-side; the server sees only a type number)
 
@@ -138,8 +140,9 @@ cursor check, the per-object version, the server-side cascade and the tombstone 
 Round 9 (2026-10-26) added the `viewer` role. Round 10 (2026-10-26) removed the blob and holder
 tables: derived keys, references inside the value, bucket lifecycle rules, re-upload through
 history requests, an upload cap per 48 hours; and history answers became re-inserts into the log
-with the original seqs instead of bundle files. What remains is tuning (the 48-hour window, the
-value size cap, the history batch size), which the implementing session owns.
+with the original seqs instead of bundle files. Round 11 (2026-10-26) noted the per-device
+upload and local image quality settings as client-side. What remains is tuning (the 48-hour
+window, the value size cap, the history batch size), which the implementing session owns.
 
 ## Status
 
