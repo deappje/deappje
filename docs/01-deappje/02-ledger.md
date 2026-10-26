@@ -20,8 +20,7 @@ nanoservice forgets everything live after 48 hours. Directive §2 per table, §7
 | key_id | int32 | which group key encrypts `value` |
 | value | bytes, nullable | ciphertext (≤ 1 MiB); null on a tombstone |
 | blob_id | uuid, nullable | a `storage` blob of the same group; null on a tombstone |
-| version | int64 | per object |
-| seq | int64 | per group, strictly increasing; an edit takes a new seq |
+| seq | int64 | per group, strictly increasing; an edit takes a new seq, so a row's seq identifies its state |
 | created_by_device | uuid | |
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark |
 | updated_at | timestamp | |
@@ -70,7 +69,8 @@ Index `(group_id, status)`. Rows older than 48 hours are dropped by the sweep.
 ## Push
 
 `PushObjectsRequest { group_id, objects: [{ id, parent_id?, type, schema_version, key_id,
-value?, blob_id?, base_version, deleted }] }`.
+value?, blob_id?, base_seq, deleted }] }`. `base_seq` is the seq of the row the device edited
+from, 0 for a new object.
 
 Before the transaction: `CheckMembershipRequest`; for every `blob_id`, `CheckBlobRequest` must
 answer `present` for this group (remote I/O outside the transaction, invariant 7). A `value`
@@ -80,19 +80,21 @@ One transaction:
 
 1. `SELECT ... FROM group_head WHERE group_id = $1 FOR UPDATE` (insert if absent).
 2. Per object, in request order, read the current row:
-   - **No row** (new, or evicted) ⇒ accept with `version = base_version + 1`.
+   - **No row** (new, or evicted) ⇒ accept.
    - **Tombstone** ⇒ a delete is a no-op accept; anything else is a conflict carrying the
      tombstone (the client shows "deleted").
-   - **Live row, `base_version == version`** ⇒ accept: `version + 1`, `seq = head + 1`, head
-     advances. If `deleted`: null `value` and `blob_id`, `deleted = true`, and tombstone every
-     descendant (recursive by `parent_id`) each with its own next `seq`.
+   - **Live row, `base_seq == seq`** ⇒ accept: `seq = head + 1`, head advances. If `deleted`:
+     null `value` and `blob_id`, `deleted = true`, and tombstone every descendant (recursive by
+     `parent_id`) each with its own next `seq`.
    - **Live row, mismatch** ⇒ conflict `{ id, current }` with the stored row as it is.
 3. Commit.
 
 After commit: `GroupHeadAdvanced { group_id, head_seq, writer_device }` once; `ObjectDeleted
 { group_id, object_id, blob_id }` per tombstoned row that had a blob.
 
-Response: `PushResult { accepted: [{ id, version, seq }], conflicts: [{ id, current }], head_seq }`.
+Response: `PushResult { accepted: [{ id, seq }], conflicts: [{ id, current }], head_seq }`. The
+objects themselves come back on the next pull with everyone else's; the device skips entries it
+already holds at that seq.
 
 A tombstone's deletion mark is its seq, so "device acked cursor `c`" means "device has applied
 every tombstone with `seq ≤ c`", with no second counter. There is no "pull before you push"
