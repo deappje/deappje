@@ -19,8 +19,8 @@ deletion.
 - **Invariants**: a user is in a group at most once; a member of a subgroup is a member of its
   parent (checked on accept, cascaded on leave/remove); only an admin removes members, sets roles
   or revokes invites; the creator is the first admin. Roles are `admin`, `member`, `viewer`; a
-  viewer holds keys and reads, and the server refuses its pushes, its uploads other than bundles
-  and re-uploads, and its approval of another user's device. `MembershipCheck` carries the role,
+  viewer holds keys and reads, and the server refuses its pushes to the log and its approval of
+  another user's device (a file is inert without an object, so uploads are not role-checked). `MembershipCheck` carries the role,
   so each of those is one comparison in the handler that cares.
 - **Processing object `group_purge`** (prefix `gpr`): created by `DeleteGroupRequest`, one per
   group being deleted. Its pass drives `ledger`, `storage` and `device` to hold nothing of the
@@ -111,11 +111,15 @@ tombstone until every device has acked it.
   hands the minimum back so devices drop their own tombstones. An ack that goes backwards means a
   restored backup and forces a resync. `GetHeadsRequest` returns `(group, head, min ack)`.
 - **History**: `RequestHistoryRequest` records a range, or one object, and wakes every
-  key-holding device through `device`; one of them uploads a bundle, or the object's files, to
-  the derived keys; `storage` reports `HistoryFulfilled`; the requester is woken. No server-side
-  retries: the requester asks again. This is how a new member, a new device or a long-offline
-  device gets anything older than 48 hours, and how an expired photo comes back.
-- **Sweeps**: `evict_objects` (live rows older than 48h, floor advances), `gc_tombstones`
+  key-holding device through `device`; one of them pushes the entries it holds back with
+  `PushHistoryRequest`, and the server re-inserts them **with their original seqs**, skipping
+  any id that already has a row, without moving the head; the requester is woken and pulls them
+  from its low cursor, while every other device's cursor is already past them. Restored rows
+  are evicted again 48 hours after their re-insert. No server-side retries: the requester asks
+  again. This is how a new member, a new device or a long-offline device gets anything older than
+  48 hours, and how an expired photo comes back (the holder re-uploads the file to its derived
+  key, then reports the request complete).
+- **Sweeps**: `evict_objects` (live rows uploaded more than 48h ago, floor advances), `gc_tombstones`
   (`seq ≤` min acked cursor), `expire_history_requests` (48h).
 - **Sends**: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`,
   `HistoryReady`.
@@ -125,26 +129,22 @@ tombstone until every device has acked it.
 
 Presigns bucket access under the caller's group prefix and cleans up. No table of blobs: a file's
 reference (slot, hash, size, content key) is inside the owning object's encrypted value, its key
-is derived (`g/<group>/o/<object>/<slot>`, or `g/<group>/bundle/<request>`), and the bucket's
-lifecycle rules expire `full`, `file` and `bundle` after two days while `thumb` stays.
+is derived (`g/<group>/o/<object>/<slot>`), and the bucket's lifecycle rules expire `full` and
+`file` after two days while `thumb` stays. An upload is a presigned PUT, a download a presigned
+GET, an expired file the bucket's 404.
 
 - **Table**: `upload_usage` (group, hour, bytes): the quota is a cap on bytes uploaded per group
   per rolling 48 hours (20 GiB), which is what a cache needs bounded. Directive §2.
 - **Config types**: `slot` (size cap per slot), `storage_quota`. Edited by a human.
-- **External**: `delete_object`, `idempotent`, dispatched from handlers. Presigning, `HEAD` and
-  prefix listing are reads.
-- **Handles**: `PresignUploadRequest` (member, role unless a bundle, key under the prefix, slot
-  cap, quota, presigned PUT), `ConfirmUploadRequest` (`HEAD`; with a request id, tell `ledger`
-  the request is fulfilled), `PresignDownloadRequest` (member, `HEAD`, presigned GET or `gone`),
-  `ObjectDeleted` (from `ledger`, per tombstone: delete the object's prefix), `PurgeGroupBlobsRequest`
-  (delete the group's prefix in batches).
+- **External**: `delete_object`, `idempotent`, dispatched from handlers. Presigning and prefix
+  listing are reads.
+- **Handles**: `PresignUploadRequest` (member, key under the prefix, slot cap, quota, presigned
+  PUT), `PresignDownloadRequest` (member, presigned GET), `ObjectDeleted` (from `ledger`, per
+  tombstone: delete the object's prefix), `PurgeGroupBlobsRequest` (delete the group's prefix in
+  batches).
 - **Sweep**: `expire_usage`, hourly.
-- **Sends**: `CheckMembershipRequest`, `HistoryFulfilled`.
+- **Sends**: `CheckMembershipRequest`.
 - **API**: `StorageService`.
-
-A file that has expired from the bucket is fetched like old history: the device asks `ledger`
-for the object, every key holder is woken, one re-uploads the files to the same keys, and the
-requester is woken. No holder bookkeeping, and no early deletion: two days is the bound.
 
 ## What the server computes
 
@@ -259,14 +259,13 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 | GetHeadsRequest | HeadList | api | ledger |
 | RequestHistoryRequest | HistoryRequest | api | ledger |
 | ListHistoryRequestsRequest | HistoryRequestList | api | ledger |
-| HistoryFulfilled | (void) | storage | ledger |
+| PushHistoryRequest | PushHistoryResult | api | ledger |
 | ObjectDeleted | (void) | ledger | storage |
 | PresignUploadRequest | UploadGrant | api | storage |
-| ConfirmUploadRequest | (void) | api | storage |
 | PresignDownloadRequest | DownloadGrant | api | storage |
 
 Every cross-nanoservice message binds Directive §7. The only derived state that crosses is a
-boolean, a role or an id (`MembershipCheck`, `HistoryFulfilled`); no nanoservice re-derives another's rule.
+boolean, a role or an id (`MembershipCheck`, `DeviceLeftGroup`); no nanoservice re-derives another's rule.
 
 ## What is deliberately not on the server
 

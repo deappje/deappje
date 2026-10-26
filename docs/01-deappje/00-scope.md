@@ -31,12 +31,12 @@ These were settled in discussion before this plan was written; they are not open
 | Decision | Choice | Why |
 |---|---|---|
 | Durability | Member devices are the store. The server relays: an object row lives 48 hours in Postgres, a blob 48 hours in the bucket. Anything older comes from a member device on request (history bundles, blob re-uploads). A group whose every device loses its data loses its history; export is the backup. | Round 7 (2026-10-26). Billions of messages must not live in Postgres, and the user wants the server as stupid as possible. Reversed the round-0 choice. |
-| Blobs | The bucket is a 48-hour cache: a file's key is derived from its object id and slot, its reference lives inside the object's encrypted value, the bucket's lifecycle rules expire full-size files, attachments and bundles after two days and keep thumbnails, and a presigned URL under the caller's group prefix is the whole authorization. An expired file is re-requested like old history: every key holder is woken and one re-uploads it to the same key. The server keeps no table of blobs and no holders. Each group may upload 20 GiB per 48 hours. | Round 10 (2026-10-26). Encryption protects the content and the signature protects the access; everything the blob table did besides that is either the bucket's job (expiry) or the history request's (re-upload). |
+| Blobs | The bucket is a 48-hour cache: a file's key is derived from its object id and slot, its reference lives inside the object's encrypted value, the bucket's lifecycle rules expire full-size files and attachments after two days and keep thumbnails, and a presigned URL under the caller's group prefix is the whole authorization. An expired file is re-requested like old history: every key holder is woken and one re-uploads it to the same key. The server keeps no table of blobs and no holders. Each group may upload 20 GiB per 48 hours. | Round 10 (2026-10-26). Encryption protects the content and the signature protects the access; everything the blob table did besides that is either the bucket's job (expiry) or the history request's (re-upload). |
 | Change detection | A per-group commit log: every accepted write takes the next sequence number of its group, assigned under a locked counter row. Clients keep a cursor per group. A pull also returns the eviction floor; a cursor below it means the gap comes from a member device. | One query answers "anything new?"; batched across groups in one call. |
 | Conflicts | Compare-and-set on the object's seq: a push names the seq of the row it edited from, and a conflict returns the current row, tombstone or not. The client re-applies its changed fields onto the returned row and pushes again; the same field changed on both sides goes to the later push; a returned tombstone ends the edit. No conflicted copies, no per-object version, no special case for deletes on the server. | Round 7. The server cannot merge ciphertext; a field-level rebase on the device is enough for small objects edited a field at a time, and needs no CRDT. Round 8 dropped the version: a row's seq already identifies its state. |
 | Deletes | A tombstone's deletion mark is its own seq. After applying a pull a device acks its cursor; the server keeps the minimum over the group's devices, hard-deletes tombstones at or below it, and tells every device the minimum so they drop theirs. Acks are per device and happen after a pull, never by pushing. No "pull before you push" check and no server rule about editing tombstones: a stale edit or re-creation conflicts on the seq like any other, and un-deleting is a client decision. | Round 7, the user's design, folded into the sequence counter in round 8 (2026-10-26) and stripped of the push-side check: the seq check already refuses every write that could resurrect anything, and the server cannot check parents once they are evicted, so children of deleted parents are a client rule either way. |
 | Children | No child lists or counts on parents; the parent id is a field inside the child's encrypted value. Deleting a parent is the client's cascade: the children it holds go in the same push, the rest are tombstoned by whoever holds them. | Derived state on the parent is a conflict magnet, and the server does not need to see structure (round 8: the server could not cascade completely anyway once children are evicted). |
-| Fetch shape | Catch-up since cursor from the server's 48-hour window; everything older as a history bundle from a member device: a new member, a new device, a device offline longer than the window, or scrolling past what the device holds. | The server has nothing older to serve. |
+| Fetch shape | Catch-up since cursor from the server's 48-hour window; everything older is re-inserted into the window by a member device on request, with the original sequence numbers, and pulled like anything else: a new member, a new device, a device offline longer than the window, or scrolling past what the device holds. Restored rows are evicted again after 48 hours. | The server has nothing older to serve, and nothing else needs a second format: other devices' cursors are already past the restored numbers. |
 | Keys | A group key per group, a keyring with key ids; rotate on member removal; new devices get keys wrapped for them by an existing member's device. New members get full history. | MLS is designed to deny history to new members, the opposite of the requirement. |
 | Subgroups | A separate group with its own key and `parent_group_id`; members ⊆ parent, enforced server-side; leaving the parent cascades. | A key boundary is a group boundary. |
 | Identity | Kratos, email code and passkeys. Identity never carries keys. | Platform default; exactly the requested login. |
@@ -55,7 +55,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Create group, invite by link/code, accept | include | code with expiry, max uses and the joiner's role; no admin approval of joins | Load-bearing. Approval of join requests was not asked for; an admin controls exposure through max uses and revocation. |
 | Leave group, remove member (admin) | include | triggers key rotation | Load-bearing. |
 | Subgroups (members ⊆ parent, own key) | include | | Requested; cheap once groups exist. |
-| Roles: admin, member, viewer | include | viewer reads only: the server refuses its pushes, its uploads other than bundles and re-uploads, and its approval of other users' devices; invites carry the role; admins change it | Round 9 (2026-10-26). A read-only member is one role check in three handlers. |
+| Roles: admin, member, viewer | include | viewer reads only: the server refuses its pushes to the log and its approval of other users' devices; it may answer history requests and re-upload files, which is serving, not writing; invites carry the role; admins change it | Round 9 (2026-10-26). A read-only member is one role check in two handlers. |
 | Group deletion | include | a `group_purge` processing object in `group` drives the purge of ledger, storage and device until each reports nothing left; subgroups are purged first | Round 1. A purge must finish, so it is driven by a reconciler with direct requests, not an event. |
 | Data export | include | client-side: everything the device holds, bundled on the device | Round 1. No server work: the server cannot produce a readable export. |
 | Account deletion | include | a `user_purge` processing object in `group`: leave every group (promoting the longest-standing member where the user was the only admin, deleting groups where they were the only member), purge the user's devices and keys, delete the Kratos identity | Round 4 (2026-10-17). App stores require it; a purge must finish, so it is a reconciler. |
@@ -78,7 +78,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 |---|---|---|---|
 | Push with CAS on seq, pull since cursor, heads for all groups | include | | The core. |
 | 48-hour window; member devices are the store | include | hourly eviction of live rows; the floor is returned on every pull | Round 7. Postgres holds two days of activity per group, whatever the group's age. |
-| History bundles from member devices | include | `RequestHistory` wakes every key holder; one uploads a `bundle` blob; the requester is woken; no server retries | Round 7. Replaces per-type backfill and id-list reconciliation. |
+| History re-inserted by member devices | include | `RequestHistory` wakes every key holder; one pushes the entries back with their original seqs (`PushHistory`), ids that have a row are skipped, the head does not move; the requester is woken and pulls; restored rows are evicted again after 48 hours; no server retries | Round 7, reshaped in round 10: no bundle format, no bucket involvement. Replaces per-type backfill and id-list reconciliation. |
 | Tombstones until every device's acked cursor passes them; hard delete after | include | see the decision table | Round 7, simplified round 8. |
 | Per-type backfill, id-list reconciliation, tombstone retention by time | exclude | | Round 7. Superseded. |
 | Server-side cascade on parent delete | exclude | the deleting client batches the children it holds; the orphan rule covers the rest | Round 8. The server no longer sees `parent_id` and never held children older than 48 hours. |
@@ -89,7 +89,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Presigned upload/download via the private bucket | include | | Traffic never touches the app. |
-| Retention and expiry per slot | include | bucket lifecycle rules: `full`, `file` and `bundle` two days after upload; `thumb` kept | Round 4 wanted a short cache; round 10 made it the bucket's job, no server timer. |
+| Retention and expiry per slot | include | bucket lifecycle rules: `full` and `file` two days after upload; `thumb` kept | Round 4 wanted a short cache; round 10 made it the bucket's job, no server timer. |
 | Re-upload of an expired file | include | a history request for the object wakes every key holder; one re-uploads to the same key, confirms with the request id, and the requester is woken | Round 10. One mechanism for old history and expired files; no holder bookkeeping. |
 | Early eviction once every device holds it | exclude | | Round 10. Needed holder tracking; two days bounds the cost anyway. |
 | Per-group upload cap | include | 20 GiB per rolling 48 hours, from an hourly counter table | Round 10. The server cannot know what expired without blob rows, so it bounds what goes in, which is the cost that matters. |
@@ -130,15 +130,16 @@ requests, account deletion, a 20 GiB per-group cap with 48-hour blob retention, 
 core living in this repository. Round 5 (2026-10-17) made the browser a full device paired by
 QR and removed silent same-user approval. Round 6 (2026-10-17) made the timeline a projection of
 the log. Round 7 (2026-10-26) made member devices the store: the server keeps 48 hours, history
-comes from member devices as bundles, deletion is acked per device so tombstones can be hard
+comes from member devices, deletion is acked per device so tombstones can be hard
 deleted, the blob processing object became a row with an expiry, and values went back to plain
 protobuf with a field-level rebase, the CRDT living only inside notes as child objects. Round 8
 (2026-10-26) folded the deletion generation into the sequence counter, dropped the push-side
 cursor check, the per-object version, the server-side cascade and the tombstone special cases.
 Round 9 (2026-10-26) added the `viewer` role. Round 10 (2026-10-26) removed the blob and holder
 tables: derived keys, references inside the value, bucket lifecycle rules, re-upload through
-history requests, an upload cap per 48 hours. What remains is tuning (the 48-hour window, the
-value size cap, bundle size), which the implementing session owns.
+history requests, an upload cap per 48 hours; and history answers became re-inserts into the log
+with the original seqs instead of bundle files. What remains is tuning (the 48-hour window, the
+value size cap, the history batch size), which the implementing session owns.
 
 ## Status
 

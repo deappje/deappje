@@ -23,9 +23,8 @@ definitive rejection is classified as such.
 
 - **Membership cascade**: parent removal removes subgroup memberships atomically; concurrent
   single-use invite.
-- **Viewer**: a viewer pulls, acks, downloads, serves a bundle and re-uploads a file it holds
-  for a request, and is refused on push, on a `full` upload and on approving another user's
-  device;
+- **Viewer**: a viewer pulls, acks, downloads, answers a history request and re-uploads a file
+  it holds, and is refused on push and on approving another user's device;
   promotion to member lifts the refusals without a key change.
 - **Sequence integrity**: N tasks push to one group concurrently; the resulting `seq` set is
   `1..=N` with no gaps; a reader polling during the run never observes a seq it later misses.
@@ -38,8 +37,10 @@ definitive rejection is classified as such.
   an object whose tombstone it has acked past); an ack that goes backwards gets
   `resync_required`.
 - **History**: a device with a cursor below the floor requests the gap; a simulated holder
-  uploads a bundle; `HistoryFulfilled` fulfils the request once; a late bundle is ignored; the
-  requester ends with the same rows as the holder.
+  pushes the entries back; they land at their original seqs, the head does not move, an id with
+  a current row is skipped, `complete` fulfils the request once and a later push for it is
+  refused; the requester pulls and ends with the same rows as the holder; the restored rows are
+  evicted 48 hours after the re-insert and no earlier.
 - **Key lifecycle**: register two devices, request keys, fulfil, remove member, rotation batch,
   `GetWrappedKeys` returns both key ids for a surviving device and nothing for the removed one.
 - **Files**: against the bucket simulator: presign, upload, confirm, download; a key outside the

@@ -21,10 +21,10 @@ nanoservice forgets everything live after 48 hours. Directive §2 per table, §7
 | seq | int64 | per group, strictly increasing; an edit takes a new seq, so a row's seq identifies its state |
 | created_by_device | uuid | |
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark |
-| updated_at | timestamp | |
+| uploaded_at | timestamp | when this row landed on the server, by push or by a history re-insert; evicted 48 hours later |
 
 Indexes: unique `(group_id, seq)`; `(group_id, deleted, seq)` for garbage collection;
-`(updated_at)` for eviction. The parent of an object lives inside its encrypted value: the server
+`(uploaded_at)` for eviction. The parent of an object lives inside its encrypted value: the server
 never sees the structure of a group's data.
 
 ### `group_head`
@@ -139,32 +139,41 @@ or there are no rows.
 `RequestHistoryRequest { group_id, from_seq, to_seq, object_id? }` → `HistoryRequest`: insert a
 `pending` row, send `HistoryRequested { request_id, group_id, requester_device, from_seq, to_seq,
 object_id }` to `device`, which wakes every key-holding device of the group except the requester.
-A holder that wakes lists pending requests (`ListHistoryRequestsRequest { group_id }`), packs the
-entries it holds in the range (ciphertext, each with id, type, schema_version, key_id, seq,
-deleted; tombstones included), newest first up to the bundle size cap, encrypts the bundle under
-the current group key named in its header, uploads it to `g/<group>/bundle/<request_id>` with
-`request_id` on the presign, and confirms. `storage` then sends `HistoryFulfilled
-{ request_id }`; the handler marks the row `fulfilled` and sends `HistoryReady { request_id,
-requester_device }` to `device`, which wakes the requester, who downloads the bundle at the key
-derived from the request id. A request for one object (`object_id` set) is answered the same
-way, except the holder re-uploads that object's files to their own keys and confirms with the
-`request_id`; the requester then downloads them directly. A late holder sees the row
-is no longer pending and does nothing; a duplicate bundle is harmless and expires in 48 hours.
-The requester ingests the bundle like a `ChangeSet` (an entry it already holds at a higher
-seq is ignored; a tombstone wins) and, if the bundle stops short of `from_seq`, asks again
-for the rest, up to the lowest seq it received. No retries, no timeouts on the server: a requester that hears nothing
-asks again, and the client shows "waiting for a member to come online".
+
+A holder that wakes lists pending requests (`ListHistoryRequestsRequest { group_id }`) and pushes
+the entries it holds in the range back to the server, exactly as they were in the log:
+`PushHistoryRequest { request_id, entries: [{ id, type, schema_version, key_id, value, seq }],
+complete }`, newest first, a few thousand entries per call, `complete = true` on the last call.
+The handler, under the group's counter lock, re-inserts each entry **with its original seq**
+and `uploaded_at = now`, skipping any id that already has a row, at any seq, live or tombstone:
+the current row always wins, so a later edit, a delete, or a second holder answering the same
+request cannot be overridden. No new seq is handed out and the head does not move. After each
+call it sends `HistoryReady { request_id, requester_device }` to `device`, which wakes the
+requester; `complete` marks the row `fulfilled`, and a call for a request that is no longer
+pending is refused. Any role may answer: serving history is reading, not writing.
+
+The requester pulls as usual: its cursor is below the restored rows, so `PullChangesRequest`
+returns them in seq order with everything else. Every other device's cursor is already past
+those numbers, so nobody else sees any traffic. Restored rows are ordinary rows: they live 48
+hours from `uploaded_at` and are evicted again, as the user specified.
+
+A request for one object (`object_id` set) is answered the same way with one entry. If the
+object's files have expired from the bucket, the holder re-uploads them to their derived keys
+before it reports `complete`, and the requester downloads them directly.
+
+No retries, no timeouts on the server: a requester that hears nothing asks again, and the client
+shows "waiting for a member to come online". Nothing records who answered: the entries were
+encrypted under the group key, so the answerer was a key holder, and nothing reads it later.
 
 This is the only way history older than 48 hours reaches a device: a new member, a new device, a
 device that was offline longer than the window, a device scrolling past what it holds, or a
-device that finds a photo's file expired from the bucket. Nothing records who answered: the
-uploader was a key holder, or it could not have encrypted the upload, and nothing reads it later.
+device that finds a photo's file expired from the bucket.
 
 ## Sweeps (schedules, hourly, idempotent)
 
-- `evict_objects`: per group, `S = MAX(seq)` of live rows with `updated_at < now - 48h`; delete
-  live rows with `seq ≤ S` (an edit takes a new seq, so seq order is update order); set
-  `evicted_through_seq = GREATEST(evicted_through_seq, S)`. Batched 10k rows per statement.
+- `evict_objects`: delete live rows with `uploaded_at < now - 48h`, batched 10k per statement;
+  per group set `evicted_through_seq = GREATEST(evicted_through_seq, MAX(seq) evicted)`. By age,
+  not by position, so a row restored by a history request at an old seq gets its own 48 hours.
 - `gc_tombstones`: per group with a non-null `min_acked_seq`, delete tombstones with
   `seq ≤ min_acked_seq`.
 - `expire_history_requests`: delete rows older than 48 hours.
@@ -182,8 +191,8 @@ whatever the group's age.
 | GetHeadsRequest | HeadList | api |
 | RequestHistoryRequest | HistoryRequest | api |
 | ListHistoryRequestsRequest | HistoryRequestList | api |
+| PushHistoryRequest | PushHistoryResult | api |
 | DeviceLeftGroup | (void) | device: delete the `group_device` row |
-| HistoryFulfilled | (void) | storage |
 | PurgeGroupObjectsRequest | PurgeResult | group |
 
 `PurgeGroupObjectsRequest { group_id }` (from `group`'s purge pass): delete every `object`,
@@ -202,7 +211,7 @@ a member" and purges locally. Idempotent.
 ## API
 
 `LedgerService`: PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory,
-ListHistoryRequests. The api crate maps the proto entry to the plain Rust struct one to one;
+ListHistoryRequests, PushHistory. The api crate maps the proto entry to the plain Rust struct one to one;
 `value` passes through untouched.
 
 ## Tests
@@ -215,8 +224,10 @@ ListHistoryRequests. The api crate maps the proto entry to the plain Rust struct
   at random, every tombstone the gc removed had `seq ≤` every device's ack at the time, every
   device that acked `c` had pulled every tombstone with `seq ≤ c`, and a stale device's edit of
   a deleted object always conflicts; eviction leaves tombstones and sets the floor; an ack below
-  the stored one answers `resync_required`; a history request is fulfilled once and a late
-  bundle is ignored.
+  the stored one answers `resync_required`; a history re-insert keeps the original seqs, moves
+  neither head nor floor, skips ids that have a row (live or tombstone), and is refused once the
+  request is fulfilled; a restored row is evicted 48 hours after its re-insert.
 - Property test: random interleavings of push/pull/ack/evict across N simulated devices, with
-  history served by a simulated holder, converge to the same row per object on every device, and
-  no deleted object is ever live on any device after every device has acked past its tombstone.
+  history re-inserted by a simulated holder, converge to the same row per object on every
+  device, and no deleted object is ever live on any device after every device has acked past
+  its tombstone.

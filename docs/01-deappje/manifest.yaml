@@ -187,11 +187,11 @@ nanoservices:
             - { name: seq, type: int64 }
             - { name: created_by_device, type: uuid }
             - { name: deleted, type: bool }
-            - { name: updated_at, type: timestamp }
+            - { name: uploaded_at, type: timestamp }
           indexes:
             - { columns: [group_id, seq], unique: true }
             - { columns: [group_id, deleted, seq] }
-            - { columns: [updated_at] }
+            - { columns: [uploaded_at] }
         - name: group_head
           columns:
             - { name: group_id, type: uuid, primaryKey: true }
@@ -226,8 +226,8 @@ nanoservices:
       - { message: GetHeadsRequest, response: HeadList }
       - { message: RequestHistoryRequest, response: HistoryRequest }
       - { message: ListHistoryRequestsRequest, response: HistoryRequestList }
+      - { message: PushHistoryRequest, response: PushHistoryResult }
       - { message: DeviceLeftGroup }
-      - { message: HistoryFulfilled }
       - { message: PurgeGroupObjectsRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
@@ -244,6 +244,7 @@ nanoservices:
         - { name: GetHeads, request: GetHeadsRequest, response: GetHeadsResponse }
         - { name: RequestHistory, request: RequestHistoryRequest, response: RequestHistoryResponse }
         - { name: ListHistoryRequests, request: ListHistoryRequestsRequest, response: ListHistoryRequestsResponse }
+        - { name: PushHistory, request: PushHistoryRequest, response: PushHistoryResponse }
 
   - name: storage
     description: Presigns uploads and downloads under the caller's group prefix, deletes an object's files on its tombstone and a group's on purge, bounds upload bytes per group.
@@ -272,16 +273,13 @@ nanoservices:
       - { name: expire_usage, every: 1h }
     handles:
       - { message: PresignUploadRequest, response: UploadGrant }
-      - { message: ConfirmUploadRequest }
       - { message: PresignDownloadRequest, response: DownloadGrant }
       - { message: ObjectDeleted }
       - { message: PurgeGroupBlobsRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
-      - { message: HistoryFulfilled }
     api:
       service: StorageService
       methods:
         - { name: PresignUpload, request: PresignUploadRequest, response: PresignUploadResponse }
-        - { name: ConfirmUpload, request: ConfirmUploadRequest, response: ConfirmUploadResponse }
         - { name: PresignDownload, request: PresignDownloadRequest, response: PresignDownloadResponse }

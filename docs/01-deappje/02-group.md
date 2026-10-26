@@ -42,9 +42,9 @@ user from a group removes them from every subgroup in the same transaction; the 
 leave while other members remain.
 
 Roles. `admin` manages members, invites and roles and can delete the group. `member` reads and
-writes. `viewer` reads: holds the group keys like anyone else, but `ledger` refuses its pushes,
-`storage` refuses its uploads except bundles and re-uploads (a viewer is a holder and may serve
-history), and `device` refuses it as the approver of another user's device. An invite carries
+writes. `viewer` reads: holds the group keys like anyone else, but `ledger` refuses its pushes
+to the log and `device` refuses it as the approver of another user's device. It may answer
+history requests and re-upload files, which is serving what it holds, not writing. An invite carries
 the role its joiners get (`member` or `viewer`); `SetMemberRoleRequest` (admin) changes it later.
 The server enforces exactly those refusals; the clients hide the controls.
 

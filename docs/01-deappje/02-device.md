@@ -140,7 +140,7 @@ holds all of them.
 | GroupHeadAdvanced | (void) | silent push to every member device except the writer's |
 | MemberRemoved | (void) | delete wrapped keys; send `DeviceLeftGroup` per device of the user; push `rotate` to remaining devices |
 | HistoryRequested | (void) | from `ledger`: push `history` wake-up (request id, range) to every key-holder device of the group except the requester |
-| HistoryReady | (void) | from `ledger`: push `bundle` wake-up (request id, bundle id) to the requester device |
+| HistoryReady | (void) | from `ledger`: push `history` wake-up (request id) to the requester device, which pulls |
 | RemoveDeviceRequest | Device | the owner removes one of their devices: delete its `wrapped_key` and `key_request` rows and the device; send `DeviceLeftGroup` per group it held a key for |
 | PurgeGroupKeysRequest | PurgeResult | from `group`'s purge pass: delete every `wrapped_key` and `key_request` row of the group; answer `remaining`. Idempotent. |
 | PurgeUserDevicesRequest | PurgeResult | from `group`'s account purge: delete every `device`, `wrapped_key` and `key_request` row of the user's devices; answer `remaining`. Idempotent. |

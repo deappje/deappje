@@ -16,10 +16,9 @@ Seed, `config/base/storage/slot.json`, namespace `default`:
 | full | 26214400 |
 | thumb | 204800 |
 | file | 26214400 |
-| bundle | 268435456 |
 
-Retention is not config here: it is the bucket's lifecycle rules per prefix (`full`, `file`,
-`bundle` two days; `thumb` none), a platform setting on the environment's bucket.
+Retention is not config here: it is the bucket's lifecycle rules per prefix (`full` and `file`
+two days; `thumb` none), a platform setting on the environment's bucket.
 
 ## `storage_quota` (owner: `storage`, prefix `squo`)
 
