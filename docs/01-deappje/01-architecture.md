@@ -86,15 +86,16 @@ Owns the relay. Plain executor with three hourly sweeps; the one piece of concur
 the system is here. Member devices are the store: the server keeps a live row for 48 hours and a
 tombstone until every device has acked it.
 
-- **Tables**: `object` (id, group, parent, type, schema version, key id, value, blob id, version,
-  seq, creator device, `deleted`), `group_head` (group, head seq, `evicted_through_seq`): the
+- **Tables**: `object` (id, group, parent, type, schema version, key id, value, blob id, seq,
+  creator device, `deleted`), `group_head` (group, head seq, `evicted_through_seq`): the
   counter row; `group_device` (group, device, `acked_seq`); `history_request`. Directive §2, §7
   (serialize on a counter row under `FOR UPDATE`).
-- **Push**: one transaction per batch: lock `group_head`; per object compare `base_version` with
-  the stored version (no row ⇒ take the client's word: deleted objects are never evicted, only
-  hard-deleted after this device acked past them, so nothing can be resurrected, and the first
-  re-creation of an evicted row makes every later stale base conflict), on match write
-  `version + 1` and `seq = head + 1`, on mismatch report a conflict carrying the current row. A
+- **Push**: one transaction per batch: lock `group_head`; per object compare `base_seq`, the seq
+  of the row the device edited from, with the stored row's seq (no row ⇒ take the client's word:
+  deleted objects are never evicted, only hard-deleted after this device acked past them, so
+  nothing can be resurrected, and the first re-creation of an evicted row makes every later
+  stale base conflict), on match write it at `seq = head + 1`, on mismatch report a conflict
+  carrying the current row. There is no per-object version: a row's seq identifies its state. A
   delete tombstones the subtree by `parent_id` in the same transaction. A tombstone's deletion
   mark is its own seq; there is no second counter and no "pull before you push" check. Commit,
   then `GroupHeadAdvanced` and, per deleted object with a blob, `ObjectDeleted` (invariant 7).
@@ -141,19 +142,19 @@ Plain executor with one hourly sweep; no state machine.
 ## What the server computes
 
 Five things, and nothing else: whether a user is a member of a group; the next sequence number;
-whether a version matches; the minimum acked cursor of a group; whether a blob is past its
-retention. Every other byte is relayed, never read.
+whether an object's seq still matches the one a device edited from; the minimum acked cursor of
+a group; whether a blob is past its retention. Every other byte is relayed, never read.
 
 ## Values and conflicts (client core)
 
 Every `value` is a protobuf message of its type, encrypted (`06-object-types.md`). The server has
-one rule, compare-and-set on `version` with the current row returned on a conflict, and the
-client core has one way to handle it:
+one rule, compare-and-set on the object's seq with the current row returned on a conflict, and
+the client core has one way to handle it:
 
 1. Keep, per locally edited object, the row it was edited from and the set of fields changed.
 2. On a conflict, decrypt the returned row, re-apply the changed fields onto it, validate the
    result against the type's invariants (an event ending before it starts), and push again with
-   the returned `version` as `base_version`. Where both sides changed the same field, the later
+   the returned row's seq as `base_seq`. Where both sides changed the same field, the later
    push wins. A few immediate retries, then the object waits in the outbox for the next sync.
 3. A tombstone in the returned row ends the loop: the local edit is dropped and the client shows
    "deleted".

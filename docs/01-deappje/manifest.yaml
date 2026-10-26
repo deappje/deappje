@@ -185,7 +185,6 @@ nanoservices:
             - { name: key_id, type: int32 }
             - { name: value, type: bytes, nullable: true }
             - { name: blob_id, type: uuid, nullable: true }
-            - { name: version, type: int64 }
             - { name: seq, type: int64 }
             - { name: created_by_device, type: uuid }
             - { name: deleted, type: bool }

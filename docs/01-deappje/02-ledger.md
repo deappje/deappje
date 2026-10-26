@@ -139,14 +139,14 @@ or there are no rows.
 object_id }` to `device`, which wakes every key-holding device of the group except the requester.
 A holder that wakes lists pending requests (`ListHistoryRequestsRequest { group_id }`), packs the
 entries it holds in the range (ciphertext, each with id, parent, type, schema_version, key_id,
-version, seq, deleted, blob_id; tombstones included), newest first up to the bundle size cap,
+seq, deleted, blob_id; tombstones included), newest first up to the bundle size cap,
 encrypts the bundle under the current group key named in its header, uploads it as a blob of
 kind `bundle` with `request_id`, and confirms. `storage` then sends `BundleReady { request_id,
 bundle_id }`; the handler marks the row `fulfilled` and sends `HistoryReady { request_id,
 requester_device, bundle_id }` to `device`, which wakes the requester. A late holder sees the row
 is no longer pending and does nothing; a duplicate bundle is harmless and expires in 48 hours.
-The requester ingests the bundle like a `ChangeSet` (an entry it already holds at a newer
-version is ignored; a tombstone wins) and, if the bundle stops short of `from_seq`, asks again
+The requester ingests the bundle like a `ChangeSet` (an entry it already holds at a higher
+seq is ignored; a tombstone wins) and, if the bundle stops short of `from_seq`, asks again
 for the rest, up to the lowest seq it received. No retries, no timeouts on the server: a requester that hears nothing
 asks again, and the client shows "waiting for a member to come online".
 
@@ -201,7 +201,7 @@ ListHistoryRequests. The api crate maps the proto entry to the plain Rust struct
 
 ## Tests
 
-- Unit: CAS acceptance matrix (no row, match, mismatch, tombstone, delete of a tombstone,
+- Unit: CAS-on-seq acceptance matrix (no row, match, mismatch, tombstone, delete of a tombstone,
   re-creation of a tombstoned id); cascade collects the full subtree; eviction floor arithmetic.
 - Integration: two replicas pushing to one group concurrently produce a gap-free sequence; a pull
   during a concurrent push never returns a seq the next pull skips; delete cascades in one

@@ -26,7 +26,7 @@ feature area; a breaking change takes the next free number in its block.
 | 50 | `event` | none | title, starts, ends, all_day, location, geo, yearly | | a birthday for someone not in the app is a yearly all-day event |
 | 60 | `poll` | none | question, kind (`choice` / `dates`), options (repeated { id, text or slot, pos }), multi, closes_at | | the datepicker is kind `dates` |
 | 61 | `vote` | poll | answers (repeated { option_id, answer }) | | one per user: id = UUIDv5(poll_id, user_id) |
-| 70 | `message` | none, or a message (thread) | text, reply_to | | photos as children; an edit is a new version, deletion a tombstone |
+| 70 | `message` | none, or a message (thread) | text, reply_to | | photos as children; an edit is a new seq, deletion a tombstone |
 | 80 | `venue` | none | name, category (`bar` / `pub` / `club` / `restaurant` / `other`), address, geo, url, notes | | recommendations; comments and reactions are children |
 
 Derived on the client, never stored: balances, poll tallies, the calendar (events plus member
@@ -38,8 +38,8 @@ children server-side (`02-ledger.md`), so deleting a post removes its photos and
 There is no `activity` type. The object log already records every change in group order with
 its author and time inside the document, so the timeline is a projection of it:
 
-1. **Classify.** `version = 1` is a create, higher is an edit, a tombstone a delete. Type and
-   parent name the event: a `photo` under an `album` is "added a photo to <album>", a `message`
+1. **Classify.** An object the device had not seen is a create, a known one with a newer
+   `edited_at` is an edit, a tombstone a delete. Type and parent name the event: a `photo` under an `album` is "added a photo to <album>", a `message`
    under a `message` is "replied in a thread", a `todo_item` whose `done` flipped is "ticked off
    <text>", an `expense` create is "added <amount> for <description>", a `poll` create is
    "started a poll", a `vote` is "voted".

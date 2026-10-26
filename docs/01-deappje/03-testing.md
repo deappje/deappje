@@ -4,8 +4,8 @@
 
 - `group`: invite acceptance rules, subgroup subset rule, last-admin rule.
 - `device`: rotation batch acceptance, member checks on wrap.
-- `ledger`: the CAS matrix, cascade collection, eviction floor arithmetic, response shaping for
-  pull.
+- `ledger`: the CAS-on-seq matrix, cascade collection, eviction floor arithmetic, response
+  shaping for pull.
 - `storage`: quota and size cap at the boundary, expiry arithmetic, coverage ⇒ delete.
 
 ## `effecttest` audits (one per adapter, in each nanoservice's `tests/effects_audit.rs`)
