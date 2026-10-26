@@ -134,7 +134,7 @@ holds all of them.
 | ListDevicesRequest | DeviceList | the devices holding a key for a group, with public keys; caller must be a holder |
 | RequestGroupKeysRequest | KeyRequest | caller's user must be a member; insert pending with optional `invite_id` and `invite_tag`, relayed opaque; push every holder device |
 | ListKeyRequestsRequest | KeyRequestList | pending requests in groups the caller holds a key for, with the requesting device's platform and public key |
-| FulfilKeyRequestRequest | KeyRequest | caller must hold a key for the group; insert the wrapped keys for the requesting device, mark fulfilled, push it |
+| FulfilKeyRequestRequest | KeyRequest | caller must hold a key for the group, and be `admin` or `member` unless the requesting device is the caller's own; insert the wrapped keys for the requesting device, mark fulfilled, push it |
 | PublishWrappedKeysRequest | WrappedKeyList | batch insert, rotation rule above |
 | GetWrappedKeysRequest | WrappedKeyList | every wrapped key for the calling device, optionally one group |
 | GroupHeadAdvanced | (void) | silent push to every member device except the writer's |

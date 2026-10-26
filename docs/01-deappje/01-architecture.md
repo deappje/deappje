@@ -17,8 +17,11 @@ deletion.
 - **Tables**: `group` (id, `parent_group_id`, creator, timestamps), `membership` (group, user,
   role, joined), `invite` (group, code, creator, expiry, max uses, uses, revoked). Directive §2.
 - **Invariants**: a user is in a group at most once; a member of a subgroup is a member of its
-  parent (checked on accept, cascaded on leave/remove); only an admin removes members or revokes
-  invites; the creator is the first admin.
+  parent (checked on accept, cascaded on leave/remove); only an admin removes members, sets roles
+  or revokes invites; the creator is the first admin. Roles are `admin`, `member`, `viewer`; a
+  viewer holds keys and reads, and the server refuses its pushes, its uploads other than bundles
+  and re-uploads, and its approval of another user's device. `MembershipCheck` carries the role,
+  so each of those is one comparison in the handler that cares.
 - **Processing object `group_purge`** (prefix `gpr`): created by `DeleteGroupRequest`, one per
   group being deleted. Its pass drives `ledger`, `storage` and `device` to hold nothing of the
   group, by direct requests (`PurgeGroupObjectsRequest`, `PurgeGroupBlobsRequest`,
@@ -34,8 +37,8 @@ deletion.
   `device` until zero, then calls Kratos admin `delete_identity` (external, `idempotent`), then
   `Delete`. Directive §3, §5, §6.
 - **Handles**: `CreateGroupRequest`, `GetGroupRequest`, `ListGroupsRequest`, `CreateInviteRequest`,
-  `AcceptInviteRequest`, `ListMembersRequest`, `RemoveMemberRequest`, `LeaveGroupRequest`,
-  `DeleteGroupRequest`, `DeleteAccountRequest`, and `CheckMembershipRequest` → `MembershipCheck`,
+  `AcceptInviteRequest`, `ListMembersRequest`, `RemoveMemberRequest`, `SetMemberRoleRequest`,
+  `LeaveGroupRequest`, `DeleteGroupRequest`, `DeleteAccountRequest`, and `CheckMembershipRequest` → `MembershipCheck`,
   the authorisation question every other nanoservice asks before it touches anything in a group.
 - **Sends**: `MemberRemoved` (void event) so `device` can revoke wrapped keys and push a rotation
   prompt; the three group purge requests above; `PurgeUserDevicesRequest`.
@@ -224,6 +227,7 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 | AcceptInviteRequest | Membership | api | group |
 | ListMembersRequest | MemberList | api | group |
 | RemoveMemberRequest | Membership | api | group |
+| SetMemberRoleRequest | Membership | api | group |
 | LeaveGroupRequest | Membership | api | group |
 | DeleteGroupRequest | Group | api | group |
 | DeleteAccountRequest | AccountDeletion | api | group |

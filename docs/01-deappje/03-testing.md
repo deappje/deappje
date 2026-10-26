@@ -23,6 +23,9 @@ definitive rejection is classified as such.
 
 - **Membership cascade**: parent removal removes subgroup memberships atomically; concurrent
   single-use invite.
+- **Viewer**: a viewer pulls, acks, downloads, serves a bundle and re-uploads a blob it holds,
+  and is refused on push, on a non-bundle upload and on approving another user's device;
+  promotion to member lifts the refusals without a key change.
 - **Sequence integrity**: N tasks push to one group concurrently; the resulting `seq` set is
   `1..=N` with no gaps; a reader polling during the run never observes a seq it later misses.
 - **Delete semantics**: a parent and its children in one batch take consecutive seqs; a delete

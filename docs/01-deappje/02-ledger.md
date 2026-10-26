@@ -72,7 +72,8 @@ Index `(group_id, status)`. Rows older than 48 hours are dropped by the sweep.
 base_seq, deleted }] }`. `base_seq` is the seq of the row the device edited
 from, 0 for a new object.
 
-Before the transaction: `CheckMembershipRequest`; for every `blob_id`, `CheckBlobRequest` must
+Before the transaction: `CheckMembershipRequest`, and the role must be `admin` or `member` (a
+`viewer` is refused); for every `blob_id`, `CheckBlobRequest` must
 answer `present` for this group (remote I/O outside the transaction, invariant 7). A `value`
 over 1 MiB refuses the whole batch.
 

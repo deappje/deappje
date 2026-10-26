@@ -52,10 +52,10 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
-| Create group, invite by link/code, accept | include | code with expiry and max uses; no admin approval of joins | Load-bearing. Approval of join requests was not asked for; an admin controls exposure through max uses and revocation. |
+| Create group, invite by link/code, accept | include | code with expiry, max uses and the joiner's role; no admin approval of joins | Load-bearing. Approval of join requests was not asked for; an admin controls exposure through max uses and revocation. |
 | Leave group, remove member (admin) | include | triggers key rotation | Load-bearing. |
 | Subgroups (members ⊆ parent, own key) | include | | Requested; cheap once groups exist. |
-| Roles beyond admin/member | exclude | | Not asked for. |
+| Roles: admin, member, viewer | include | viewer reads only: the server refuses its pushes, its uploads other than bundles and re-uploads, and its approval of other users' devices; invites carry the role; admins change it | Round 9 (2026-10-26). A read-only member is one role check in three handlers. |
 | Group deletion | include | a `group_purge` processing object in `group` drives the purge of ledger, storage and device until each reports nothing left; subgroups are purged first | Round 1. A purge must finish, so it is driven by a reconciler with direct requests, not an event. |
 | Data export | include | client-side: pull since 0 plus a download per blob, bundled on the device | Round 1. No server work: the server cannot produce a readable export. |
 | Account deletion | include | a `user_purge` processing object in `group`: leave every group (promoting the longest-standing member where the user was the only admin, deleting groups where they were the only member), purge the user's devices and keys, delete the Kratos identity | Round 4 (2026-10-17). App stores require it; a purge must finish, so it is a reconciler. |
@@ -133,9 +133,10 @@ the log. Round 7 (2026-10-26) made member devices the store: the server keeps 48
 comes from member devices as bundles, deletion is acked per device so tombstones can be hard
 deleted, the blob processing object became a row with an expiry, and values went back to plain
 protobuf with a field-level rebase, the CRDT living only inside notes as child objects. Round 8
-(2026-10-26) folded the deletion generation into the sequence counter and dropped the push-side
-cursor check. What remains is tuning (the 48-hour window, the value size cap, bundle size), which
-the implementing session owns.
+(2026-10-26) folded the deletion generation into the sequence counter, dropped the push-side
+cursor check, the per-object version, the server-side cascade and the tombstone special cases.
+Round 9 (2026-10-26) added the `viewer` role. What remains is tuning (the 48-hour window, the
+value size cap, bundle size), which the implementing session owns.
 
 ## Status
 

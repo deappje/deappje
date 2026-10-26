@@ -31,7 +31,7 @@ membership).
 | id | uuid | primary key |
 | group_id | uuid | |
 | user_id | uuid | Kratos identity id |
-| role | string | `admin` or `member` |
+| role | string | `admin`, `member` or `viewer` |
 | joined_at | timestamp | |
 
 Unique `(group_id, user_id)`. Index `(user_id)`.
@@ -41,6 +41,13 @@ membership requires a parent membership (checked under the parent's membership r
 user from a group removes them from every subgroup in the same transaction; the last admin cannot
 leave while other members remain.
 
+Roles. `admin` manages members, invites and roles and can delete the group. `member` reads and
+writes. `viewer` reads: holds the group keys like anyone else, but `ledger` refuses its pushes,
+`storage` refuses its uploads except bundles and re-uploads (a viewer is a holder and may serve
+history), and `device` refuses it as the approver of another user's device. An invite carries
+the role its joiners get (`member` or `viewer`); `SetMemberRoleRequest` (admin) changes it later.
+The server enforces exactly those refusals; the clients hide the controls.
+
 ### `invite`
 
 | column | type | notes |
@@ -48,6 +55,7 @@ leave while other members remain.
 | id | uuid | primary key |
 | group_id | uuid | |
 | code | string | unique, 10 characters from a 32-symbol alphabet, server-minted. The shared link is `/join/<code>#<secret>`: the fragment is 16 random bytes minted on the creating device, kept in that device's local store, never sent to the server; it authenticates the joiner's key request (`02-device.md`). |
+| role | string | the role a joiner gets: `member` or `viewer` |
 | created_by | uuid | |
 | expires_at | timestamp | |
 | max_uses | int32 | 0 = unbounded |
@@ -100,8 +108,8 @@ Reconcile pass:
 1. `meta.deleting()` ⇒ `Delete`.
 2. Memberships of the user remain ⇒ take one (deepest subgroup first, so a parent leave never
    has to cascade). If the user is the only member: stamp `deleted_at` and create a `group_purge`
-   for that group (and its subgroups). Otherwise, if they are the only admin: promote the member
-   with the earliest `joined_at`. Delete the membership, commit, send `MemberRemoved`. Status
+   for that group (and its subgroups). Otherwise, if they are the only admin: promote the
+   `member` with the earliest `joined_at`, or the earliest `viewer` if there is no member. Delete the membership, commit, send `MemberRemoved`. Status
    `groups_remaining`, `Converged.after(0)` (one group per pass keeps each transaction small).
 3. Send `PurgeUserDevicesRequest { user_id }` → `PurgeResult { remaining }`; non-zero ⇒ record and
    `Converged.after(30s)`.
@@ -126,6 +134,7 @@ are ciphertext; `created_by_device` becomes a dangling id, which clients already
 | AcceptInviteRequest | Membership | see invite invariants |
 | ListMembersRequest | MemberList | user ids and roles; caller must be a member |
 | RemoveMemberRequest | Membership | caller admin; cascades to subgroups; sends `MemberRemoved` after commit |
+| SetMemberRoleRequest | Membership | caller admin; `admin`, `member` or `viewer`; the last admin cannot be demoted while other members remain |
 | LeaveGroupRequest | Membership | cascades to subgroups; sends `MemberRemoved` after commit |
 | CheckMembershipRequest | MembershipCheck | `(user, group)` → member yes/no and role |
 
@@ -153,13 +162,14 @@ The admin API is reached over the in-cluster service address; no secret.
 ## API
 
 `GroupService`: CreateGroup, GetGroup, ListGroups, CreateInvite, AcceptInvite, ListMembers,
-RemoveMember, LeaveGroup, DeleteGroup, DeleteAccount. Every method requires a Kratos session; the api crate
+RemoveMember, SetMemberRole, LeaveGroup, DeleteGroup, DeleteAccount. Every method requires a Kratos session; the api crate
 passes the identity id as the caller.
 
 ## Tests
 
 - Unit: invite acceptance under expiry, revocation and max uses; subgroup accept without parent
-  membership is refused; last-admin rule; the purge pass as a function of
+  membership is refused; last-admin rule, also against demotion; an invite's role lands on the
+  membership; the purge pass as a function of
   `(subgroups_remaining, three counts)` → `Outcome`.
 - Integration (testkit, database per test): remove from parent cascades to subgroups in one
   transaction; two concurrent accepts of a single-use invite admit exactly one; `MemberRemoved`

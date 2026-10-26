@@ -52,6 +52,7 @@ nanoservices:
             - { name: id, type: uuid, primaryKey: true }
             - { name: group_id, type: uuid }
             - { name: code, type: string, unique: true }
+            - { name: role, type: string }
             - { name: created_by, type: uuid }
             - { name: expires_at, type: timestamp }
             - { name: max_uses, type: int32 }
@@ -70,6 +71,7 @@ nanoservices:
       - { message: AcceptInviteRequest, response: Membership }
       - { message: ListMembersRequest, response: MemberList }
       - { message: RemoveMemberRequest, response: Membership }
+      - { message: SetMemberRoleRequest, response: Membership }
       - { message: LeaveGroupRequest, response: Membership }
       - { message: DeleteGroupRequest, response: Group }
       - { message: DeleteAccountRequest, response: AccountDeletion }
@@ -92,6 +94,7 @@ nanoservices:
         - { name: AcceptInvite, request: AcceptInviteRequest, response: AcceptInviteResponse }
         - { name: ListMembers, request: ListMembersRequest, response: ListMembersResponse }
         - { name: RemoveMember, request: RemoveMemberRequest, response: RemoveMemberResponse }
+        - { name: SetMemberRole, request: SetMemberRoleRequest, response: SetMemberRoleResponse }
         - { name: LeaveGroup, request: LeaveGroupRequest, response: LeaveGroupResponse }
 
   - name: device

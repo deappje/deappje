@@ -62,7 +62,7 @@ loss on delete; the `effecttest` audit covers it.
 
 | Handles | Response | Behaviour |
 |---|---|---|
-| CreateUploadRequest | UploadGrant | member check; kind lookup; size cap; quota (`SUM(declared_size)` of the group's rows with `in_bucket`, derived at request time); insert row with `in_bucket = false`; presigned PUT, 15 minutes |
+| CreateUploadRequest | UploadGrant | member check, and `admin` or `member` unless the kind is `bundle` (a viewer may serve history); kind lookup; size cap; quota (`SUM(declared_size)` of the group's rows with `in_bucket`, derived at request time); insert row with `in_bucket = false`; presigned PUT, 15 minutes |
 | ConfirmUploadRequest | Blob | `HEAD` the key; size must equal `declared_size`; set `in_bucket = true`, `expires_at = now + retention`, uploader as holder; if `request_id` is set send `BundleReady` to `ledger` |
 | ReuploadBlobRequest | UploadGrant | member check; a holder re-uploads to the same key; presigned PUT; then `ConfirmUpload` as above |
 | GetDownloadRequest | DownloadGrant | member check; if `in_bucket` and `expires_at > now`: presigned GET (5 minutes), upsert holder, then `CheckHolderCoverageRequest { group_id, holders ∪ uploader }` → `complete` ⇒ `delete_object`, `in_bucket = false` (everyone has it; the bucket copy is pure cost); else answer `gone` so the client requests it |
