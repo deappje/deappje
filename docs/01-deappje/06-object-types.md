@@ -57,3 +57,37 @@ Scrolling back past what the device holds asks a member device for the older ran
 (`RequestHistoryRequest`, `02-ledger.md`), so the feed fills across types in `seq` order. The
 same classification produces the local notification text after a silent push; the server never
 knows what happened.
+
+## Merge strategy per type
+
+Three strategies, none on the server (`01-architecture.md`, "Values and conflicts"):
+
+- **rebase** (default): re-apply the changed fields, and for repeated fields the added or removed
+  elements, onto the current row; the same field or element changed on both sides goes to the
+  later push; a returned tombstone ends the edit; an invalid result is shown, not pushed.
+- **append-only**: never edited after creation, so never in conflict; only deletion touches it.
+- **per-user singleton**: id = UUIDv5(target, user), one object per user, only its owner writes;
+  conflicts exist only between that user's own devices and the later push wins.
+
+| Type | Strategy | What can conflict |
+|---|---|---|
+| group_profile | rebase, singleton per group | two admins at once, field by field |
+| member_profile | rebase, singleton per user | the user's own devices |
+| invite_secret | append-only | nothing |
+| post, comment, message | rebase | the author's own devices; others only add children |
+| photo | rebase | caption; files are immutable by hash |
+| album | rebase | title, cover |
+| reaction, vote | per-user singleton | the user's own devices |
+| todo_list | rebase | title |
+| todo_item | rebase | `done` is a boolean (tick vs untick: later wins); `pos` is a field, so a move cannot duplicate |
+| note | rebase for `title`; body is append-only `note_update` children combined by `yrs` | the title only |
+| note_update | append-only | nothing |
+| expense | rebase, elements for participants | field by field; shares and balances are derived, so they cannot disagree with the inputs |
+| settlement | append-only | nothing; undo is a delete |
+| ticket_share | rebase | holder, status |
+| event | rebase, validated | start and end edited apart can cross: shown to the user |
+| poll | rebase, elements for options | votes are children, so an option change never fights a vote |
+| venue | rebase | comments and reactions are children |
+
+A concurrent create of the same singleton id is a conflict on `base_seq = 0`: the second device
+rebases its fields onto the row that got there first.

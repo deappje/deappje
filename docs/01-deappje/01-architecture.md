@@ -161,11 +161,14 @@ Every `value` is a protobuf message of its type, encrypted (`06-object-types.md`
 one rule, compare-and-set on the object's seq with the current row returned on a conflict, and
 the client core has one way to handle it:
 
-1. Keep, per locally edited object, the row it was edited from and the set of fields changed.
-2. On a conflict, decrypt the returned row, re-apply the changed fields onto it, validate the
-   result against the type's invariants (an event ending before it starts), and push again with
-   the returned row's seq as `base_seq`. Where both sides changed the same field, the later
-   push wins. A few immediate retries, then the object waits in the outbox for the next sync.
+1. Keep, per locally edited object, the row it was edited from and the set of fields changed;
+   for a repeated field (participants, poll options) the change is per element, added or
+   removed by id.
+2. On a conflict, decrypt the returned row, re-apply the changed fields and elements onto it,
+   validate the result against the type's invariants (an event ending before it starts), and
+   push again with the returned row's seq as `base_seq`. Where both sides changed the same field
+   or element, the later push wins. A few immediate retries, then the object waits in the outbox
+   for the next sync. An invalid result is shown to the user, not pushed.
 3. A tombstone in the returned row ends the loop: the local edit is dropped and the client shows
    "deleted".
 4. Deleting an object deletes its subtree: the client tombstones the children it holds in the
