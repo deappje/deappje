@@ -86,8 +86,8 @@ Owns the relay. Plain executor with three hourly sweeps; the one piece of concur
 the system is here. Member devices are the store: the server keeps a live row for 48 hours and a
 tombstone until every device has acked it.
 
-- **Tables**: `object` (id, group, parent, type, schema version, key id, value, blob id, seq,
-  creator device, `deleted`), `group_head` (group, head seq, `evicted_through_seq`): the
+- **Tables**: `object` (id, group, type, schema version, key id, value, blob id, seq, creator
+  device, `deleted`; the parent is inside the value), `group_head` (group, head seq, `evicted_through_seq`): the
   counter row; `group_device` (group, device, `acked_seq`); `history_request`. Directive §2, §7
   (serialize on a counter row under `FOR UPDATE`).
 - **Push**: one transaction per batch: lock `group_head`; per object compare `base_seq`, the seq
@@ -96,10 +96,11 @@ tombstone until every device has acked it.
   nothing can be resurrected, and the first re-creation of an evicted row makes every later
   stale base conflict), on match write it at `seq = head + 1`, on mismatch report a conflict
   carrying the current row. There is no per-object version: a row's seq identifies its state. A
-  delete tombstones the subtree by `parent_id` in the same transaction. A tombstone's deletion
-  mark is its own seq; there is no second counter, no "pull before you push" check, and no rule
-  about editing a tombstone: a stale base conflicts on the seq, and a deliberate un-delete is the
-  client's call. Commit,
+  delete is a push with `deleted = true`; the client puts the children it holds in the same
+  batch, and the server does no cascade, since it neither sees parents nor holds children older
+  than 48 hours. A tombstone's deletion mark is its own seq; there is no second counter, no "pull
+  before you push" check, and no rule about editing a tombstone: a stale base conflicts on the
+  seq, and a deliberate un-delete is the client's call. Commit,
   then `GroupHeadAdvanced` and, per deleted object with a blob, `ObjectDeleted` (invariant 7).
 - **Pull and ack**: `PullChangesRequest` returns entries with `seq > cursor`, tombstones included,
   with the minimum acked cursor and the eviction floor; a device whose cursor is below the floor
@@ -160,10 +161,11 @@ the client core has one way to handle it:
    push wins. A few immediate retries, then the object waits in the outbox for the next sync.
 3. A tombstone in the returned row ends the loop: the local edit is dropped and the client shows
    "deleted".
-4. A child whose parent the device holds as a tombstone is dead, whatever its own row says; the
-   first client to notice pushes its tombstone. This is what covers a device that commented on a
-   photo someone deleted while it was offline: the server does not check parents, since they may
-   already be evicted.
+4. Deleting an object deletes its subtree: the client tombstones the children it holds in the
+   same batch. A child whose parent the device holds as a tombstone is dead, whatever its own row
+   says, and the first client to notice pushes its tombstone. This covers children the deleting
+   device never held and a device that commented on a photo someone deleted while it was
+   offline. The server sees no parents and does no cascade.
 
 No conflicted copies and no merge policies: a friends-group app edits small objects one field at
 a time, and field-level rebase covers it.
@@ -267,6 +269,6 @@ boolean or a number (`MembershipCheck`, `Blob.present`, `HolderCoverage`) or an 
 
 ## What is deliberately not on the server
 
-Conflict rebase, the note CRDT, validation of payloads, invariants inside a type (one vote per
-poll), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
+Conflict rebase, cascading deletes, the note CRDT, validation of payloads, invariants inside a
+type (one vote per poll), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
 geocoding. All of it is the client's, because all of it needs plaintext.

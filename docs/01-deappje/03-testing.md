@@ -4,8 +4,7 @@
 
 - `group`: invite acceptance rules, subgroup subset rule, last-admin rule.
 - `device`: rotation batch acceptance, member checks on wrap.
-- `ledger`: the CAS-on-seq matrix, cascade collection, eviction floor arithmetic, response
-  shaping for pull.
+- `ledger`: the CAS-on-seq matrix, eviction floor arithmetic, response shaping for pull.
 - `storage`: quota and size cap at the boundary, expiry arithmetic, coverage ⇒ delete.
 
 ## `effecttest` audits (one per adapter, in each nanoservice's `tests/effects_audit.rs`)
@@ -26,7 +25,8 @@ definitive rejection is classified as such.
   single-use invite.
 - **Sequence integrity**: N tasks push to one group concurrently; the resulting `seq` set is
   `1..=N` with no gaps; a reader polling during the run never observes a seq it later misses.
-- **Delete semantics**: tombstone cascade; a delete and an edit racing on one object leave
+- **Delete semantics**: a parent and its children in one batch take consecutive seqs; a delete
+  and an edit racing on one object leave
   exactly one of them accepted and the other holding the current row; a stale device's edit or
   re-creation of a deleted object conflicts; the **ack invariant** under random
   interleavings of push, delete, pull, ack and evict across N devices (every tombstone the gc
@@ -62,7 +62,8 @@ editing different fields of one object offline both keep their edits; the same f
 later push; a tombstone returned during a retry ends the edit; an invalid rebase result is
 shown, not pushed), notes
 (two devices typing offline produce two `note_update` children that combine to the same text in
-either order), the orphan rule (a child of a tombstoned parent is dead and gets tombstoned), the
+either order), the cascade (deleting a parent batches the children the device holds; a child of
+a tombstoned parent that arrives later is dead and gets tombstoned), the
 invite tag, and a simulated multi-device sync harness that drives random
 push/pull/ack/offline interleavings, with eviction and a simulated holder serving history,
 against an in-memory model of `ledger`'s contract and asserts that every device ends with the

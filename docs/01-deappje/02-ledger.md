@@ -14,7 +14,6 @@ nanoservice forgets everything live after 48 hours. Directive §2 per table, §7
 |---|---|---|
 | id | uuid | primary key, client-minted |
 | group_id | uuid | |
-| parent_id | uuid, nullable | within the same group |
 | type | int32 | client-defined type number |
 | schema_version | int32 | |
 | key_id | int32 | which group key encrypts `value` |
@@ -25,8 +24,9 @@ nanoservice forgets everything live after 48 hours. Directive §2 per table, §7
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark |
 | updated_at | timestamp | |
 
-Indexes: unique `(group_id, seq)`; `(parent_id)` for cascade; `(group_id, deleted, seq)` for
-garbage collection; `(updated_at)` for eviction.
+Indexes: unique `(group_id, seq)`; `(group_id, deleted, seq)` for garbage collection;
+`(updated_at)` for eviction. The parent of an object lives inside its encrypted value: the server
+never sees the structure of a group's data.
 
 ### `group_head`
 
@@ -68,8 +68,8 @@ Index `(group_id, status)`. Rows older than 48 hours are dropped by the sweep.
 
 ## Push
 
-`PushObjectsRequest { group_id, objects: [{ id, parent_id?, type, schema_version, key_id,
-value?, blob_id?, base_seq, deleted }] }`. `base_seq` is the seq of the row the device edited
+`PushObjectsRequest { group_id, objects: [{ id, type, schema_version, key_id, value?, blob_id?,
+base_seq, deleted }] }`. `base_seq` is the seq of the row the device edited
 from, 0 for a new object.
 
 Before the transaction: `CheckMembershipRequest`; for every `blob_id`, `CheckBlobRequest` must
@@ -82,8 +82,7 @@ One transaction:
 2. Per object, in request order, read the current row:
    - **No row** (new, or evicted) ⇒ accept.
    - **`base_seq == seq`** ⇒ accept: write the object at `seq = head + 1`, head advances. If
-     `deleted`: null `value` and `blob_id`, `deleted = true`, and tombstone every descendant
-     (recursive by `parent_id`) each with its own next `seq`.
+     `deleted`: null `value` and `blob_id`, `deleted = true`.
    - **Mismatch** ⇒ conflict `{ id, current }` with the stored row as it is, tombstone or not.
 3. Commit.
 
@@ -102,10 +101,11 @@ already holds at that seq.
 A tombstone's deletion mark is its seq, so "device acked cursor `c`" means "device has applied
 every tombstone with `seq ≤ c`", with no second counter. There is no "pull before you push"
 check: a stale edit or re-creation of a deleted object conflicts on the seq, and the tombstone
-stays until this very device has acked past it. A child added under a parent the device did not
-know was deleted is handled by the clients (a child whose parent is a tombstone is dead; the
-first client to notice pushes its tombstone). The server cannot check parents anyway once they
-are evicted.
+stays until this very device has acked past it. There is no cascade either: the deleting client
+puts the children it holds in the same batch (one push is one transaction, so they take
+consecutive seqs together), and a child it did not hold is tombstoned by the first device that
+holds it and sees the parent's tombstone. The server could not do this completely anyway, since
+children older than 48 hours are already evicted from it.
 
 Why a locked counter row and not a sequence: a sequence is non-transactional, so a lower value can
 commit after a higher one and a client that pulled in between misses it forever (Directive §7).
@@ -142,8 +142,8 @@ or there are no rows.
 `pending` row, send `HistoryRequested { request_id, group_id, requester_device, from_seq, to_seq,
 object_id }` to `device`, which wakes every key-holding device of the group except the requester.
 A holder that wakes lists pending requests (`ListHistoryRequestsRequest { group_id }`), packs the
-entries it holds in the range (ciphertext, each with id, parent, type, schema_version, key_id,
-seq, deleted, blob_id; tombstones included), newest first up to the bundle size cap,
+entries it holds in the range (ciphertext, each with id, type, schema_version, key_id, seq,
+deleted, blob_id; tombstones included), newest first up to the bundle size cap,
 encrypts the bundle under the current group key named in its header, uploads it as a blob of
 kind `bundle` with `request_id`, and confirms. `storage` then sends `BundleReady { request_id,
 bundle_id }`; the handler marks the row `fulfilled` and sends `HistoryReady { request_id,
@@ -206,10 +206,10 @@ ListHistoryRequests. The api crate maps the proto entry to the plain Rust struct
 ## Tests
 
 - Unit: CAS-on-seq acceptance matrix (no row, match, mismatch, the same three on a tombstone);
-  cascade collects the full subtree; eviction floor arithmetic.
+  eviction floor arithmetic.
 - Integration: two replicas pushing to one group concurrently produce a gap-free sequence; a pull
-  during a concurrent push never returns a seq the next pull skips; delete cascades in one
-  transaction; **the ack invariant**: after N devices interleave pushes, deletes, pulls and acks
+  during a concurrent push never returns a seq the next pull skips; a batch of a parent and its
+  children takes consecutive seqs in one transaction; **the ack invariant**: after N devices interleave pushes, deletes, pulls and acks
   at random, every tombstone the gc removed had `seq ≤` every device's ack at the time, every
   device that acked `c` had pulled every tombstone with `seq ≤ c`, and a stale device's edit of
   a deleted object always conflicts; eviction leaves tombstones and sets the floor; an ack below

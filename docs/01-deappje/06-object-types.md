@@ -30,8 +30,9 @@ feature area; a breaking change takes the next free number in its block.
 | 80 | `venue` | none | name, category (`bar` / `pub` / `club` / `restaurant` / `other`), address, geo, url, notes | | recommendations; comments and reactions are children |
 
 Derived on the client, never stored: balances, poll tallies, the calendar (events plus member
-birthdays), unread counts, sort orders, and the timeline. Deleting a parent tombstones its
-children server-side (`02-ledger.md`), so deleting a post removes its photos and comments.
+birthdays), unread counts, sort orders, and the timeline. Deleting a parent is the client's
+cascade (`01-architecture.md`): deleting a post pushes tombstones for its photos and comments in
+the same batch. The parent id is a field of the child, inside the ciphertext.
 
 ## The timeline is the log, rendered
 

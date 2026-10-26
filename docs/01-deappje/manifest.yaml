@@ -179,7 +179,6 @@ nanoservices:
           columns:
             - { name: id, type: uuid, primaryKey: true }
             - { name: group_id, type: uuid }
-            - { name: parent_id, type: uuid, nullable: true }
             - { name: type, type: int32 }
             - { name: schema_version, type: int32 }
             - { name: key_id, type: int32 }
@@ -191,7 +190,6 @@ nanoservices:
             - { name: updated_at, type: timestamp }
           indexes:
             - { columns: [group_id, seq], unique: true }
-            - { columns: [parent_id] }
             - { columns: [group_id, deleted, seq] }
             - { columns: [updated_at] }
         - name: group_head
