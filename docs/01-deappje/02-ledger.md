@@ -59,7 +59,9 @@ A device that never acks blocks garbage collection for its group until it is rem
 | from_seq | int64 | |
 | to_seq | int64 | |
 | object_id | uuid, nullable | a request for one object instead of a range |
-| status | string | `pending`, `fulfilled` |
+| status | string | `pending`, `claimed`, `fulfilled` |
+| claimed_by | uuid, nullable | the holder device answering it |
+| claimed_at | timestamp, nullable | a claim older than 5 minutes without `complete` counts as abandoned |
 | created_at | timestamp | |
 
 Index `(group_id, status)`. Rows older than 48 hours are dropped by the sweep.
@@ -140,17 +142,27 @@ or there are no rows.
 `pending` row, send `HistoryRequested { request_id, group_id, requester_device, from_seq, to_seq,
 object_id }` to `device`, which wakes every key-holding device of the group except the requester.
 
-A holder that wakes lists pending requests (`ListHistoryRequestsRequest { group_id }`) and pushes
-the entries it holds in the range back to the server, exactly as they were in the log:
-`PushHistoryRequest { request_id, entries: [{ id, type, schema_version, key_id, value, seq }],
-complete }`, newest first, a few thousand entries per call, `complete = true` on the last call.
+A holder that wakes lists open requests (`ListHistoryRequestsRequest { group_id }`: `pending`,
+plus `claimed` where the claim is older than 5 minutes) and claims one:
+`ClaimHistoryRequest { request_id }` is a single conditional update (`status = pending`, or
+`claimed` with a stale `claimed_at`) that records the device and the time; the first caller wins
+and the rest are answered `taken`. Only the claimer may then push, so one holder uploads, not
+every holder. A claimer that dies is replaced after 5 minutes by whoever claims next, and the
+rows it already restored are skipped on the re-push. Client policy: the requester's own devices
+claim at once, everyone else waits a random few seconds first.
+
+The claimer pushes the entries it holds in the range back to the server, exactly as they were in
+the log: `PushHistoryRequest { request_id, entries: [{ id, type, schema_version, key_id, value,
+seq }], complete }`, newest first, a few thousand entries per call, `complete = true` on the last
+call.
 The handler, under the group's counter lock, re-inserts each entry **with its original seq**
 and `uploaded_at = now`, skipping any id that already has a row, at any seq, live or tombstone:
 the current row always wins, so a later edit, a delete, or a second holder answering the same
 request cannot be overridden. No new seq is handed out and the head does not move. After each
 call it sends `HistoryReady { request_id, requester_device }` to `device`, which wakes the
-requester; `complete` marks the row `fulfilled`, and a call for a request that is no longer
-pending is refused. Any role may answer: serving history is reading, not writing.
+requester; `complete` marks the row `fulfilled`, and a call from a device that does not hold
+the claim, or for a request already fulfilled, is refused. Any role may answer: serving history
+is reading, not writing.
 
 The requester pulls as usual: its cursor is below the restored rows, so `PullChangesRequest`
 returns them in seq order with everything else. Every other device's cursor is already past
@@ -191,6 +203,7 @@ whatever the group's age.
 | GetHeadsRequest | HeadList | api |
 | RequestHistoryRequest | HistoryRequest | api |
 | ListHistoryRequestsRequest | HistoryRequestList | api |
+| ClaimHistoryRequest | HistoryRequest | api |
 | PushHistoryRequest | PushHistoryResult | api |
 | DeviceLeftGroup | (void) | device: delete the `group_device` row |
 | PurgeGroupObjectsRequest | PurgeResult | group |
@@ -211,7 +224,7 @@ a member" and purges locally. Idempotent.
 ## API
 
 `LedgerService`: PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory,
-ListHistoryRequests, PushHistory. The api crate maps the proto entry to the plain Rust struct one to one;
+ListHistoryRequests, ClaimHistory, PushHistory. The api crate maps the proto entry to the plain Rust struct one to one;
 `value` passes through untouched.
 
 ## Tests
@@ -226,7 +239,9 @@ ListHistoryRequests, PushHistory. The api crate maps the proto entry to the plai
   a deleted object always conflicts; eviction leaves tombstones and sets the floor; an ack below
   the stored one answers `resync_required`; a history re-insert keeps the original seqs, moves
   neither head nor floor, skips ids that have a row (live or tombstone), and is refused once the
-  request is fulfilled; a restored row is evicted 48 hours after its re-insert.
+  request is fulfilled or from a device without the claim; two holders claiming at once leave
+  exactly one claimer; a claim older than 5 minutes is taken over and the second claimer's
+  re-push skips what the first restored; a restored row is evicted 48 hours after its re-insert.
 - Property test: random interleavings of push/pull/ack/evict across N simulated devices, with
   history re-inserted by a simulated holder, converge to the same row per object on every
   device, and no deleted object is ever live on any device after every device has acked past

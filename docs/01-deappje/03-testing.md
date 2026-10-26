@@ -36,10 +36,11 @@ definitive rejection is classified as such.
   removed was at or below every device's acked cursor, and no device ever holds a live copy of
   an object whose tombstone it has acked past); an ack that goes backwards gets
   `resync_required`.
-- **History**: a device with a cursor below the floor requests the gap; a simulated holder
-  pushes the entries back; they land at their original seqs, the head does not move, an id with
-  a current row is skipped, `complete` fulfils the request once and a later push for it is
-  refused; the requester pulls and ends with the same rows as the holder; the restored rows are
+- **History**: a device with a cursor below the floor requests the gap; two simulated holders
+  claim and exactly one wins; it pushes the entries back; they land at their original seqs, the
+  head does not move, an id with a current row is skipped, a push without the claim is refused,
+  `complete` fulfils the request once and a later push for it is refused; a claimer that stops
+  is taken over after 5 minutes and the take-over re-push restores only what is missing; the requester pulls and ends with the same rows as the holder; the restored rows are
   evicted 48 hours after the re-insert and no earlier.
 - **Key lifecycle**: register two devices, request keys, fulfil, remove member, rotation batch,
   `GetWrappedKeys` returns both key ids for a surviving device and nothing for the removed one.

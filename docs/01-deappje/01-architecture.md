@@ -111,8 +111,9 @@ tombstone until every device has acked it.
   hands the minimum back so devices drop their own tombstones. An ack that goes backwards means a
   restored backup and forces a resync. `GetHeadsRequest` returns `(group, head, min ack)`.
 - **History**: `RequestHistoryRequest` records a range, or one object, and wakes every
-  key-holding device through `device`; one of them pushes the entries it holds back with
-  `PushHistoryRequest`, and the server re-inserts them **with their original seqs**, skipping
+  key-holding device through `device`; one of them claims the request (a conditional update;
+  the first wins, a claim older than five minutes is taken over) and pushes the entries it holds
+  back with `PushHistoryRequest`, and the server re-inserts them **with their original seqs**, skipping
   any id that already has a row, without moving the head; the requester is woken and pulls them
   from its low cursor, while every other device's cursor is already past them. Restored rows
   are evicted again 48 hours after their re-insert. No server-side retries: the requester asks
@@ -259,6 +260,7 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 | GetHeadsRequest | HeadList | api | ledger |
 | RequestHistoryRequest | HistoryRequest | api | ledger |
 | ListHistoryRequestsRequest | HistoryRequestList | api | ledger |
+| ClaimHistoryRequest | HistoryRequest | api | ledger |
 | PushHistoryRequest | PushHistoryResult | api | ledger |
 | ObjectDeleted | (void) | ledger | storage |
 | PresignUploadRequest | UploadGrant | api | storage |

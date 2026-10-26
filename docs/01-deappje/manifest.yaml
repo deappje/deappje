@@ -213,6 +213,8 @@ nanoservices:
             - { name: to_seq, type: int64 }
             - { name: object_id, type: uuid, nullable: true }
             - { name: status, type: string }
+            - { name: claimed_by, type: uuid, nullable: true }
+            - { name: claimed_at, type: timestamp, nullable: true }
             - { name: created_at, type: timestamp }
           indexes: [ { columns: [group_id, status] } ]
     schedules:
@@ -226,6 +228,7 @@ nanoservices:
       - { message: GetHeadsRequest, response: HeadList }
       - { message: RequestHistoryRequest, response: HistoryRequest }
       - { message: ListHistoryRequestsRequest, response: HistoryRequestList }
+      - { message: ClaimHistoryRequest, response: HistoryRequest }
       - { message: PushHistoryRequest, response: PushHistoryResult }
       - { message: DeviceLeftGroup }
       - { message: PurgeGroupObjectsRequest, response: PurgeResult }
@@ -244,6 +247,7 @@ nanoservices:
         - { name: GetHeads, request: GetHeadsRequest, response: GetHeadsResponse }
         - { name: RequestHistory, request: RequestHistoryRequest, response: RequestHistoryResponse }
         - { name: ListHistoryRequests, request: ListHistoryRequestsRequest, response: ListHistoryRequestsResponse }
+        - { name: ClaimHistory, request: ClaimHistoryRequest, response: ClaimHistoryResponse }
         - { name: PushHistory, request: PushHistoryRequest, response: PushHistoryResponse }
 
   - name: storage
