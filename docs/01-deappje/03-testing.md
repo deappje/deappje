@@ -5,7 +5,7 @@
 - `group`: invite acceptance rules, subgroup subset rule, last-admin rule.
 - `device`: rotation batch acceptance, member checks on wrap.
 - `ledger`: the CAS-on-seq matrix, eviction floor arithmetic, response shaping for pull.
-- `storage`: quota and size cap at the boundary, expiry arithmetic, coverage ⇒ delete.
+- `storage`: key parsing, quota and slot cap at the boundary.
 
 ## `effecttest` audits (one per adapter, in each nanoservice's `tests/effects_audit.rs`)
 
@@ -23,8 +23,9 @@ definitive rejection is classified as such.
 
 - **Membership cascade**: parent removal removes subgroup memberships atomically; concurrent
   single-use invite.
-- **Viewer**: a viewer pulls, acks, downloads, serves a bundle and re-uploads a blob it holds,
-  and is refused on push, on a non-bundle upload and on approving another user's device;
+- **Viewer**: a viewer pulls, acks, downloads, serves a bundle and re-uploads a file it holds
+  for a request, and is refused on push, on a `full` upload and on approving another user's
+  device;
   promotion to member lifts the refusals without a key change.
 - **Sequence integrity**: N tasks push to one group concurrently; the resulting `seq` set is
   `1..=N` with no gaps; a reader polling during the run never observes a seq it later misses.
@@ -37,16 +38,17 @@ definitive rejection is classified as such.
   an object whose tombstone it has acked past); an ack that goes backwards gets
   `resync_required`.
 - **History**: a device with a cursor below the floor requests the gap; a simulated holder
-  uploads a bundle; `BundleReady` fulfils the request once; a late bundle is ignored; the
+  uploads a bundle; `HistoryFulfilled` fulfils the request once; a late bundle is ignored; the
   requester ends with the same rows as the holder.
 - **Key lifecycle**: register two devices, request keys, fulfil, remove member, rotation batch,
   `GetWrappedKeys` returns both key ids for a surviving device and nothing for the removed one.
-- **Blob lifecycle**: against the bucket simulator: upload, download, expiry sweep, re-request,
-  re-upload to the same key, early delete on full coverage; a failed delete is retried by the
-  next sweep.
-- **Cross-nanoservice**: `ObjectDeleted` for a blob already gone is a no-op; `GroupHeadAdvanced`
+- **Files**: against the bucket simulator: presign, upload, confirm, download; a key outside the
+  caller's group prefix is refused; an expired file answers `gone`, a request for the object
+  wakes the holders, a re-upload to the same key makes the download work again; `ObjectDeleted`
+  removes every slot of the object; purge empties the group prefix over several passes.
+- **Cross-nanoservice**: `ObjectDeleted` for an object with no files is a no-op; `GroupHeadAdvanced`
   fan-out excludes the writer device; `DeviceLeftGroup` unblocks a group's gc.
-- **Group purge**: a parent with a subgroup, objects, blobs and keys; after deletion every table
+- **Group purge**: a parent with a subgroup, objects, files and keys; after deletion every table
   in every nanoservice holds nothing for either group, the bucket simulator holds no keys, the
   purge objects are gone, and a member check answers "not a member" from the first commit on.
   A `PurgeResult` dropped once is retried and the end state is the same.
@@ -54,8 +56,8 @@ definitive rejection is classified as such.
   a promoted admin, a group purge, a rotation push, no device rows, one identity deletion.
 - **Device trust**: a device row inserted directly into the table (simulating a hostile server)
   appears in no `ListDevices` answer and receives no wrapped key through a rotation.
-- **Holders and quota**: after a download, `BlobRequested` names the downloader; an upload that
-  would cross the group cap is refused and one that lands exactly on it is accepted.
+- **Quota**: an upload that would cross the group's 48-hour cap is refused and one that lands
+  exactly on it is accepted; counters older than 48 hours stop counting.
 
 ## Client core conformance (`core/` crate, in this repository)
 

@@ -86,8 +86,8 @@ Reconcile pass (level-triggered, one `Outcome`):
 3. Send `PurgeGroupObjectsRequest`, `PurgeGroupBlobsRequest`, `PurgeGroupKeysRequest` (between
    fences, invariant 7), each returning `PurgeResult { remaining }`. A failed send ⇒ `Retry`.
 4. All three zero ⇒ delete the `group` row (repository, own table), status `phase = done`,
-   `Delete`. Otherwise record the counts and `Converged.after(1m)`: blobs drain through their
-   own batches in `storage`, so a group with many photos takes a few passes.
+   `Delete`. Otherwise record the counts and `Converged.after(1m)`: `storage` deletes the group's
+   bucket prefix a batch per call, so a group with many photos takes a few passes.
 
 Worker policy: `resync` 1h, `backoff` 10s to 5m, `max_attempts` 0 (unbounded: a purge must
 finish and is surfaced by age if it does not), `attempt_timeout` 60s.

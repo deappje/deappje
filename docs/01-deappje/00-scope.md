@@ -31,7 +31,7 @@ These were settled in discussion before this plan was written; they are not open
 | Decision | Choice | Why |
 |---|---|---|
 | Durability | Member devices are the store. The server relays: an object row lives 48 hours in Postgres, a blob 48 hours in the bucket. Anything older comes from a member device on request (history bundles, blob re-uploads). A group whose every device loses its data loses its history; export is the backup. | Round 7 (2026-10-26). Billions of messages must not live in Postgres, and the user wants the server as stupid as possible. Reversed the round-0 choice. |
-| Blobs | The bucket is a 48-hour cache for full-size blobs and attachments, extended on every download and emptied early once every key-holding device of the group has downloaded it; after that a blob can be re-requested from any device that downloaded it (the server records holders; a device that evicts under storage pressure tells the server; the author's camera roll is the holder of last resort). Thumbnails are kept long-term. Each group has a 20 GiB cap on what is in the bucket. | Photos are the only real cost line, and every device that viewed a photo already holds it. |
+| Blobs | The bucket is a 48-hour cache: a file's key is derived from its object id and slot, its reference lives inside the object's encrypted value, the bucket's lifecycle rules expire full-size files, attachments and bundles after two days and keep thumbnails, and a presigned URL under the caller's group prefix is the whole authorization. An expired file is re-requested like old history: every key holder is woken and one re-uploads it to the same key. The server keeps no table of blobs and no holders. Each group may upload 20 GiB per 48 hours. | Round 10 (2026-10-26). Encryption protects the content and the signature protects the access; everything the blob table did besides that is either the bucket's job (expiry) or the history request's (re-upload). |
 | Change detection | A per-group commit log: every accepted write takes the next sequence number of its group, assigned under a locked counter row. Clients keep a cursor per group. A pull also returns the eviction floor; a cursor below it means the gap comes from a member device. | One query answers "anything new?"; batched across groups in one call. |
 | Conflicts | Compare-and-set on the object's seq: a push names the seq of the row it edited from, and a conflict returns the current row, tombstone or not. The client re-applies its changed fields onto the returned row and pushes again; the same field changed on both sides goes to the later push; a returned tombstone ends the edit. No conflicted copies, no per-object version, no special case for deletes on the server. | Round 7. The server cannot merge ciphertext; a field-level rebase on the device is enough for small objects edited a field at a time, and needs no CRDT. Round 8 dropped the version: a row's seq already identifies its state. |
 | Deletes | A tombstone's deletion mark is its own seq. After applying a pull a device acks its cursor; the server keeps the minimum over the group's devices, hard-deletes tombstones at or below it, and tells every device the minimum so they drop theirs. Acks are per device and happen after a pull, never by pushing. No "pull before you push" check and no server rule about editing tombstones: a stale edit or re-creation conflicts on the seq like any other, and un-deleting is a client decision. | Round 7, the user's design, folded into the sequence counter in round 8 (2026-10-26) and stripped of the push-side check: the seq check already refuses every write that could resurrect anything, and the server cannot check parents once they are evicted, so children of deleted parents are a client rule either way. |
@@ -57,7 +57,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Subgroups (members ⊆ parent, own key) | include | | Requested; cheap once groups exist. |
 | Roles: admin, member, viewer | include | viewer reads only: the server refuses its pushes, its uploads other than bundles and re-uploads, and its approval of other users' devices; invites carry the role; admins change it | Round 9 (2026-10-26). A read-only member is one role check in three handlers. |
 | Group deletion | include | a `group_purge` processing object in `group` drives the purge of ledger, storage and device until each reports nothing left; subgroups are purged first | Round 1. A purge must finish, so it is driven by a reconciler with direct requests, not an event. |
-| Data export | include | client-side: pull since 0 plus a download per blob, bundled on the device | Round 1. No server work: the server cannot produce a readable export. |
+| Data export | include | client-side: everything the device holds, bundled on the device | Round 1. No server work: the server cannot produce a readable export. |
 | Account deletion | include | a `user_purge` processing object in `group`: leave every group (promoting the longest-standing member where the user was the only admin, deleting groups where they were the only member), purge the user's devices and keys, delete the Kratos identity | Round 4 (2026-10-17). App stores require it; a purge must finish, so it is a reconciler. |
 | Group metadata (name, avatar) | include | stored as an encrypted object of a `group_profile` type, not in the group table | The server stays blind. |
 
@@ -89,10 +89,10 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Presigned upload/download via the private bucket | include | | Traffic never touches the app. |
-| Retention and expiry per blob kind | include | full-size, attachments and bundles 48 hours after upload; thumbnails long-term (a config number; set to 2 for a pure cache) | Round 4: the user wants the bucket to be a short cache. Round 7 dropped extension on download: a blob is a row with an expiry, not a state machine. |
-| Re-upload request to a holder device | include | the server records which devices downloaded a blob and wakes all of them plus the uploader, batched per request; a device drops its hold when it evicts, or when woken for bytes it no longer has; a re-upload keeps id, key and hash | With a 48-hour cache the holder set must be wider than the uploader, and phones with little storage must be free to evict. |
-| Early eviction once every device holds it | include | the pass asks `device` whether the holders cover every key-holding device of the group; if so the bucket copy goes before the 48 hours | Round 4, the user's rule: a blob everyone has is pure cost. A device joining later re-requests. |
-| Per-group storage cap | include | 20 GiB in the bucket per group, a `storage_quota` config value; `CreateUpload` refuses beyond it | Round 4. Bounds the bill; retention keeps real usage far below it. |
+| Retention and expiry per slot | include | bucket lifecycle rules: `full`, `file` and `bundle` two days after upload; `thumb` kept | Round 4 wanted a short cache; round 10 made it the bucket's job, no server timer. |
+| Re-upload of an expired file | include | a history request for the object wakes every key holder; one re-uploads to the same key, confirms with the request id, and the requester is woken | Round 10. One mechanism for old history and expired files; no holder bookkeeping. |
+| Early eviction once every device holds it | exclude | | Round 10. Needed holder tracking; two days bounds the cost anyway. |
+| Per-group upload cap | include | 20 GiB per rolling 48 hours, from an hourly counter table | Round 10. The server cannot know what expired without blob rows, so it bounds what goes in, which is the cost that matters. |
 | Wifi-only sync, local resize, native album export | n/a | client-side preferences | Nothing for the backend. |
 
 ### Feature types (all client-side; the server sees only a type number)
@@ -114,7 +114,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Web client (React + wasm core) in this repo | include | `frontend: react`; the browser is a full device of the same user: its own device key, paired by QR, syncing from the server like a phone. Login is a passkey, and WebAuthn cross-device authentication is the QR-scanned-by-phone login for free. "Remember this browser" is optional: without it keys stay in memory for the session. | Round 5 (2026-10-17). A companion that mirrors the phone over wifi dies when the phone locks and needs a second sync protocol; a separate user would be another person in every group. |
-| Direct device-to-device blob transfer (WebRTC) | later | an optimisation of the holder re-request path, signalled through the server so it works on any network | Not needed: a re-request through the bucket already moves photos from phone to browser. |
+| Direct device-to-device file transfer (WebRTC) | later | an optimisation of the re-request path, signalled through the server so it works on any network | Not needed: a re-request through the bucket already moves photos from phone to browser. |
 | Shared Rust client core in this repo | include | a `core/` crate in the Bazel workspace, compiled to wasm for the web client in the same build; the mobile repositories pin a commit of this repository and build it with UniFFI | Round 4. One repository versions server contract and client core together. |
 | Database backups | later | private bucket exists once `objectStorage` is declared | Add before live has users. |
 | Email delivery for Kratos codes | include | user-supplied SMTP secret | Required for login. |
@@ -135,7 +135,9 @@ deleted, the blob processing object became a row with an expiry, and values went
 protobuf with a field-level rebase, the CRDT living only inside notes as child objects. Round 8
 (2026-10-26) folded the deletion generation into the sequence counter, dropped the push-side
 cursor check, the per-object version, the server-side cascade and the tombstone special cases.
-Round 9 (2026-10-26) added the `viewer` role. What remains is tuning (the 48-hour window, the
+Round 9 (2026-10-26) added the `viewer` role. Round 10 (2026-10-26) removed the blob and holder
+tables: derived keys, references inside the value, bucket lifecycle rules, re-upload through
+history requests, an upload cap per 48 hours. What remains is tuning (the 48-hour window, the
 value size cap, bundle size), which the implementing session owns.
 
 ## Status

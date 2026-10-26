@@ -98,7 +98,7 @@ nanoservices:
         - { name: LeaveGroup, request: LeaveGroupRequest, response: LeaveGroupResponse }
 
   - name: device
-    description: Owns devices, push tokens, wrapped group keys and key requests; sends silent pushes.
+    description: Owns devices, push tokens, wrapped group keys and key requests; sends silent pushes; tells ledger when a device leaves a group.
     owns:
       tables:
         - name: device
@@ -152,10 +152,8 @@ nanoservices:
       - { message: RemoveDeviceRequest, response: Device }
       - { message: GroupHeadAdvanced }
       - { message: MemberRemoved }
-      - { message: BlobRequested }
       - { message: HistoryRequested }
       - { message: HistoryReady }
-      - { message: CheckHolderCoverageRequest, response: HolderCoverage }
       - { message: PurgeGroupKeysRequest, response: PurgeResult }
       - { message: PurgeUserDevicesRequest, response: PurgeResult }
     sends:
@@ -186,7 +184,6 @@ nanoservices:
             - { name: schema_version, type: int32 }
             - { name: key_id, type: int32 }
             - { name: value, type: bytes, nullable: true }
-            - { name: blob_id, type: uuid, nullable: true }
             - { name: seq, type: int64 }
             - { name: created_by_device, type: uuid }
             - { name: deleted, type: bool }
@@ -216,7 +213,6 @@ nanoservices:
             - { name: to_seq, type: int64 }
             - { name: object_id, type: uuid, nullable: true }
             - { name: status, type: string }
-            - { name: bundle_id, type: uuid, nullable: true }
             - { name: created_at, type: timestamp }
           indexes: [ { columns: [group_id, status] } ]
     schedules:
@@ -231,11 +227,10 @@ nanoservices:
       - { message: RequestHistoryRequest, response: HistoryRequest }
       - { message: ListHistoryRequestsRequest, response: HistoryRequestList }
       - { message: DeviceLeftGroup }
-      - { message: BundleReady }
+      - { message: HistoryFulfilled }
       - { message: PurgeGroupObjectsRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
-      - { message: CheckBlobRequest, response: Blob }
       - { message: GroupHeadAdvanced }
       - { message: ObjectDeleted }
       - { message: HistoryRequested }
@@ -251,66 +246,42 @@ nanoservices:
         - { name: ListHistoryRequests, request: ListHistoryRequestsRequest, response: ListHistoryRequestsResponse }
 
   - name: storage
-    description: Owns blob rows, their holders and their 48 hours in the private bucket; presigns uploads and downloads.
+    description: Presigns uploads and downloads under the caller's group prefix, deletes an object's files on its tombstone and a group's on purge, bounds upload bytes per group.
     owns:
       tables:
-        - name: blob
+        - name: upload_usage
           columns:
-            - { name: id, type: uuid, primaryKey: true }
             - { name: group_id, type: uuid }
-            - { name: kind, type: string }
-            - { name: storage_key, type: string }
-            - { name: sha256, type: bytes }
-            - { name: declared_size, type: int64 }
-            - { name: uploader_device, type: uuid }
-            - { name: request_id, type: uuid, nullable: true }
-            - { name: in_bucket, type: bool }
-            - { name: expires_at, type: timestamp, nullable: true }
-            - { name: created_at, type: timestamp }
-          indexes: [ { columns: [group_id] }, { columns: [expires_at] } ]
-        - name: blob_holder
-          columns:
-            - { name: blob_id, type: uuid }
-            - { name: device_id, type: uuid }
-            - { name: downloaded_at, type: timestamp }
-          indexes: [ { columns: [blob_id, device_id], unique: true }, { columns: [device_id] } ]
+            - { name: hour, type: timestamp }
+            - { name: bytes, type: int64 }
+          indexes: [ { columns: [group_id, hour], unique: true } ]
       configTypes:
-        - name: blob_kind
-          prefix: bkind
+        - name: slot
+          prefix: slot
           fields:
-            - { name: retention_days, type: int32 }
             - { name: max_size_bytes, type: int64 }
         - name: storage_quota
           prefix: squo
           fields:
-            - { name: max_group_bytes, type: int64 }
+            - { name: max_bytes_per_48h, type: int64 }
     externalSystems:
       - name: object_storage
         calls:
           - { name: delete_object, strategy: idempotent }
     schedules:
-      - { name: expire_blobs, every: 1h }
+      - { name: expire_usage, every: 1h }
     handles:
-      - { message: CreateUploadRequest, response: UploadGrant }
-      - { message: ConfirmUploadRequest, response: Blob }
-      - { message: ReuploadBlobRequest, response: UploadGrant }
-      - { message: GetDownloadRequest, response: DownloadGrant }
-      - { message: RequestBlobsRequest }
-      - { message: DropBlobHoldRequest }
-      - { message: CheckBlobRequest, response: Blob }
+      - { message: PresignUploadRequest, response: UploadGrant }
+      - { message: ConfirmUploadRequest }
+      - { message: PresignDownloadRequest, response: DownloadGrant }
       - { message: ObjectDeleted }
       - { message: PurgeGroupBlobsRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
-      - { message: CheckHolderCoverageRequest, response: HolderCoverage }
-      - { message: BlobRequested }
-      - { message: BundleReady }
+      - { message: HistoryFulfilled }
     api:
       service: StorageService
       methods:
-        - { name: CreateUpload, request: CreateUploadRequest, response: CreateUploadResponse }
+        - { name: PresignUpload, request: PresignUploadRequest, response: PresignUploadResponse }
         - { name: ConfirmUpload, request: ConfirmUploadRequest, response: ConfirmUploadResponse }
-        - { name: ReuploadBlob, request: ReuploadBlobRequest, response: ReuploadBlobResponse }
-        - { name: GetDownload, request: GetDownloadRequest, response: GetDownloadResponse }
-        - { name: RequestBlobs, request: RequestBlobsRequest, response: RequestBlobsResponse }
-        - { name: DropBlobHold, request: DropBlobHoldRequest, response: DropBlobHoldResponse }
+        - { name: PresignDownload, request: PresignDownloadRequest, response: PresignDownloadResponse }

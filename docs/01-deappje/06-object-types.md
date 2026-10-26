@@ -2,11 +2,12 @@
 
 Every object is one protobuf message of its type (`01-architecture.md`, "Values and
 conflicts"). Common fields on every type: `author` (user id), `authored_at`, `edited_at`.
-Ordering of lists is a `pos` fractional index on the item. Blob references are `{ blob_id, key,
-sha256, size }` with the blob's content key inside the message. Numbers are spaced by tens per
+Ordering of lists is a `pos` fractional index on the item. A file reference is `{ slot, sha256,
+size, content_key }` inside the message; the bucket key is derived from the object id and the
+slot, and the server never sees the reference. Numbers are spaced by tens per
 feature area; a breaking change takes the next free number in its block.
 
-| # | Type | Parent | Keys | Blobs | Notes |
+| # | Type | Parent | Fields | Files (slots) | Notes |
 |---|---|---|---|---|---|
 | 1 | `group_profile` | none | name, description, avatar | thumbnail | singleton: id = UUIDv5(group_id, "profile") |
 | 2 | `member_profile` | none | display_name, avatar, birthday (month, day, year?) | thumbnail | one per member: id = UUIDv5(group_id, user_id); the calendar derives birthdays from it |

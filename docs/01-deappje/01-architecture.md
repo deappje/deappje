@@ -75,9 +75,8 @@ for another device and hands it back.
   harmless. Directive §6.
 - **Handles**: device registration, push token, device listing (so members can wrap keys for
   new devices), key requests and fulfilment, publishing a rotated key set, fetching wrapped keys;
-  plus three void events: `GroupHeadAdvanced` (from `ledger`), `MemberRemoved` (from `group`),
-  `BlobRequested` (from `storage`), `HistoryRequested` and `HistoryReady` (from `ledger`), each
-  turned into pushes; `PurgeUserDevicesRequest` from `group`'s account purge; `RemoveDeviceRequest`
+  plus the void events `GroupHeadAdvanced`, `HistoryRequested` and `HistoryReady` (from `ledger`)
+  and `MemberRemoved` (from `group`), each turned into pushes; `PurgeUserDevicesRequest` from `group`'s account purge; `RemoveDeviceRequest`
   so a user can drop a dead device, which otherwise blocks garbage collection in its groups.
 - **Sends**: `CheckMembershipRequest`; `DeviceLeftGroup` to `ledger` whenever a device loses its
   keys for a group (member removed, device removed, account purged).
@@ -89,8 +88,8 @@ Owns the relay. Plain executor with three hourly sweeps; the one piece of concur
 the system is here. Member devices are the store: the server keeps a live row for 48 hours and a
 tombstone until every device has acked it.
 
-- **Tables**: `object` (id, group, type, schema version, key id, value, blob id, seq, creator
-  device, `deleted`; the parent is inside the value), `group_head` (group, head seq, `evicted_through_seq`): the
+- **Tables**: `object` (id, group, type, schema version, key id, value, seq, creator device,
+  `deleted`; the parent and any file references are inside the value), `group_head` (group, head seq, `evicted_through_seq`): the
   counter row; `group_device` (group, device, `acked_seq`); `history_request`. Directive §2, §7
   (serialize on a counter row under `FOR UPDATE`).
 - **Push**: one transaction per batch: lock `group_head`; per object compare `base_seq`, the seq
@@ -103,53 +102,57 @@ tombstone until every device has acked it.
   batch, and the server does no cascade, since it neither sees parents nor holds children older
   than 48 hours. A tombstone's deletion mark is its own seq; there is no second counter, no "pull
   before you push" check, and no rule about editing a tombstone: a stale base conflicts on the
-  seq, and a deliberate un-delete is the client's call. Commit,
-  then `GroupHeadAdvanced` and, per deleted object with a blob, `ObjectDeleted` (invariant 7).
+  seq, and a deliberate un-delete is the client's call. Commit, then `GroupHeadAdvanced` and,
+  per tombstone, `ObjectDeleted` so `storage` drops the object's files (invariant 7).
 - **Pull and ack**: `PullChangesRequest` returns entries with `seq > cursor`, tombstones included,
   with the minimum acked cursor and the eviction floor; a device whose cursor is below the floor
   asks a member device for the gap. After applying a pull the device `AckSeq`s the head it
   received; the server keeps the minimum per group, hard-deletes tombstones at or below it, and
   hands the minimum back so devices drop their own tombstones. An ack that goes backwards means a
   restored backup and forces a resync. `GetHeadsRequest` returns `(group, head, min ack)`.
-- **History**: `RequestHistoryRequest` records a range and wakes every key-holding device through
-  `device`; one of them uploads a `bundle` blob; `storage` reports `BundleReady`; the requester is
-  woken. No server-side retries: the requester asks again. This is how a new member, a new device
-  or a long-offline device gets anything older than 48 hours.
+- **History**: `RequestHistoryRequest` records a range, or one object, and wakes every
+  key-holding device through `device`; one of them uploads a bundle, or the object's files, to
+  the derived keys; `storage` reports `HistoryFulfilled`; the requester is woken. No server-side
+  retries: the requester asks again. This is how a new member, a new device or a long-offline
+  device gets anything older than 48 hours, and how an expired photo comes back.
 - **Sweeps**: `evict_objects` (live rows older than 48h, floor advances), `gc_tombstones`
   (`seq ≤` min acked cursor), `expire_history_requests` (48h).
-- **Sends**: `CheckMembershipRequest`, `CheckBlobRequest`, `GroupHeadAdvanced`, `ObjectDeleted`,
-  `HistoryRequested`, `HistoryReady`.
+- **Sends**: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`,
+  `HistoryReady`.
 - **API**: `LedgerService`.
 
 ### `storage`
 
-Owns blobs: a row per encrypted file, who holds a copy, and its 48 hours in the private bucket.
-Plain executor with one hourly sweep; no state machine.
+Presigns bucket access under the caller's group prefix and cleans up. No table of blobs: a file's
+reference (slot, hash, size, content key) is inside the owning object's encrypted value, its key
+is derived (`g/<group>/o/<object>/<slot>`, or `g/<group>/bundle/<request>`), and the bucket's
+lifecycle rules expire `full`, `file` and `bundle` after two days while `thumb` stays.
 
-- **Tables**: `blob` (group, kind, key, sha256, size, uploader, `request_id` for bundles,
-  `in_bucket`, `expires_at`), `blob_holder` (blob, device). Directive §2.
-- **Config type `blob_kind`**: `full` (2 days, 25 MB), `thumbnail` (3650 days, 200 KB),
-  `attachment` (2 days, 25 MB), `bundle` (2 days, 256 MB). **`storage_quota`**: 20 GiB per group
-  of what is in the bucket. Both edited by a human.
-- **External**: `delete_object`, `idempotent`, dispatched from handlers and the sweep; a failed
-  delete is retried by the next sweep. Presigning and `HEAD` are reads.
-- **Handles**: `CreateUploadRequest` (row + presigned PUT), `ConfirmUploadRequest` (`HEAD`, size
-  check, `in_bucket`, expiry; a `bundle` reports `BundleReady` to `ledger`), `ReuploadBlobRequest`
-  (a holder re-uploads to the same key), `GetDownloadRequest` (presigned GET if in the bucket,
-  record the holder, delete the bucket copy once every key-holding device has it, else `gone`),
-  `RequestBlobsRequest` (wake the holders of a batch of blobs), `DropBlobHoldRequest`,
-  `CheckBlobRequest` (from `ledger`), `ObjectDeleted` (from `ledger`), `PurgeGroupBlobsRequest`.
-- **Sweep**: `expire_blobs`, hourly: delete expired bucket copies; rows and holders stay as the
-  registry for re-requests.
-- **Sends**: `CheckMembershipRequest`, `CheckHolderCoverageRequest`, `BlobRequested`,
-  `BundleReady`.
+- **Table**: `upload_usage` (group, hour, bytes): the quota is a cap on bytes uploaded per group
+  per rolling 48 hours (20 GiB), which is what a cache needs bounded. Directive §2.
+- **Config types**: `slot` (size cap per slot), `storage_quota`. Edited by a human.
+- **External**: `delete_object`, `idempotent`, dispatched from handlers. Presigning, `HEAD` and
+  prefix listing are reads.
+- **Handles**: `PresignUploadRequest` (member, role unless a bundle, key under the prefix, slot
+  cap, quota, presigned PUT), `ConfirmUploadRequest` (`HEAD`; with a request id, tell `ledger`
+  the request is fulfilled), `PresignDownloadRequest` (member, `HEAD`, presigned GET or `gone`),
+  `ObjectDeleted` (from `ledger`, per tombstone: delete the object's prefix), `PurgeGroupBlobsRequest`
+  (delete the group's prefix in batches).
+- **Sweep**: `expire_usage`, hourly.
+- **Sends**: `CheckMembershipRequest`, `HistoryFulfilled`.
 - **API**: `StorageService`.
+
+A file that has expired from the bucket is fetched like old history: the device asks `ledger`
+for the object, every key holder is woken, one re-uploads the files to the same keys, and the
+requester is woken. No holder bookkeeping, and no early deletion: two days is the bound.
 
 ## What the server computes
 
-Five things, and nothing else: whether a user is a member of a group; the next sequence number;
-whether an object's seq still matches the one a device edited from; the minimum acked cursor of
-a group; whether a blob is past its retention. Every other byte is relayed, never read.
+Five things, and nothing else: whether a user is a member of a group, and its role; the next
+sequence number; whether an object's seq still matches the one a device edited from; the minimum
+acked cursor of a group; whether a key is under the caller's group prefix and within its slot's
+cap and the group's upload quota. Every other byte is relayed, never read. Expiry is the
+bucket's.
 
 ## Values and conflicts (client core)
 
@@ -199,7 +202,7 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
   user (own device key, paired by QR, syncs from the server), never a mirror of the phone; login
   is a passkey, which with WebAuthn cross-device authentication is itself a QR scanned by the
   phone. Browser storage: object and blob ciphertext at rest in the Origin Private File System
-  (blobs byte for byte as the bucket holds them, so the browser is a real holder), decrypted into
+  (files byte for byte as the bucket holds them, so the browser can re-upload them), decrypted into
   memory by the core at startup; the device key is a non-extractable WebCrypto key to which the
   core delegates the X25519 step of HPKE; `navigator.storage.persist()` is requested; eviction by
   the browser only costs a dropped hold, a re-pair, or a history request. The core is a `core/`
@@ -249,8 +252,6 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 | GroupHeadAdvanced | (void) | ledger | device |
 | HistoryRequested | (void) | ledger | device |
 | HistoryReady | (void) | ledger | device |
-| BlobRequested | (void) | storage | device |
-| CheckHolderCoverageRequest | HolderCoverage | storage | device |
 | DeviceLeftGroup | (void) | device | ledger |
 | PushObjectsRequest | PushResult | api | ledger |
 | PullChangesRequest | ChangeSet | api | ledger |
@@ -258,18 +259,14 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 | GetHeadsRequest | HeadList | api | ledger |
 | RequestHistoryRequest | HistoryRequest | api | ledger |
 | ListHistoryRequestsRequest | HistoryRequestList | api | ledger |
-| BundleReady | (void) | storage | ledger |
+| HistoryFulfilled | (void) | storage | ledger |
 | ObjectDeleted | (void) | ledger | storage |
-| CheckBlobRequest | Blob | ledger | storage |
-| CreateUploadRequest | UploadGrant | api | storage |
-| ConfirmUploadRequest | Blob | api | storage |
-| ReuploadBlobRequest | UploadGrant | api | storage |
-| GetDownloadRequest | DownloadGrant | api | storage |
-| RequestBlobsRequest | (void) | api | storage |
-| DropBlobHoldRequest | (void) | api | storage |
+| PresignUploadRequest | UploadGrant | api | storage |
+| ConfirmUploadRequest | (void) | api | storage |
+| PresignDownloadRequest | DownloadGrant | api | storage |
 
 Every cross-nanoservice message binds Directive §7. The only derived state that crosses is a
-boolean or a number (`MembershipCheck`, `Blob.present`, `HolderCoverage`) or an id; no nanoservice re-derives another's rule.
+boolean, a role or an id (`MembershipCheck`, `HistoryFulfilled`); no nanoservice re-derives another's rule.
 
 ## What is deliberately not on the server
 

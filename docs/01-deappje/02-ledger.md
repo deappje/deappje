@@ -17,8 +17,7 @@ nanoservice forgets everything live after 48 hours. Directive §2 per table, §7
 | type | int32 | client-defined type number |
 | schema_version | int32 | |
 | key_id | int32 | which group key encrypts `value` |
-| value | bytes, nullable | ciphertext (≤ 1 MiB); null on a tombstone |
-| blob_id | uuid, nullable | a `storage` blob of the same group; null on a tombstone |
+| value | bytes, nullable | ciphertext (≤ 1 MiB); null on a tombstone; a blob reference (slot, hash, size, content key) is inside it |
 | seq | int64 | per group, strictly increasing; an edit takes a new seq, so a row's seq identifies its state |
 | created_by_device | uuid | |
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark |
@@ -61,21 +60,18 @@ A device that never acks blocks garbage collection for its group until it is rem
 | to_seq | int64 | |
 | object_id | uuid, nullable | a request for one object instead of a range |
 | status | string | `pending`, `fulfilled` |
-| bundle_id | uuid, nullable | the `storage` blob of kind `bundle` |
 | created_at | timestamp | |
 
 Index `(group_id, status)`. Rows older than 48 hours are dropped by the sweep.
 
 ## Push
 
-`PushObjectsRequest { group_id, objects: [{ id, type, schema_version, key_id, value?, blob_id?,
-base_seq, deleted }] }`. `base_seq` is the seq of the row the device edited
+`PushObjectsRequest { group_id, objects: [{ id, type, schema_version, key_id, value?, base_seq,
+deleted }] }`. `base_seq` is the seq of the row the device edited
 from, 0 for a new object.
 
 Before the transaction: `CheckMembershipRequest`, and the role must be `admin` or `member` (a
-`viewer` is refused); for every `blob_id`, `CheckBlobRequest` must
-answer `present` for this group (remote I/O outside the transaction, invariant 7). A `value`
-over 1 MiB refuses the whole batch.
+`viewer` is refused). A `value` over 1 MiB refuses the whole batch.
 
 One transaction:
 
@@ -83,7 +79,7 @@ One transaction:
 2. Per object, in request order, read the current row:
    - **No row** (new, or evicted) ⇒ accept.
    - **`base_seq == seq`** ⇒ accept: write the object at `seq = head + 1`, head advances. If
-     `deleted`: null `value` and `blob_id`, `deleted = true`.
+     `deleted`: null `value`, `deleted = true`.
    - **Mismatch** ⇒ conflict `{ id, current }` with the stored row as it is, tombstone or not.
 3. Commit.
 
@@ -93,7 +89,8 @@ the tombstone's seq as its base is un-deleting, which is the client's decision. 
 base is stale conflicts like any edit and is pushed again with the current seq.
 
 After commit: `GroupHeadAdvanced { group_id, head_seq, writer_device }` once; `ObjectDeleted
-{ group_id, object_id, blob_id }` per tombstoned row that had a blob.
+{ group_id, object_id }` per tombstone, so `storage` can delete the object's files; the server
+does not know which objects have any.
 
 Response: `PushResult { accepted: [{ id, seq }], conflicts: [{ id, current }], head_seq }`. The
 objects themselves come back on the next pull with everyone else's; the device skips entries it
@@ -144,11 +141,14 @@ or there are no rows.
 object_id }` to `device`, which wakes every key-holding device of the group except the requester.
 A holder that wakes lists pending requests (`ListHistoryRequestsRequest { group_id }`), packs the
 entries it holds in the range (ciphertext, each with id, type, schema_version, key_id, seq,
-deleted, blob_id; tombstones included), newest first up to the bundle size cap,
-encrypts the bundle under the current group key named in its header, uploads it as a blob of
-kind `bundle` with `request_id`, and confirms. `storage` then sends `BundleReady { request_id,
-bundle_id }`; the handler marks the row `fulfilled` and sends `HistoryReady { request_id,
-requester_device, bundle_id }` to `device`, which wakes the requester. A late holder sees the row
+deleted; tombstones included), newest first up to the bundle size cap, encrypts the bundle under
+the current group key named in its header, uploads it to `g/<group>/bundle/<request_id>` with
+`request_id` on the presign, and confirms. `storage` then sends `HistoryFulfilled
+{ request_id }`; the handler marks the row `fulfilled` and sends `HistoryReady { request_id,
+requester_device }` to `device`, which wakes the requester, who downloads the bundle at the key
+derived from the request id. A request for one object (`object_id` set) is answered the same
+way, except the holder re-uploads that object's files to their own keys and confirms with the
+`request_id`; the requester then downloads them directly. A late holder sees the row
 is no longer pending and does nothing; a duplicate bundle is harmless and expires in 48 hours.
 The requester ingests the bundle like a `ChangeSet` (an entry it already holds at a higher
 seq is ignored; a tombstone wins) and, if the bundle stops short of `from_seq`, asks again
@@ -156,7 +156,9 @@ for the rest, up to the lowest seq it received. No retries, no timeouts on the s
 asks again, and the client shows "waiting for a member to come online".
 
 This is the only way history older than 48 hours reaches a device: a new member, a new device, a
-device that was offline longer than the window, or a device scrolling past what it holds.
+device that was offline longer than the window, a device scrolling past what it holds, or a
+device that finds a photo's file expired from the bucket. Nothing records who answered: the
+uploader was a key holder, or it could not have encrypted the upload, and nothing reads it later.
 
 ## Sweeps (schedules, hourly, idempotent)
 
@@ -181,7 +183,7 @@ whatever the group's age.
 | RequestHistoryRequest | HistoryRequest | api |
 | ListHistoryRequestsRequest | HistoryRequestList | api |
 | DeviceLeftGroup | (void) | device: delete the `group_device` row |
-| BundleReady | (void) | storage |
+| HistoryFulfilled | (void) | storage |
 | PurgeGroupObjectsRequest | PurgeResult | group |
 
 `PurgeGroupObjectsRequest { group_id }` (from `group`'s purge pass): delete every `object`,
@@ -192,7 +194,6 @@ a member" and purges locally. Idempotent.
 | Sends | Response | To |
 |---|---|---|
 | CheckMembershipRequest | MembershipCheck | group |
-| CheckBlobRequest | Blob | storage |
 | GroupHeadAdvanced | (void) | device |
 | ObjectDeleted | (void) | storage |
 | HistoryRequested | (void) | device |
@@ -202,7 +203,7 @@ a member" and purges locally. Idempotent.
 
 `LedgerService`: PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory,
 ListHistoryRequests. The api crate maps the proto entry to the plain Rust struct one to one;
-`value` and `blob_id` pass through untouched.
+`value` passes through untouched.
 
 ## Tests
 

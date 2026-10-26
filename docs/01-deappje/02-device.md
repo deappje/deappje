@@ -99,7 +99,7 @@ reads, and no person approves it. The first device in a group is the creator's, 
 |---|---|---|
 | device key | one X25519 keypair per device, generated on the device, private half in the Secure Enclave-backed keychain / Android Keystore / a non-extractable WebCrypto key; the public half is `device.public_key` | X25519 |
 | group key | 32 random bytes per `(group_id, key_id)`, minted on a member's device | XChaCha20-Poly1305 for object values, random 24-byte nonce, associated data = the plaintext metadata (`group_id`, `id`, `type`, `schema_version`, `key_id`) so the server cannot re-label a ciphertext |
-| blob key | 32 random bytes per blob, stored inside the referencing object's document | XChaCha20-Poly1305 over the blob; unchanged by rotation, so a holder re-uploads the same bytes |
+| blob key | 32 random bytes per file, stored with the file's slot, hash and size inside the owning object's value | XChaCha20-Poly1305 over the file; unchanged by rotation, so a holder re-uploads the same bytes to the same key |
 
 A wrap (`wrapped_key.wrapped`) is HPKE (RFC 9180) in **Auth mode**: DHKEM(X25519, HKDF-SHA256),
 HKDF-SHA256, ChaCha20-Poly1305, sender = the wrapping device's static key, recipient = the target
@@ -139,11 +139,9 @@ holds all of them.
 | GetWrappedKeysRequest | WrappedKeyList | every wrapped key for the calling device, optionally one group |
 | GroupHeadAdvanced | (void) | silent push to every member device except the writer's |
 | MemberRemoved | (void) | delete wrapped keys; send `DeviceLeftGroup` per device of the user; push `rotate` to remaining devices |
-| BlobRequested | (void) | push `blobs` wake-up (the blob ids) to every device in the message's `holders` list |
 | HistoryRequested | (void) | from `ledger`: push `history` wake-up (request id, range) to every key-holder device of the group except the requester |
 | HistoryReady | (void) | from `ledger`: push `bundle` wake-up (request id, bundle id) to the requester device |
 | RemoveDeviceRequest | Device | the owner removes one of their devices: delete its `wrapped_key` and `key_request` rows and the device; send `DeviceLeftGroup` per group it held a key for |
-| CheckHolderCoverageRequest | HolderCoverage | from `storage`'s pass: `complete` = every device holding a key for `group_id` is in `device_ids`. A boolean derived from own tables, nothing more crosses. |
 | PurgeGroupKeysRequest | PurgeResult | from `group`'s purge pass: delete every `wrapped_key` and `key_request` row of the group; answer `remaining`. Idempotent. |
 | PurgeUserDevicesRequest | PurgeResult | from `group`'s account purge: delete every `device`, `wrapped_key` and `key_request` row of the user's devices; answer `remaining`. Idempotent. |
 
