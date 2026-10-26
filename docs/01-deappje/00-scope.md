@@ -34,7 +34,7 @@ These were settled in discussion before this plan was written; they are not open
 | Blobs | The bucket is a 48-hour cache for full-size blobs and attachments, extended on every download and emptied early once every key-holding device of the group has downloaded it; after that a blob can be re-requested from any device that downloaded it (the server records holders; a device that evicts under storage pressure tells the server; the author's camera roll is the holder of last resort). Thumbnails are kept long-term. Each group has a 20 GiB cap on what is in the bucket. | Photos are the only real cost line, and every device that viewed a photo already holds it. |
 | Change detection | A per-group commit log: every accepted write takes the next sequence number of its group, assigned under a locked counter row. Clients keep a cursor per group. A pull also returns the eviction floor; a cursor below it means the gap comes from a member device. | One query answers "anything new?"; batched across groups in one call. |
 | Conflicts | Per-object version with compare-and-set on push; a conflict returns the current row. The client re-applies its changed fields onto the returned row and pushes again; the same field changed on both sides goes to the later push. Deletes always win. No conflicted copies. | Round 7. The server cannot merge ciphertext; a field-level rebase on the device is enough for small objects edited a field at a time, and needs no CRDT. |
-| Deletes | A deletion generation per group: the server increments it once per push that deletes and stamps the tombstones with it. A push carries the device's generation and is refused if behind. After applying a pull a device acks the generation it received; the server keeps the minimum over the group's devices, hard-deletes tombstones below it, and tells every device the minimum so they drop theirs. Acks are per device and happen after a pull, never by pushing. | Round 7, the user's design. Nothing deleted survives anywhere once everyone has seen the delete, and nobody can resurrect it, because a device cannot push before it has applied every delete. |
+| Deletes | A tombstone's deletion mark is its own seq; the counter row remembers the seq of the latest one. A push carries the device's cursor and is refused if it is below that, so a device cannot write before it has applied every delete. After applying a pull a device acks its cursor; the server keeps the minimum over the group's devices, hard-deletes tombstones at or below it, and tells every device the minimum so they drop theirs. Acks are per device and happen after a pull, never by pushing. | Round 7, the user's design, folded into the sequence counter in round 8 (2026-10-26): the separate deletion generation only existed to keep acks rare, which server-side acks make unnecessary. |
 | Children | No child lists or counts on parents; `parent_id` on the child, indexed. | Derived state on the parent is a conflict magnet. |
 | Fetch shape | Catch-up since cursor from the server's 48-hour window; everything older as a history bundle from a member device: a new member, a new device, a device offline longer than the window, or scrolling past what the device holds. | The server has nothing older to serve. |
 | Keys | A group key per group, a keyring with key ids; rotate on member removal; new devices get keys wrapped for them by an existing member's device. New members get full history. | MLS is designed to deny history to new members, the opposite of the requirement. |
@@ -79,7 +79,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Push with CAS, pull since cursor, heads for all groups | include | | The core. |
 | 48-hour window; member devices are the store | include | hourly eviction of live rows; the floor is returned on every pull | Round 7. Postgres holds two days of activity per group, whatever the group's age. |
 | History bundles from member devices | include | `RequestHistory` wakes every key holder; one uploads a `bundle` blob; the requester is woken; no server retries | Round 7. Replaces per-type backfill and id-list reconciliation. |
-| Deletion generation with per-device ack; hard delete once everyone acked | include | see the decision table | Round 7. |
+| Tombstones until every device's acked cursor passes them; hard delete after | include | see the decision table | Round 7, simplified round 8. |
 | Per-type backfill, id-list reconciliation, tombstone retention by time | exclude | | Round 7. Superseded. |
 | Server-side cascade on parent delete | include | tombstones the subtree in the same transaction | The server sees `parent_id`. |
 | Per-object ACL within a group | exclude | | A group is the permission boundary. |
@@ -130,11 +130,11 @@ requests, account deletion, a 20 GiB per-group cap with 48-hour blob retention, 
 core living in this repository. Round 5 (2026-10-17) made the browser a full device paired by
 QR and removed silent same-user approval. Round 6 (2026-10-17) made the timeline a projection of
 the log. Round 7 (2026-10-26) made member devices the store: the server keeps 48 hours, history
-comes from member devices as bundles, deletion is a per-group generation with per-device acks,
-the blob processing object became a row with an expiry, and values went back to plain protobuf
-with a field-level rebase, the CRDT living only inside notes as child objects. What remains is
-tuning (the 48-hour window, the value size cap, bundle size), which the implementing session
-owns.
+comes from member devices as bundles, deletion is acked per device so tombstones can be hard
+deleted, the blob processing object became a row with an expiry, and values went back to plain
+protobuf with a field-level rebase, the CRDT living only inside notes as child objects. Round 8
+(2026-10-26) folded the deletion generation into the sequence counter. What remains is tuning
+(the 48-hour window, the value size cap, bundle size), which the implementing session owns.
 
 ## Status
 

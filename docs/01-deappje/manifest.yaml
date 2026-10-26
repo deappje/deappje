@@ -172,7 +172,7 @@ nanoservices:
         - { name: RemoveDevice, request: RemoveDeviceRequest, response: RemoveDeviceResponse }
 
   - name: ledger
-    description: The relay — 48 hours of ciphertext per group, counters, tombstones until acked, per-device acks, history requests.
+    description: The relay — 48 hours of ciphertext per group, the counter, tombstones until acked, per-device acked cursors, history requests.
     owns:
       tables:
         - name: object
@@ -188,24 +188,24 @@ nanoservices:
             - { name: version, type: int64 }
             - { name: seq, type: int64 }
             - { name: created_by_device, type: uuid }
-            - { name: deleted_generation, type: int64, nullable: true }
+            - { name: deleted, type: bool }
             - { name: updated_at, type: timestamp }
           indexes:
             - { columns: [group_id, seq], unique: true }
             - { columns: [parent_id] }
-            - { columns: [group_id, deleted_generation] }
+            - { columns: [group_id, deleted, seq] }
             - { columns: [updated_at] }
         - name: group_head
           columns:
             - { name: group_id, type: uuid, primaryKey: true }
             - { name: head_seq, type: int64 }
-            - { name: generation, type: int64 }
+            - { name: last_delete_seq, type: int64 }
             - { name: evicted_through_seq, type: int64 }
         - name: group_device
           columns:
             - { name: group_id, type: uuid }
             - { name: device_id, type: uuid }
-            - { name: acked_generation, type: int64, nullable: true }
+            - { name: acked_seq, type: int64, nullable: true }
             - { name: updated_at, type: timestamp }
           indexes: [ { columns: [group_id, device_id], unique: true }, { columns: [device_id] } ]
         - name: history_request
@@ -227,7 +227,7 @@ nanoservices:
     handles:
       - { message: PushObjectsRequest, response: PushResult }
       - { message: PullChangesRequest, response: ChangeSet }
-      - { message: AckGenerationRequest, response: AckResult }
+      - { message: AckSeqRequest, response: AckResult }
       - { message: GetHeadsRequest, response: HeadList }
       - { message: RequestHistoryRequest, response: HistoryRequest }
       - { message: ListHistoryRequestsRequest, response: HistoryRequestList }
@@ -246,7 +246,7 @@ nanoservices:
       methods:
         - { name: PushObjects, request: PushObjectsRequest, response: PushObjectsResponse }
         - { name: PullChanges, request: PullChangesRequest, response: PullChangesResponse }
-        - { name: AckGeneration, request: AckGenerationRequest, response: AckGenerationResponse }
+        - { name: AckSeq, request: AckSeqRequest, response: AckSeqResponse }
         - { name: GetHeads, request: GetHeadsRequest, response: GetHeadsResponse }
         - { name: RequestHistory, request: RequestHistoryRequest, response: RequestHistoryResponse }
         - { name: ListHistoryRequests, request: ListHistoryRequestsRequest, response: ListHistoryRequestsResponse }

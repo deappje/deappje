@@ -4,8 +4,8 @@
 
 - `group`: invite acceptance rules, subgroup subset rule, last-admin rule.
 - `device`: rotation batch acceptance, member checks on wrap.
-- `ledger`: the CAS matrix, the generation rule, cascade collection, eviction floor arithmetic,
-  response shaping for pull.
+- `ledger`: the CAS matrix, the stale-cursor rule, cascade collection, eviction floor
+  arithmetic, response shaping for pull.
 - `storage`: quota and size cap at the boundary, expiry arithmetic, coverage ⇒ delete.
 
 ## `effecttest` audits (one per adapter, in each nanoservice's `tests/effects_audit.rs`)
@@ -26,11 +26,12 @@ definitive rejection is classified as such.
   single-use invite.
 - **Sequence integrity**: N tasks push to one group concurrently; the resulting `seq` set is
   `1..=N` with no gaps; a reader polling during the run never observes a seq it later misses.
-- **Delete semantics**: tombstone cascade; delete wins over a concurrent edit; a push with a
-  stale generation is refused and succeeds after a pull; the **ack invariant** under random
-  interleavings of push, delete, pull, ack and evict across N devices (every tombstone the gc
-  removed was acked by every device, and no device ever holds a live copy of an object past its
-  generation); an ack that goes backwards gets `resync_required`.
+- **Delete semantics**: tombstone cascade; delete wins over a concurrent edit; a push from a
+  cursor below the last delete is refused and succeeds after a pull; the **ack invariant** under
+  random interleavings of push, delete, pull, ack and evict across N devices (every tombstone the
+  gc removed was at or below every device's acked cursor, and no device ever holds a live copy of
+  an object whose tombstone it has acked past); an ack that goes backwards gets
+  `resync_required`.
 - **History**: a device with a cursor below the floor requests the gap; a simulated holder
   uploads a bundle; `BundleReady` fulfils the request once; a late bundle is ignored; the
   requester ends with the same rows as the holder.

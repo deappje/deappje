@@ -26,7 +26,7 @@ feature area; a breaking change takes the next free number in its block.
 | 50 | `event` | none | title, starts, ends, all_day, location, geo, yearly | | a birthday for someone not in the app is a yearly all-day event |
 | 60 | `poll` | none | question, kind (`choice` / `dates`), options (repeated { id, text or slot, pos }), multi, closes_at | | the datepicker is kind `dates` |
 | 61 | `vote` | poll | answers (repeated { option_id, answer }) | | one per user: id = UUIDv5(poll_id, user_id) |
-| 70 | `message` | none, or a message (thread) | text, reply_to | | photos as children; an edit is a new version, deletion a tombstone stamped with the group's deletion generation |
+| 70 | `message` | none, or a message (thread) | text, reply_to | | photos as children; an edit is a new version, deletion a tombstone |
 | 80 | `venue` | none | name, category (`bar` / `pub` / `club` / `restaurant` / `other`), address, geo, url, notes | | recommendations; comments and reactions are children |
 
 Derived on the client, never stored: balances, poll tallies, the calendar (events plus member
