@@ -9,11 +9,11 @@ feature area; a breaking change takes the next free number in its block.
 
 | # | Type | Parent | Fields | Files (slots) | Notes |
 |---|---|---|---|---|---|
-| 1 | `group_profile` | none | name, description, avatar | thumbnail | singleton: id = UUIDv5(group_id, "profile") |
-| 2 | `member_profile` | none | display_name, avatar, birthday (month, day, year?) | thumbnail | one per member: id = UUIDv5(group_id, user_id); the calendar derives birthdays from it |
+| 1 | `group_profile` | none | name, description, avatar | thumb | singleton: id = UUIDv5(group_id, "profile") |
+| 2 | `member_profile` | none | display_name, avatar, birthday (month, day, year?) | thumb | one per member: id = UUIDv5(group_id, user_id); the calendar derives birthdays from it |
 | 3 | `invite_secret` | none | invite_id, secret | | lets any holder verify a key request that came through the invite (`02-device.md`) |
 | 10 | `post` | none | text | | timeline entry; photos are children |
-| 11 | `photo` | post, album or message | width, height, taken_at, caption, full, thumbnail | full, thumbnail | the one photo type everywhere |
+| 11 | `photo` | post, album or message | width, height, taken_at, caption, full, thumb | full, thumb | the one photo type everywhere |
 | 12 | `album` | none | title, cover_photo_id | | |
 | 13 | `comment` | any | text | | |
 | 14 | `reaction` | any | emoji | | one per user per target: id = UUIDv5(parent_id, user_id); changing it is an edit |
@@ -23,7 +23,7 @@ feature area; a breaking change takes the next free number in its block.
 | 31 | `note_update` | note | update (bytes: one `yrs` update), seq_hint | | append-only, never edited; one per editing session per device; the device applies all children in any order into one `yrs` document; a tombstoned note cascades to them |
 | 40 | `expense` | none | amount (minor units), currency, paid_by, participants (repeated), split (`equal` / `weights` / `exact`), kind (`expense` / `ticket`), description, date | | shares and balances are derived; a ticket is an equal split, one share per participant |
 | 41 | `settlement` | none | from, to, amount, currency, date | | records a payment made outside the app; money never moves here |
-| 42 | `ticket_share` | expense | holder (member id, or a name for a plus-one), status (`held` / `offered` / `used`) | attachment | the ticket file for one participant; a transfer is a holder change plus the matching participant change on the expense; the client pins the attachment of every share whose holder is the local user (downloaded at once, never evicted) so the gate needs no network |
+| 42 | `ticket_share` | expense | holder (member id, or a name for a plus-one), status (`held` / `offered` / `used`) | file | the ticket file for one participant; a transfer is a holder change plus the matching participant change on the expense; the client pins the attachment of every share whose holder is the local user (downloaded at once, never evicted) so the gate needs no network |
 | 50 | `event` | none | title, starts, ends, all_day, location, geo, yearly | | a birthday for someone not in the app is a yearly all-day event |
 | 60 | `poll` | none | question, kind (`choice` / `dates`), options (repeated { id, text or slot, pos }), multi, closes_at | | the datepicker is kind `dates` |
 | 61 | `vote` | poll | answers (repeated { option_id, answer }) | | one per user: id = UUIDv5(poll_id, user_id) |
