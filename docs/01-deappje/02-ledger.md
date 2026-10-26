@@ -181,6 +181,14 @@ This is the only way history older than 48 hours reaches a device: a new member,
 device that was offline longer than the window, a device scrolling past what it holds, or a
 device that finds a photo's file expired from the bucket.
 
+When nobody holds it: a claimer pushes what it has and reports `complete`; what it lacked does
+not arrive, and the requester cannot tell "never existed" from "lost" and does not need to. A
+later reference to an unknown id becomes a one-object request, which another holder may answer;
+asking again is always safe because re-inserts skip existing rows. Thumbnails never expire from
+the bucket, so an album keeps its grid even when a full size is gone for good. A group loses an
+object only when every member device that ever synced it is gone or wiped; export is the backup,
+and a member may keep a device that reduces nothing (`00-scope.md`, keeper device).
+
 ## Sweeps (schedules, hourly, idempotent)
 
 - `evict_objects`: delete live rows with `uploaded_at < now - 48h`, batched 10k per statement;
