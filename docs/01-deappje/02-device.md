@@ -138,8 +138,11 @@ holds all of them.
 | PublishWrappedKeysRequest | WrappedKeyList | batch insert, rotation rule above |
 | GetWrappedKeysRequest | WrappedKeyList | every wrapped key for the calling device, optionally one group |
 | GroupHeadAdvanced | (void) | silent push to every member device except the writer's |
-| MemberRemoved | (void) | delete wrapped keys; push `rotate` to remaining devices |
-| BlobRequested | (void) | push `blob` wake-up to every device in the message's `holders` list (the uploader and every device that downloaded it) |
+| MemberRemoved | (void) | delete wrapped keys; send `DeviceLeftGroup` per device of the user; push `rotate` to remaining devices |
+| BlobRequested | (void) | push `blobs` wake-up (the blob ids) to every device in the message's `holders` list |
+| HistoryRequested | (void) | from `ledger`: push `history` wake-up (request id, range) to every key-holder device of the group except the requester |
+| HistoryReady | (void) | from `ledger`: push `bundle` wake-up (request id, bundle id) to the requester device |
+| RemoveDeviceRequest | Device | the owner removes one of their devices: delete its `wrapped_key` and `key_request` rows and the device; send `DeviceLeftGroup` per group it held a key for |
 | CheckHolderCoverageRequest | HolderCoverage | from `storage`'s pass: `complete` = every device holding a key for `group_id` is in `device_ids`. A boolean derived from own tables, nothing more crosses. |
 | PurgeGroupKeysRequest | PurgeResult | from `group`'s purge pass: delete every `wrapped_key` and `key_request` row of the group; answer `remaining`. Idempotent. |
 | PurgeUserDevicesRequest | PurgeResult | from `group`'s account purge: delete every `device`, `wrapped_key` and `key_request` row of the user's devices; answer `remaining`. Idempotent. |
@@ -147,6 +150,7 @@ holds all of them.
 | Sends | Response | To |
 |---|---|---|
 | CheckMembershipRequest | MembershipCheck | group |
+| DeviceLeftGroup | (void) | ledger: `{ group_id, device_id }` whenever a device loses its keys for a group (`MemberRemoved`, `RemoveDeviceRequest`, `PurgeUserDevicesRequest`), so `ledger` stops waiting for its ack |
 
 Push fan-out needs the member list; `device` asks `group` (`ListMembersRequest` is an api
 message, so `device` uses `CheckMembershipRequest` per candidate device it already knows from
@@ -170,7 +174,7 @@ Token invalidation (APNs 410, FCM `UNREGISTERED`) clears `push_token` through th
 ## API
 
 `DeviceService`: RegisterDevice, SetPushToken, ListDevices, RequestGroupKeys, ListKeyRequests,
-FulfilKeyRequest, PublishWrappedKeys, GetWrappedKeys.
+FulfilKeyRequest, PublishWrappedKeys, GetWrappedKeys, RemoveDevice.
 
 ## Tests
 

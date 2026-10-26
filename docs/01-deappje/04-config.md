@@ -7,7 +7,7 @@ or lives on the client.
 
 | field | type | meaning |
 |---|---|---|
-| retention_days | int32 | how long a blob stays in the bucket after upload or last access |
+| retention_days | int32 | how long a blob stays in the bucket after a confirmed upload |
 | max_size_bytes | int64 | refused above this at `CreateUploadRequest` |
 
 Seed, `config/base/storage/blob_kind.json`, namespace `default`:
@@ -17,6 +17,7 @@ Seed, `config/base/storage/blob_kind.json`, namespace `default`:
 | full | 2 | 26214400 |
 | thumbnail | 3650 | 204800 |
 | attachment | 2 | 26214400 |
+| bundle | 2 | 268435456 |
 
 Two days is the user's choice: the bucket is a 48-hour cache, and every device that downloaded a
 blob is a holder it can be re-requested from.
@@ -38,6 +39,6 @@ Seed, `config/base/storage/storage_quota.json`, namespace `default`: one entry, 
 ## Not config
 
 - Object types and their schemas: client-defined; the server stores a number.
-- Tombstone retention (90 days) and worker policy: constants in the nanoservice, identical across
-  replicas by construction (Directive invariant 4).
+- The 48-hour object window, the 1 MiB value cap and the purge worker policies: constants in the
+  nanoservice, identical across replicas by construction (Directive invariant 4).
 - Push payload shapes: constants in `device`.

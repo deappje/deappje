@@ -18,11 +18,11 @@
 
 ## Fit gate
 
-**Fits.** The backend is a durable store in Postgres (groups, memberships, device keys, an
-append-only object log with tombstones) plus blobs in the platform's private bucket, with one
-genuine lifecycle (a blob's retention and re-upload cycle). Everything that needs plaintext —
-merge, validation, derived state, rendering — runs on the device, which is the point of the
-design. The server is small and blind.
+**Fits.** The backend is a relay in Postgres (groups, memberships, device keys, 48 hours of
+ciphertext per group with counters and acks) plus 48 hours of blobs in the platform's private
+bucket. The only lifecycles are the two purges. Everything that needs plaintext — merge,
+validation, derived state, rendering — runs on the device, and so does durability: member
+devices are the store. The server is small, blind and forgetful.
 
 ## Decisions that shape the whole design
 
@@ -30,18 +30,18 @@ These were settled in discussion before this plan was written; they are not open
 
 | Decision | Choice | Why |
 |---|---|---|
-| Durability | The server is the durable store, not a cache. No fill-on-miss for objects. | Fill-on-miss needs presence, a request queue and a holder of last resort; encrypted JSON is nearly free to keep. |
+| Durability | Member devices are the store. The server relays: an object row lives 48 hours in Postgres, a blob 48 hours in the bucket. Anything older comes from a member device on request (history bundles, blob re-uploads). A group whose every device loses its data loses its history; export is the backup. | Round 7 (2026-10-26). Billions of messages must not live in Postgres, and the user wants the server as stupid as possible. Reversed the round-0 choice. |
 | Blobs | The bucket is a 48-hour cache for full-size blobs and attachments, extended on every download and emptied early once every key-holding device of the group has downloaded it; after that a blob can be re-requested from any device that downloaded it (the server records holders; a device that evicts under storage pressure tells the server; the author's camera roll is the holder of last resort). Thumbnails are kept long-term. Each group has a 20 GiB cap on what is in the bucket. | Photos are the only real cost line, and every device that viewed a photo already holds it. |
-| Change detection | A per-group commit log: every accepted write takes the next sequence number of its group, assigned under a locked counter row. Clients keep a cursor per group. | One query answers "anything new?"; batched across groups in one call. |
-| Conflicts | Per-object version with compare-and-set on push; a conflict returns the current row. Every value is a `yrs` CRDT document, so the client merges the returned row into its local document and pushes again. No conflicted copies anywhere. Deletes always win. | The server cannot merge ciphertext, so the merge runs on the device; a CRDT makes it automatic and deterministic for every type, not only notes. |
-| Deletes | Tombstones in the log, garbage-collected after a retention window; a client with an older cursor does a full id/version reconciliation. | The only way an offline client learns about a deletion. |
+| Change detection | A per-group commit log: every accepted write takes the next sequence number of its group, assigned under a locked counter row. Clients keep a cursor per group. A pull also returns the eviction floor; a cursor below it means the gap comes from a member device. | One query answers "anything new?"; batched across groups in one call. |
+| Conflicts | Per-object version with compare-and-set on push; a conflict returns the current row. The client re-applies its changed fields onto the returned row and pushes again; the same field changed on both sides goes to the later push. Deletes always win. No conflicted copies. | Round 7. The server cannot merge ciphertext; a field-level rebase on the device is enough for small objects edited a field at a time, and needs no CRDT. |
+| Deletes | A deletion generation per group: the server increments it once per push that deletes and stamps the tombstones with it. A push carries the device's generation and is refused if behind. After applying a pull a device acks the generation it received; the server keeps the minimum over the group's devices, hard-deletes tombstones below it, and tells every device the minimum so they drop theirs. Acks are per device and happen after a pull, never by pushing. | Round 7, the user's design. Nothing deleted survives anywhere once everyone has seen the delete, and nobody can resurrect it, because a device cannot push before it has applied every delete. |
 | Children | No child lists or counts on parents; `parent_id` on the child, indexed. | Derived state on the parent is a conflict magnet. |
-| Fetch shape | Catch-up (all types since cursor) plus per-type backfill (e.g. the last 200 messages). | Message-like types must not force a full history pull. |
+| Fetch shape | Catch-up since cursor from the server's 48-hour window; everything older as a history bundle from a member device: a new member, a new device, a device offline longer than the window, or scrolling past what the device holds. | The server has nothing older to serve. |
 | Keys | A group key per group, a keyring with key ids; rotate on member removal; new devices get keys wrapped for them by an existing member's device. New members get full history. | MLS is designed to deny history to new members, the opposite of the requirement. |
 | Subgroups | A separate group with its own key and `parent_group_id`; members ⊆ parent, enforced server-side; leaving the parent cascades. | A key boundary is a group boundary. |
 | Identity | Kratos, email code and passkeys. Identity never carries keys. | Platform default; exactly the requested login. |
-| Payloads | Every value is a `yrs` document: a `Map` at the root whose keys are the type's fields, `Array` for lists, `Text` for prose. Per type a key schema (name, kind, required, default) with `schema_version` in plaintext metadata. Add keys, never repurpose them; a breaking change is a new type number. Old clients read newer documents (unknown keys are ignored for display and preserved by the CRDT) and may write to them, touching only keys they know. Upgrade steps are declarative key operations (add with default, rename by copy, drop), replacing the rootline `JsonPatch` port. | The CRDT preserves unknown keys by construction, which is what made the protobuf plan need a dynamic-message layer; with every value a document the layer is gone and old writers are safe. |
-| Client core | One Rust core (sync, store, `yrs` documents and their typed projections, post-merge validation, keyring, crypto, key-schema upgrades) bound to Swift and Kotlin through UniFFI and to the browser through wasm. Three UI shells. | Three sync engines and three crypto implementations diverge. |
+| Payloads | Protobuf per type, `schema_version` in plaintext metadata. Add fields, never repurpose a number; a breaking change is a new type number. Old clients read newer objects (unknown fields ignored for display) but never write them. A note's CRDT lives inside the payload: a `note` parent plus append-only `note_update` children, each one `yrs` update, combined on the device. | Round 7. Plain values plus a rebase cover every type but notes; a CRDT for everything was more machinery than the app needs. Old clients not writing newer objects is what keeps fields from being dropped. |
+| Client core | One Rust core (sync, local store, conflict rebase, the note CRDT, keyring, crypto, schemas) bound to Swift and Kotlin through UniFFI and to the browser through wasm. Three UI shells. | Three sync engines and three crypto implementations diverge. |
 | Cost | Single CNPG instance, one app replica in preview, blob traffic never touches the app (presigned URLs), push instead of polling, client-side resize before upload. | |
 
 ## Scope ledger
@@ -70,14 +70,17 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Key rotation on removal | include | | Cheap; closes the ex-member hole. |
 | Push tokens (APNs, FCM) | include | silent push on group head advance | Replaces polling. |
 | Key backup / recovery without another member | exclude | | Rejoin via another member's device is the chosen path. |
+| Remove a device | include | the owner drops a lost or dead device; its keys go and `ledger` stops counting its ack | Round 7. A device that never acks blocks hard deletion for its groups. |
 
 ### Object log
 
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Push with CAS, pull since cursor, heads for all groups | include | | The core. |
-| Per-type backfill, and across types | include | `type` optional on backfill | Messages; the timeline scrolling back across every type. |
-| Tombstones with retention + full reconciliation | include | 90 days | |
+| 48-hour window; member devices are the store | include | hourly eviction of live rows; the floor is returned on every pull | Round 7. Postgres holds two days of activity per group, whatever the group's age. |
+| History bundles from member devices | include | `RequestHistory` wakes every key holder; one uploads a `bundle` blob; the requester is woken; no server retries | Round 7. Replaces per-type backfill and id-list reconciliation. |
+| Deletion generation with per-device ack; hard delete once everyone acked | include | see the decision table | Round 7. |
+| Per-type backfill, id-list reconciliation, tombstone retention by time | exclude | | Round 7. Superseded. |
 | Server-side cascade on parent delete | include | tombstones the subtree in the same transaction | The server sees `parent_id`. |
 | Per-object ACL within a group | exclude | | A group is the permission boundary. |
 
@@ -86,8 +89,8 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Presigned upload/download via the private bucket | include | | Traffic never touches the app. |
-| Retention and expiry per blob kind | include | full-size and attachments 48 hours after upload or last download; thumbnails long-term | Round 4: the user wants the bucket to be a short cache. |
-| Re-upload request to a holder device | include | the server records which devices downloaded a blob and wakes all of them plus the uploader; a device drops its hold when it evicts, or when woken for bytes it no longer has | The one place fill-on-miss pays; with a 48-hour cache the holder set must be wider than the uploader, and phones with little storage must be free to evict. |
+| Retention and expiry per blob kind | include | full-size, attachments and bundles 48 hours after upload; thumbnails long-term (a config number; set to 2 for a pure cache) | Round 4: the user wants the bucket to be a short cache. Round 7 dropped extension on download: a blob is a row with an expiry, not a state machine. |
+| Re-upload request to a holder device | include | the server records which devices downloaded a blob and wakes all of them plus the uploader, batched per request; a device drops its hold when it evicts, or when woken for bytes it no longer has; a re-upload keeps id, key and hash | With a 48-hour cache the holder set must be wider than the uploader, and phones with little storage must be free to evict. |
 | Early eviction once every device holds it | include | the pass asks `device` whether the holders cover every key-holding device of the group; if so the bucket copy goes before the 48 hours | Round 4, the user's rule: a blob everyone has is pure cost. A device joining later re-requests. |
 | Per-group storage cap | include | 20 GiB in the bucket per group, a `storage_quota` config value; `CreateUpload` refuses beyond it | Round 4. Bounds the bill; retention keeps real usage far below it. |
 | Wifi-only sync, local resize, native album export | n/a | client-side preferences | Nothing for the backend. |
@@ -97,10 +100,11 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
 | Timeline posts, photo album, todo lists, calendar events and birthdays, polls, datepicker (scheduling poll), messaging, venue recommendations on a map, splitser expenses, tickets as expenses with per-share blob | include | catalogue with type numbers and keys in `06-object-types.md` | All are object types; none need backend logic. |
-| Timeline shows every kind of activity (photos added, threads, todos ticked, expenses, polls) | include | derived from the object log on the device, collapsed per author/kind/parent/hour, interleaved with posts; no `activity` type (`06-object-types.md`) | Round 6 (2026-10-17). The log is already the activity stream; storing it twice would break "inputs only". |
-| CRDT (`yrs`) for every type, merge-on-conflict | include | every value is a `yrs` document, full state per push, merged on the client when the push conflicts; nothing on the server beyond the conflict carrying the current row | Round 2 (2026-10-15) added it for notes; round 3 (2026-10-17) made it the only model. Two members editing different fields of one object offline both keep their edits, and one code path serves all types. |
-| Post-merge validation ("needs attention") | include | documents store inputs only (an expense stores amount, payer, participants and a split rule; shares and balances are derived), so most invariants hold by construction; the rest (dates ordered, a vote naming a deleted option) are checked after every merge and a failing object is flagged for a person to fix, never silently accepted or rewritten | A CRDT guarantees convergence, not validity. |
-| Conflicted copy on collision | exclude | | Round 3. Superseded by the CRDT merge. |
+| Timeline shows every kind of activity (photos added, threads, todos ticked, expenses, polls) | include | derived from the local store on the device, collapsed per author/kind/parent/hour, interleaved with posts; no `activity` type (`06-object-types.md`) | Round 6 (2026-10-17). The log is already the activity stream; storing it twice would break "inputs only". |
+| Notes: CRDT updates as child objects | include | `note` parent plus append-only `note_update` children (one `yrs` update each, batched per editing session); combined on the device; compaction later | Round 7 (2026-10-26). Children never conflict, so collaborative notes need no merge loop at all. |
+| Field-level rebase on conflict | include | re-apply the changed fields onto the current row, validate, push again; later push wins a same-field collision; documents store inputs only (an expense stores amount, payer, participants and a split rule; shares and balances are derived) | Round 7. Replaces both the conflicted copy (round 1) and CRDT for every type (round 3). |
+| CRDT (`yrs`) for every type | exclude | | Round 7. More machinery than the app needs; a chat message is never merged. |
+| Conflicted copy on collision | exclude | | Round 3, confirmed round 7. |
 | Ticket payments (moving money) | exclude | | Round 1. Tracking only; a ticket is an expense with one share per person. |
 | Cross-group friend graph for recommendations | exclude | | Needs a server-visible social graph; incompatible with E2E. Recommendations are per group. |
 | Read receipts, typing indicators | exclude | | Round 1. No live presence; silent push plus pull is the delivery model. |
@@ -125,8 +129,12 @@ the document instead of protobuf messages. Round 4 (2026-10-17) decided human ap
 requests, account deletion, a 20 GiB per-group cap with 48-hour blob retention, and the client
 core living in this repository. Round 5 (2026-10-17) made the browser a full device paired by
 QR and removed silent same-user approval. Round 6 (2026-10-17) made the timeline a projection of
-the log and the backfill type optional. What remains is tuning (worker policy, the value size
-cap), which the implementing session owns.
+the log. Round 7 (2026-10-26) made member devices the store: the server keeps 48 hours, history
+comes from member devices as bundles, deletion is a per-group generation with per-device acks,
+the blob processing object became a row with an expiry, and values went back to plain protobuf
+with a field-level rebase, the CRDT living only inside notes as child objects. What remains is
+tuning (the 48-hour window, the value size cap, bundle size), which the implementing session
+owns.
 
 ## Status
 

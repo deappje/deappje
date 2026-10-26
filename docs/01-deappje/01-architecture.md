@@ -1,9 +1,11 @@
 # Architecture
 
 One Rust binary, four nanoservices, one Postgres database with a schema per nanoservice, blobs
-in the platform's private bucket, Kratos for identity. The server never holds a group key and
-never reads a payload: every `value` is ciphertext, every blob is ciphertext, and the plaintext
-columns are the minimum needed to route, order, authorise and expire.
+in the platform's private bucket, Kratos for identity. The server is a relay, not a store: member
+devices hold the data, the server keeps 48 hours of it so devices can catch up, and anything
+older is fetched from a member device on request. It never holds a group key and never reads a
+payload: every `value` is ciphertext, every blob is ciphertext, and the plaintext columns are the
+minimum needed to route, order, authorise and expire.
 
 ## Nanoservices
 
@@ -53,6 +55,8 @@ for another device and hands it back.
   is a member (checked through `CheckMembershipRequest` at write time); on `MemberRemoved` the
   removed user's wrapped keys for that group are deleted and every other member's devices are
   pushed so one of them rotates.
+- **Also**: `DeviceLeftGroup` to `ledger` whenever a device loses its keys for a group, so a
+  gone device stops blocking garbage collection.
 - **Trust rule**: the server never seeds trust. A device holds a group's keys only because a
   person on a device that already holds them approved its key request, by scanning the new
   device's fingerprint QR or comparing the code. That includes the user's own new devices: a
@@ -69,128 +73,113 @@ for another device and hands it back.
 - **Handles**: device registration, push token, device listing (so members can wrap keys for
   new devices), key requests and fulfilment, publishing a rotated key set, fetching wrapped keys;
   plus three void events: `GroupHeadAdvanced` (from `ledger`), `MemberRemoved` (from `group`),
-  `BlobRequested` (from `storage`), each turned into pushes; and `PurgeUserDevicesRequest` from
-  `group`'s account purge.
+  `BlobRequested` (from `storage`), `HistoryRequested` and `HistoryReady` (from `ledger`), each
+  turned into pushes; `PurgeUserDevicesRequest` from `group`'s account purge; `RemoveDeviceRequest`
+  so a user can drop a dead device, which otherwise blocks garbage collection in its groups.
+- **Sends**: `CheckMembershipRequest`; `DeviceLeftGroup` to `ledger` whenever a device loses its
+  keys for a group (member removed, device removed, account purged).
 - **API**: `DeviceService`.
 
 ### `ledger`
 
-Owns the object log. Plain executor; the one piece of concurrency control in the system is here.
+Owns the relay. Plain executor with three hourly sweeps; the one piece of concurrency control in
+the system is here. Member devices are the store: the server keeps a live row for 48 hours and a
+tombstone until every device has acked it.
 
 - **Tables**: `object` (id, group, parent, type, schema version, key id, value, blob id, version,
-  seq, creator device, deleted flag and time), `group_head` (group, head seq): the counter row.
-  Directive §2, §7 (serialize on a counter row under `FOR UPDATE`).
-- **Push**: one transaction per batch: lock `group_head`, then per object compare the caller's
-  `base_version` with the stored version (absent ⇒ 0); on match write the row with
-  `version + 1` and `seq = head + 1`, advance head; on mismatch report a conflict for that object
-  carrying the current row, and leave it. A delete is a push with `deleted = true`: the row keeps id, group, parent, type
-  and seq, drops `value` and `blob_id`, and the same transaction tombstones every descendant by
-  `parent_id`. Commit, then send `GroupHeadAdvanced` and, per deleted object with a blob,
-  `ObjectDeleted` (both after the transaction: Directive invariant 7).
-- **Pull**: `PullChangesRequest` returns rows with `seq > cursor` in seq order, tombstones
-  included, paged; `BackfillRequest` returns rows of one type, or of all types, with
-  `seq < before`, newest first, limited; `GetHeadsRequest` returns `(group, head)` for every group the caller is in;
-  `ListObjectIdsRequest` returns `(id, version, deleted)` for a group for full reconciliation.
-- **Schedule**: `gc_tombstones` daily, deletes tombstone rows older than the retention window.
-  A client whose cursor is older than the window is told so and reconciles.
-- **Sends**: `CheckMembershipRequest`, `CheckBlobRequest` (a pushed object may only reference a
-  blob of its own group that is uploaded), `GroupHeadAdvanced`, `ObjectDeleted`.
+  seq, creator device, `deleted_generation`), `group_head` (group, head seq, deletion
+  `generation`, `evicted_through_seq`): the counter row; `group_device` (group, device,
+  `acked_generation`); `history_request`. Directive §2, §7 (serialize on a counter row under
+  `FOR UPDATE`).
+- **Push**: one transaction per batch: lock `group_head`; refuse the batch if its `generation` is
+  below the group's (the device pulls first); if the batch deletes anything, increment the
+  group's generation and stamp every tombstone with it; then per object compare `base_version`
+  with the stored version (no row ⇒ take the client's word: a current device has applied every
+  delete, so it cannot resurrect anything, and the first re-creation of an evicted row makes every
+  later stale base conflict), on match write `version + 1` and `seq = head + 1`, on mismatch
+  report a conflict carrying the current row. A delete tombstones the subtree by `parent_id` in
+  the same transaction. Commit, then `GroupHeadAdvanced` and, per deleted object with a blob,
+  `ObjectDeleted` (invariant 7).
+- **Pull and ack**: `PullChangesRequest` returns entries with `seq > cursor`, tombstones included,
+  with the group's generation, the minimum ack and the eviction floor; a device whose cursor is
+  below the floor asks a member device for the gap. After applying a pull the device
+  `AckGeneration`s the generation it received; the server keeps the minimum per group, hard-deletes
+  tombstones below it, and hands the minimum back so devices drop their own tombstones. An ack
+  that goes backwards means a restored backup and forces a resync. `GetHeadsRequest` returns
+  `(group, head, generation, min ack)`.
+- **History**: `RequestHistoryRequest` records a range and wakes every key-holding device through
+  `device`; one of them uploads a `bundle` blob; `storage` reports `BundleReady`; the requester is
+  woken. No server-side retries: the requester asks again. This is how a new member, a new device
+  or a long-offline device gets anything older than 48 hours.
+- **Sweeps**: `evict_objects` (live rows older than 48h, floor advances), `gc_tombstones`
+  (`deleted_generation ≤` min ack), `expire_history_requests` (48h).
+- **Sends**: `CheckMembershipRequest`, `CheckBlobRequest`, `GroupHeadAdvanced`, `ObjectDeleted`,
+  `HistoryRequested`, `HistoryReady`.
 - **API**: `LedgerService`.
 
 ### `storage`
 
-Owns blobs. This is the one nanoservice with a processing-object type, because a blob has a
-lifecycle the server drives against a third party: wait for the upload to land in the bucket,
-expire it after its retention, delete it from the bucket, and wait for a re-upload when a member
-asks for it again.
+Owns blobs: a row per encrypted file, who holds a copy, and its 48 hours in the private bucket.
+Plain executor with one hourly sweep; no state machine.
 
-- **Processing object `blob`** (prefix `blb`). Spec: group, object, kind, storage key, expected
-  hash, uploader device, retention days. Status: phase (`pending_upload`, `available`, `expired`,
-  `requested`), size, uploaded at, last access, expires at, requested at. Directive §3, §5, §6.
-- **Reconcile pass**: deleting ⇒ confirm absence in the bucket, delete if present, `Delete`.
-  `pending_upload` ⇒ `HEAD` the key; present and hash matches ⇒ `available` with
-  `expires_at = now + retention`, `Converged.after(retention)`; absent ⇒ `Converged.after(5m)`
-  (the `ConfirmUploadRequest` handler nudges it, so the poll is a fallback). `available` past
-  `expires_at` ⇒ `delete_object`, phase `expired`, `Settled`. `requested` ⇒ `Settled` until
-  `ConfirmUploadRequest` nudges it back through `pending_upload`. Downloads and re-upload
-  requests are unclaimed input, so the request path never writes status (invariant 3): it writes
-  `last_access_at` / `requested_at` into the plain `blob_access` side table and nudges; the
-  pass reads that table and extends `expires_at` or moves to `requested`.
-- **Side table `blob_holder`**: which devices downloaded a blob. Written by `GetDownloadRequest`,
-  removed by `DropBlobHoldRequest` (a phone evicting under storage pressure, or woken for bytes it
-  no longer has). `BlobRequested` wakes every holder and the uploader, since after the cache
-  window the bucket no longer has the bytes and any device that viewed them does. After each
-  download the pass asks `device` `CheckHolderCoverageRequest` → `HolderCoverage { complete }`;
-  complete means every key-holding device of the group has the blob and the bucket copy is
-  deleted at once.
-- **Config type `blob_kind`**: `full` (2 days, 25 MB max), `thumbnail` (3650 days, 200 KB max),
-  `attachment` (2 days, 25 MB max). Retention after upload or last download, and size cap, per
-  kind. **Config type `storage_quota`**: `max_group_bytes` 20 GiB; `CreateUploadRequest` refuses
-  when the group's blobs in `pending_upload` or `available` already sum to it. Edited by a human.
-- **External**: the platform's object storage. `delete_object` is the only effect
-  (`idempotent`: S3 delete of a missing key succeeds). Presigning and `HEAD` are reads.
-- **Handles**: `CreateUploadRequest` (creates the object in `pending_upload`, returns a presigned
-  PUT moved onto `S3_PRIVATE_URL`), `ConfirmUploadRequest` (nudge), `GetDownloadRequest`
-  (presigned GET if `available`, otherwise the phase), `RequestBlobRequest` (`expired` ⇒
-  `requested`, sends `BlobRequested`), `CheckBlobRequest` (from `ledger`), `ObjectDeleted` (void,
-  from `ledger`: `mark_deleted`).
-- **Sends**: `CheckMembershipRequest`, `BlobRequested`.
+- **Tables**: `blob` (group, kind, key, sha256, size, uploader, `request_id` for bundles,
+  `in_bucket`, `expires_at`), `blob_holder` (blob, device). Directive §2.
+- **Config type `blob_kind`**: `full` (2 days, 25 MB), `thumbnail` (3650 days, 200 KB),
+  `attachment` (2 days, 25 MB), `bundle` (2 days, 256 MB). **`storage_quota`**: 20 GiB per group
+  of what is in the bucket. Both edited by a human.
+- **External**: `delete_object`, `idempotent`, dispatched from handlers and the sweep; a failed
+  delete is retried by the next sweep. Presigning and `HEAD` are reads.
+- **Handles**: `CreateUploadRequest` (row + presigned PUT), `ConfirmUploadRequest` (`HEAD`, size
+  check, `in_bucket`, expiry; a `bundle` reports `BundleReady` to `ledger`), `ReuploadBlobRequest`
+  (a holder re-uploads to the same key), `GetDownloadRequest` (presigned GET if in the bucket,
+  record the holder, delete the bucket copy once every key-holding device has it, else `gone`),
+  `RequestBlobsRequest` (wake the holders of a batch of blobs), `DropBlobHoldRequest`,
+  `CheckBlobRequest` (from `ledger`), `ObjectDeleted` (from `ledger`), `PurgeGroupBlobsRequest`.
+- **Sweep**: `expire_blobs`, hourly: delete expired bucket copies; rows and holders stay as the
+  registry for re-requests.
+- **Sends**: `CheckMembershipRequest`, `CheckHolderCoverageRequest`, `BlobRequested`,
+  `BundleReady`.
 - **API**: `StorageService`.
 
-## Values are CRDT documents (client core)
+## What the server computes
 
-Every `value` is one `yrs` document (the Rust port of Yjs), encrypted. The server has one rule,
-compare-and-set on `version` with the current row returned on a conflict, and the client core has
-one policy for every type:
+Six things, and nothing else: whether a user is a member of a group; the next sequence number;
+whether a version matches; whether a generation is behind; the minimum ack of a group; whether a
+blob is past its retention. Every other byte is relayed, never read.
 
-1. Decrypt the returned row and apply its state to the local document. The merge is commutative
-   and idempotent, so order and repeats do not matter.
-2. Validate the typed projection against the type's invariants that live in inputs (an event
-   ending before it starts, a vote naming an option deleted concurrently, a participant no longer
-   in the group). A failure does not block the push; it flags the object "needs attention" for a
-   person to fix.
-3. Encode the full state, encrypt, push again with the returned `version` as `base_version`. A
-   few immediate retries, then the object waits in the outbox for the next sync. The loop
-   converges because every retry carries strictly more of the group's edits.
+## Values and conflicts (client core)
 
-Deletes still win: a tombstone in the returned row ends the loop and the local edit is dropped.
+Every `value` is a protobuf message of its type, encrypted (`06-object-types.md`). The server has
+one rule, compare-and-set on `version` with the current row returned on a conflict, and the
+client core has one way to handle it:
 
-### Document shape per type
+1. Keep, per locally edited object, the row it was edited from and the set of fields changed.
+2. On a conflict, decrypt the returned row, re-apply the changed fields onto it, validate the
+   result against the type's invariants (an event ending before it starts), and push again with
+   the returned `version` as `base_version`. Where both sides changed the same field, the later
+   push wins. A few immediate retries, then the object waits in the outbox for the next sync.
+3. A tombstone in the returned row ends the loop: the local edit is dropped and the client shows
+   "deleted".
 
-A `Map` at the root; each key is a field of the type. Scalars are last-writer-wins registers (two
-concurrent edits to the same key pick one deterministically, edits to different keys both
-survive). Lists (todo items, poll options) are a `Map` keyed by item id, each item a nested map
-with a `pos` key holding a fractional index (a string that sorts between its neighbours), and the
-order is derived on projection. A move is one LWW write to `pos`, so two concurrent moves of the
-same item pick one position and a concurrent edit of the item's fields survives the move. A `yrs`
-`Array` is not used for user-ordered lists: it has no move, so a move is delete plus insert and
-two concurrent moves leave two copies. Prose (note body, post text) is `Text`
-with attributes. Documents store inputs, never derived values: an expense stores amount, payer,
-participants and a split rule (`equal`, `weights`, `exact`), and the shares are computed in the
-projection, so a merge cannot produce shares that do not sum (in `exact` mode the total is the
-sum of the stored amounts). Balances, tallies and sort orders are derived the same way. The few
-inputs that must change together live under one key as a nested map replaced atomically.
+No conflicted copies and no merge policies: a friends-group app edits small objects one field at
+a time, and field-level rebase covers it.
 
-The encrypted bytes are `Payload { uint32 format; bytes state }`, `format = 1` meaning the `yrs`
-v1 state encoding. Deleted content is garbage-collected inside the document, so an object stays
-about the size of its fields plus roughly a hundred bytes of CRDT metadata. Offline edits
-accumulate locally and go up as one state on the next sync; the server sees one ciphertext per
-push.
+**Notes are the exception, and the CRDT lives in the payload, not in the server.** A `note` is a
+parent object (title) plus append-only `note_update` children, each holding one `yrs` (Yjs)
+update, the binary delta an editing session produced. Children are never edited, so they never
+conflict; two people typing offline produce two children. Opening a note loads its children and
+applies them in any order into one `yrs` document; deleting the note tombstones the children by
+cascade. A device batches an editing session into one child, so a note grows by one small object
+per session. Compaction (one device writes a snapshot child and deletes the ones it covers) is a
+later optimisation; nothing depends on it.
 
-### Key schemas and versions
+### Schemas and versions
 
-Per type the core holds a key schema: key name, kind (`string`, `int`, `bool`, `bytes`, `map`,
-`array`, `text`), required, default. `schema_version` in plaintext metadata says which schema a
-writer used. Rules: add keys freely; never repurpose a key; a breaking change is a new type
-number. An old client reads a newer document by ignoring keys it does not know (the CRDT keeps
-them) and may write to it, touching only keys it knows. Upgrade steps are declarative key
-operations: add with default, rename by copy (the old key stays until every writer is past the
-old version), drop. No executable converters, so no code travels. The projection from document to
-typed struct is where defaults are filled and invariants checked.
-
-Why `yrs` and not automerge: automerge keeps the full history of every object forever, so every
-edit grows the value; `yrs` garbage-collects, has native rich text, and compiles to wasm for the
-browser shell. Time travel is not a requirement.
+`schema_version` in plaintext metadata says which schema the writer used. Add fields, never
+repurpose a field number; a breaking change is a new type number. An old client reads a newer
+object by ignoring fields it does not know and shows it, but never writes to an object whose
+`schema_version` is above its own for that type, so no field is ever dropped by a re-serialise.
+Upgrades fill defaults for new fields on read; there are no converters and no code travels.
 
 ## Deployment shape
 
@@ -204,9 +193,9 @@ browser shell. Time travel is not a requirement.
   (blobs byte for byte as the bucket holds them, so the browser is a real holder), decrypted into
   memory by the core at startup; the device key is a non-extractable WebCrypto key to which the
   core delegates the X25519 step of HPKE; `navigator.storage.persist()` is requested; eviction by
-  the browser only costs a dropped hold or a re-pair. The core is a `core/` crate in this
-  repository's Bazel workspace (sync, store, `yrs` documents and projections, keyring, crypto, key
-  schemas), built to wasm for the web client in the same workflow; the Swift and Kotlin
+  the browser only costs a dropped hold, a re-pair, or a history request. The core is a `core/`
+  crate in this repository's Bazel workspace (sync, local store, conflict rebase, the note CRDT,
+  keyring, crypto, schemas), built to wasm for the web client in the same workflow; the Swift and Kotlin
   repositories pin a commit of this repository and build the crate with UniFFI. Server contract
   and client core are versioned together. Served from an nginx-unprivileged
   container by the scaffold; `05-deployment.md` records the later move to the public bucket
@@ -246,27 +235,34 @@ browser shell. Time travel is not a requirement.
 | FulfilKeyRequestRequest | KeyRequest | api | device |
 | PublishWrappedKeysRequest | WrappedKeyList | api | device |
 | GetWrappedKeysRequest | WrappedKeyList | api | device |
+| RemoveDeviceRequest | Device | api | device |
 | GroupHeadAdvanced | (void) | ledger | device |
+| HistoryRequested | (void) | ledger | device |
+| HistoryReady | (void) | ledger | device |
 | BlobRequested | (void) | storage | device |
 | CheckHolderCoverageRequest | HolderCoverage | storage | device |
+| DeviceLeftGroup | (void) | device | ledger |
 | PushObjectsRequest | PushResult | api | ledger |
 | PullChangesRequest | ChangeSet | api | ledger |
-| BackfillRequest | ChangeSet | api | ledger |
+| AckGenerationRequest | AckResult | api | ledger |
 | GetHeadsRequest | HeadList | api | ledger |
-| ListObjectIdsRequest | ObjectIdList | api | ledger |
+| RequestHistoryRequest | HistoryRequest | api | ledger |
+| ListHistoryRequestsRequest | HistoryRequestList | api | ledger |
+| BundleReady | (void) | storage | ledger |
 | ObjectDeleted | (void) | ledger | storage |
 | CheckBlobRequest | Blob | ledger | storage |
 | CreateUploadRequest | UploadGrant | api | storage |
 | ConfirmUploadRequest | Blob | api | storage |
+| ReuploadBlobRequest | UploadGrant | api | storage |
 | GetDownloadRequest | DownloadGrant | api | storage |
-| RequestBlobRequest | Blob | api | storage |
-| DropBlobHoldRequest | Blob | api | storage |
+| RequestBlobsRequest | (void) | api | storage |
+| DropBlobHoldRequest | (void) | api | storage |
 
 Every cross-nanoservice message binds Directive §7. The only derived state that crosses is a
-boolean (`MembershipCheck`, `Blob.phase`) or an id; no nanoservice re-derives another's rule.
+boolean or a number (`MembershipCheck`, `Blob.present`, `HolderCoverage`) or an id; no nanoservice re-derives another's rule.
 
 ## What is deliberately not on the server
 
-The CRDT merge, validation of payloads, invariants inside a type (one vote per poll, shares
-summing to the total), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
+Conflict rebase, the note CRDT, validation of payloads, invariants inside a type (one vote per
+poll), derived state (balances, tallies), schema conversion, thumbnails, resizing, map tiles,
 geocoding. All of it is the client's, because all of it needs plaintext.

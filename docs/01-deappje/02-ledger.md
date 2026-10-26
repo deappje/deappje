@@ -1,9 +1,10 @@
 # `ledger`
 
-Owns the object log: every object of every group, its version, its position in the group's
-sequence, and its tombstone. Plain executor; the serialization point of the whole system is the
-`group_head` counter row. Directive §2 per table, §7 (counter row under `FOR UPDATE`; derived
-state only) for its messages.
+Owns the relay: a 48-hour window of ciphertext rows per group, the group's counters, the
+tombstones until every device has acked them, one ack number per device, and a row per pending
+history request. Plain executor with three hourly sweeps. Member devices are the store; this
+nanoservice forgets everything live after 48 hours. Directive §2 per table, §7 (counter row under
+`FOR UPDATE`; a boolean or a number is all that crosses) for its messages.
 
 ## Tables
 
@@ -11,23 +12,22 @@ state only) for its messages.
 
 | column | type | notes |
 |---|---|---|
-| id | uuid | primary key, client-minted (doubles as the outbox idempotency key) |
+| id | uuid | primary key, client-minted |
 | group_id | uuid | |
 | parent_id | uuid, nullable | within the same group |
 | type | int32 | client-defined type number |
-| schema_version | int32 | payload schema of this row |
+| schema_version | int32 | |
 | key_id | int32 | which group key encrypts `value` |
-| value | bytes, nullable | ciphertext; null on a tombstone |
+| value | bytes, nullable | ciphertext (≤ 1 MiB); null on a tombstone |
 | blob_id | uuid, nullable | a `storage` blob of the same group; null on a tombstone |
-| version | int64 | per-object, starts at 1 |
-| seq | int64 | per-group, strictly increasing |
+| version | int64 | per object |
+| seq | int64 | per group, strictly increasing; an edit takes a new seq |
 | created_by_device | uuid | |
-| deleted | bool | tombstone flag |
-| deleted_at | timestamp, nullable | |
+| deleted_generation | int64, nullable | set ⇒ tombstone; the group generation the delete landed in |
 | updated_at | timestamp | |
 
-Indexes: unique `(group_id, seq)`; `(group_id, type, seq)` for backfill; `(parent_id)` for
-cascade; `(deleted_at)` for garbage collection.
+Indexes: unique `(group_id, seq)`; `(parent_id)` for cascade; `(group_id, deleted_generation)`
+for garbage collection; `(updated_at)` for eviction.
 
 ### `group_head`
 
@@ -35,84 +35,151 @@ cascade; `(deleted_at)` for garbage collection.
 |---|---|---|
 | group_id | uuid | primary key |
 | head_seq | int64 | last assigned sequence |
+| generation | int64 | deletion generation; incremented once per push that deletes |
+| evicted_through_seq | int64 | every live row with `seq ≤` this has been evicted |
 
-Created with `head_seq = 0` on the first push to a group.
+Created with zeros on the first push to a group.
+
+### `group_device`
+
+| column | type | notes |
+|---|---|---|
+| group_id | uuid | primary key (with device_id) |
+| device_id | uuid | |
+| acked_generation | int64, nullable | the generation this device has pulled through and applied |
+| updated_at | timestamp | |
+
+Index `(device_id)`. Upserted by `AckGenerationRequest`; deleted on `DeviceLeftGroup` from
+`device`. A device that never acks blocks garbage collection for its group until it is removed.
+
+### `history_request`
+
+| column | type | notes |
+|---|---|---|
+| id | uuid | primary key |
+| group_id | uuid | |
+| requester_device | uuid | |
+| from_seq | int64 | |
+| to_seq | int64 | |
+| object_id | uuid, nullable | a request for one object instead of a range |
+| status | string | `pending`, `fulfilled` |
+| bundle_id | uuid, nullable | the `storage` blob of kind `bundle` |
+| created_at | timestamp | |
+
+Index `(group_id, status)`. Rows older than 48 hours are dropped by the sweep.
 
 ## Push
 
-`PushObjectsRequest { group_id, base_cursor?, objects: [{ id, parent_id?, type, schema_version,
+`PushObjectsRequest { group_id, generation, objects: [{ id, parent_id?, type, schema_version,
 key_id, value?, blob_id?, base_version, deleted }] }`.
 
 Before the transaction: `CheckMembershipRequest`; for every `blob_id`, `CheckBlobRequest` must
-answer the blob is in this group and `available` or `pending_upload` (remote I/O stays outside the
-transaction, invariant 7). A `value` larger than 1 MiB is rejected for the whole batch (a CRDT
-document grows with its content; anything bigger belongs in a blob).
+answer `present` for this group (remote I/O outside the transaction, invariant 7). A `value`
+over 1 MiB refuses the whole batch.
 
 One transaction:
 
 1. `SELECT ... FROM group_head WHERE group_id = $1 FOR UPDATE` (insert if absent).
-2. Per object, in request order: read the current row. Accept when `base_version` equals the
-   stored `version` (0 when absent). On accept: `version + 1`, `seq = head + 1`, head advances.
-   If `deleted`, null `value` and `blob_id`, set `deleted_at`, and tombstone every descendant
-   (recursive by `parent_id`) each with its own next `seq`. On a mismatch: record a conflict
-   `{ id, current: Object }` with the stored row as it is (ciphertext included), change nothing.
-   The caller must learn the row either way, so returning it saves the pull a merging client
-   would otherwise make before it can retry.
-3. Commit.
+2. If `generation < head.generation` ⇒ answer `PushResult { stale_generation: true, generation:
+   head.generation }` and write nothing. The device pulls, applies what it missed, and pushes
+   again. Equal is fine.
+3. If any object in the batch has `deleted = true` ⇒ `head.generation += 1`; call it `G`. The
+   server assigns it, so every delete has a strictly higher generation than every delete before
+   it, which is what makes the ack below mean "I have applied every delete up to here".
+4. Per object, in request order, read the current row:
+   - **No row** (new, or evicted) ⇒ accept with `version = base_version + 1`.
+   - **Tombstone** ⇒ a delete is a no-op accept; anything else is a conflict carrying the
+     tombstone (the client shows "deleted").
+   - **Live row, `base_version == version`** ⇒ accept: `version + 1`, `seq = head + 1`, head
+     advances. If `deleted`: null `value` and `blob_id`, `deleted_generation = G`, and tombstone
+     every descendant (recursive by `parent_id`) each with its own next `seq` and the same `G`.
+   - **Live row, mismatch** ⇒ conflict `{ id, current }` with the stored row as it is.
+5. Commit.
 
 After commit: `GroupHeadAdvanced { group_id, head_seq, writer_device }` once; `ObjectDeleted
 { group_id, object_id, blob_id }` per tombstoned row that had a blob.
 
-Response: `PushResult { accepted: [{ id, version, seq }], conflicts: [...], head_seq }`.
+Response: `PushResult { accepted: [{ id, version, seq }], conflicts: [{ id, current }], head_seq,
+generation }`.
 
 Why a locked counter row and not a sequence: a sequence is non-transactional, so a lower value can
 commit after a higher one and a client that pulled in between misses it forever (Directive §7).
 
-Deletes always win: a push with `deleted = true` is accepted regardless of `base_version`. An edit
-whose `base_version` matches a tombstone is a conflict; the client shows "deleted".
+Accepting a push for an evicted object on the client's word is safe: a device whose generation is
+current has applied every delete, so it cannot resurrect anything, and the first re-creation of
+an evicted row makes every later stale base conflict, which the client rebases
+(`01-architecture.md`).
 
-The server does not merge anything: every value is a CRDT document (see `01-architecture.md`),
-so the client folds `current.value` into its local document and pushes again with
-`current.version` as `base_version`. The retry is an ordinary push.
+## Pull and ack
 
-## Pull, backfill, heads, reconciliation
+- `PullChangesRequest { group_id, since_seq, limit }` → `ChangeSet { entries (seq ascending,
+  live rows still present and tombstones), head_seq, generation, min_acked_generation?,
+  evicted_through_seq, more }`. If `since_seq < evicted_through_seq`, live entries in
+  `(since_seq, evicted_through_seq]` may be gone from the server: the device asks a member device
+  for that range with `RequestHistoryRequest`. Tombstones in that range are still here, since
+  they stay until acked.
+- `AckGenerationRequest { group_id, generation }` → `AckResult { min_acked_generation? }`. Sent by
+  a device after it has applied a `ChangeSet` with `more = false`, with the `generation` from
+  that response. Upserts `group_device`. `generation > head.generation` is refused. A value below
+  the device's stored ack means the device's local state went backwards (restored from a backup):
+  the answer is `resync_required` and the device drops its local store and requests history from
+  zero. The device drops its own local tombstones with `deleted_generation ≤
+  min_acked_generation`, since no device can ever hand it a live copy of those again.
+- `GetHeadsRequest { group_ids }` → `HeadList [{ group_id, head_seq, generation,
+  min_acked_generation? }]`, one `CheckMembershipRequest` per id.
 
-- `PullChangesRequest { group_id, since_seq, limit }` → `ChangeSet { objects (seq ascending,
-  tombstones included), head_seq, more }`. If `since_seq` is older than the oldest retained
-  tombstone's seq for that group, the response carries `reconcile_required = true` and the
-  client runs reconciliation.
-- `BackfillRequest { group_id, type?, before_seq, limit }` → `ChangeSet` with rows of that type
-  (or of every type when `type` is absent: the timeline scrolling back) and `seq < before_seq`,
-  descending, not deleted. Uses `(group_id, type, seq)` or `(group_id, seq)` accordingly.
-- `GetHeadsRequest {}` → `HeadList [{ group_id, head_seq }]` for every group the caller is a
-  member of (`ListGroupsRequest` is api-only, so `ledger` asks `group` through
-  `CheckMembershipRequest` for the group ids the caller supplies; the client supplies the ids it
-  knows).
-- `ListObjectIdsRequest { group_id }` → `ObjectIdList [{ id, version, deleted }]`: the client
-  deletes what is missing or tombstoned locally, fetches what is newer, pushes what is only local.
+`min_acked_generation` is `MIN(acked_generation)` over the group's `group_device` rows; null if
+any row is null or there are no rows.
 
-## Garbage collection
+## History requests (member devices are the store)
 
-Schedule `gc_tombstones`, every 24h: delete `object` rows with `deleted = true` and
-`deleted_at < now - 90d`. Per group, `oldest_retained_tombstone_seq` is derived at pull time
-(`min(seq) where deleted`), not stored.
+`RequestHistoryRequest { group_id, from_seq, to_seq, object_id? }` → `HistoryRequest`: insert a
+`pending` row, send `HistoryRequested { request_id, group_id, requester_device, from_seq, to_seq,
+object_id }` to `device`, which wakes every key-holding device of the group except the requester.
+A holder that wakes lists pending requests (`ListHistoryRequestsRequest { group_id }`), packs the
+entries it holds in the range (ciphertext, each with id, parent, type, schema_version, key_id,
+version, seq, deleted_generation, blob_id; tombstones included), uploads them as a blob of kind
+`bundle` with `request_id`, and confirms. `storage` then sends `BundleReady { request_id,
+bundle_id }`; the handler marks the row `fulfilled` and sends `HistoryReady { request_id,
+requester_device, bundle_id }` to `device`, which wakes the requester. A late holder sees the row
+is no longer pending and does nothing; a duplicate bundle is harmless and expires in 48 hours.
+The requester ingests the bundle like a `ChangeSet` and, if it ends short of `to_seq`, asks
+again from where it ended. No retries, no timeouts on the server: a requester that hears nothing
+asks again, and the client shows "waiting for a member to come online".
+
+This is the only way history older than 48 hours reaches a device: a new member, a new device, a
+device that was offline longer than the window, or a device scrolling past what it holds.
+
+## Sweeps (schedules, hourly, idempotent)
+
+- `evict_objects`: per group, `S = MAX(seq)` of live rows with `updated_at < now - 48h`; delete
+  live rows with `seq ≤ S` (an edit takes a new seq, so seq order is update order); set
+  `evicted_through_seq = GREATEST(evicted_through_seq, S)`. Batched 10k rows per statement.
+- `gc_tombstones`: per group with a non-null `min_acked_generation`, delete tombstones with
+  `deleted_generation ≤ min_acked_generation`.
+- `expire_history_requests`: delete rows older than 48 hours.
+
+Postgres therefore holds, per group, two days of activity plus tombstones nobody has acked yet,
+whatever the group's age.
 
 ## Messages
 
-| Handles | Response |
-|---|---|
-| PushObjectsRequest | PushResult |
-| PullChangesRequest | ChangeSet |
-| BackfillRequest | ChangeSet |
-| GetHeadsRequest | HeadList |
-| ListObjectIdsRequest | ObjectIdList |
-| PurgeGroupObjectsRequest | PurgeResult |
+| Handles | Response | From |
+|---|---|---|
+| PushObjectsRequest | PushResult | api |
+| PullChangesRequest | ChangeSet | api |
+| AckGenerationRequest | AckResult | api |
+| GetHeadsRequest | HeadList | api |
+| RequestHistoryRequest | HistoryRequest | api |
+| ListHistoryRequestsRequest | HistoryRequestList | api |
+| DeviceLeftGroup | (void) | device: delete the `group_device` row |
+| BundleReady | (void) | storage |
+| PurgeGroupObjectsRequest | PurgeResult | group |
 
-`PurgeGroupObjectsRequest { group_id }` (from `group`'s purge pass): delete every `object` row
-and the `group_head` row for the group in one transaction, batched (10k rows per statement so a
-large group does not hold the lock long), and answer `PurgeResult { remaining }` with the count
-still present. No tombstones are written: memberships are already gone, so no client can pull
-the group; a client with a stale cursor gets "not a member" and purges locally. Idempotent.
+`PurgeGroupObjectsRequest { group_id }` (from `group`'s purge pass): delete every `object`,
+`group_head`, `group_device` and `history_request` row for the group, batched, and answer
+`PurgeResult { remaining }`. No tombstones: memberships are already gone, so a client gets "not
+a member" and purges locally. Idempotent.
 
 | Sends | Response | To |
 |---|---|---|
@@ -120,23 +187,27 @@ the group; a client with a stale cursor gets "not a member" and purges locally. 
 | CheckBlobRequest | Blob | storage |
 | GroupHeadAdvanced | (void) | device |
 | ObjectDeleted | (void) | storage |
+| HistoryRequested | (void) | device |
+| HistoryReady | (void) | device |
 
 ## API
 
-`LedgerService`: PushObjects, PullChanges, Backfill, GetHeads, ListObjectIds. The api crate maps
-the proto `Object` to the plain Rust struct one to one; `value` and `blob_id` are passed through
-untouched.
+`LedgerService`: PushObjects, PullChanges, AckGeneration, GetHeads, RequestHistory,
+ListHistoryRequests. The api crate maps the proto entry to the plain Rust struct one to one;
+`value` and `blob_id` pass through untouched.
 
 ## Tests
 
-- Unit: CAS acceptance matrix (absent/0, match, mismatch, tombstone); cascade collects the full
-  subtree; `reconcile_required` boundary.
-- Integration: two replicas pushing to one group concurrently produce a gap-free sequence; a
-  pull during a concurrent push never returns a seq the next pull skips; delete cascades in one
-  transaction; gc removes only expired tombstones.
-- Property test: random interleavings of push/pull across N simulated clients converge to the
-  same id/version set after reconciliation; with several clients merging on one object, every
-  retry carries a `base_version` the server has seen and the object's final version equals the
-  number of accepted pushes.
-- Unit: a conflict returns the stored row unchanged; a batch with an oversized `value` is refused
-  as a whole.
+- Unit: CAS acceptance matrix (no row, match, mismatch, tombstone, delete of a tombstone);
+  generation rule (lower refused, equal accepted, deleting batch increments exactly once);
+  cascade collects the full subtree; eviction floor arithmetic.
+- Integration: two replicas pushing to one group concurrently produce a gap-free sequence; a pull
+  during a concurrent push never returns a seq the next pull skips; delete cascades in one
+  transaction; **the ack invariant**: after N devices interleave pushes, deletes, pulls and acks
+  at random, every tombstone the gc removed had `deleted_generation ≤` every device's ack at the
+  time, and every device that acked `g` had pulled every entry with `deleted_generation ≤ g`;
+  eviction leaves tombstones and sets the floor; an ack below the stored one answers
+  `resync_required`; a history request is fulfilled once and a late bundle is ignored.
+- Property test: random interleavings of push/pull/ack/evict across N simulated devices, with
+  history served by a simulated holder, converge to the same row per object on every device, and
+  no deleted object is ever live on any device after every device has acked past its generation.

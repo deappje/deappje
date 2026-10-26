@@ -146,14 +146,18 @@ nanoservices:
       - { message: FulfilKeyRequestRequest, response: KeyRequest }
       - { message: PublishWrappedKeysRequest, response: WrappedKeyList }
       - { message: GetWrappedKeysRequest, response: WrappedKeyList }
+      - { message: RemoveDeviceRequest, response: Device }
       - { message: GroupHeadAdvanced }
       - { message: MemberRemoved }
       - { message: BlobRequested }
+      - { message: HistoryRequested }
+      - { message: HistoryReady }
       - { message: CheckHolderCoverageRequest, response: HolderCoverage }
       - { message: PurgeGroupKeysRequest, response: PurgeResult }
       - { message: PurgeUserDevicesRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
+      - { message: DeviceLeftGroup }
     api:
       service: DeviceService
       methods:
@@ -165,9 +169,10 @@ nanoservices:
         - { name: FulfilKeyRequest, request: FulfilKeyRequestRequest, response: FulfilKeyRequestResponse }
         - { name: PublishWrappedKeys, request: PublishWrappedKeysRequest, response: PublishWrappedKeysResponse }
         - { name: GetWrappedKeys, request: GetWrappedKeysRequest, response: GetWrappedKeysResponse }
+        - { name: RemoveDevice, request: RemoveDeviceRequest, response: RemoveDeviceResponse }
 
   - name: ledger
-    description: Owns the per-group object log with versions, sequence numbers and tombstones.
+    description: The relay — 48 hours of ciphertext per group, counters, tombstones until acked, per-device acks, history requests.
     owns:
       tables:
         - name: object
@@ -183,75 +188,93 @@ nanoservices:
             - { name: version, type: int64 }
             - { name: seq, type: int64 }
             - { name: created_by_device, type: uuid }
-            - { name: deleted, type: bool }
-            - { name: deleted_at, type: timestamp, nullable: true }
+            - { name: deleted_generation, type: int64, nullable: true }
             - { name: updated_at, type: timestamp }
           indexes:
-            - { columns: [group_id, seq] }
-            - { columns: [group_id, type, seq] }
+            - { columns: [group_id, seq], unique: true }
             - { columns: [parent_id] }
-            - { columns: [deleted_at] }
+            - { columns: [group_id, deleted_generation] }
+            - { columns: [updated_at] }
         - name: group_head
           columns:
             - { name: group_id, type: uuid, primaryKey: true }
             - { name: head_seq, type: int64 }
+            - { name: generation, type: int64 }
+            - { name: evicted_through_seq, type: int64 }
+        - name: group_device
+          columns:
+            - { name: group_id, type: uuid }
+            - { name: device_id, type: uuid }
+            - { name: acked_generation, type: int64, nullable: true }
+            - { name: updated_at, type: timestamp }
+          indexes: [ { columns: [group_id, device_id], unique: true }, { columns: [device_id] } ]
+        - name: history_request
+          columns:
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: group_id, type: uuid }
+            - { name: requester_device, type: uuid }
+            - { name: from_seq, type: int64 }
+            - { name: to_seq, type: int64 }
+            - { name: object_id, type: uuid, nullable: true }
+            - { name: status, type: string }
+            - { name: bundle_id, type: uuid, nullable: true }
+            - { name: created_at, type: timestamp }
+          indexes: [ { columns: [group_id, status] } ]
     schedules:
-      - { name: gc_tombstones, every: 24h }
+      - { name: evict_objects, every: 1h }
+      - { name: gc_tombstones, every: 1h }
+      - { name: expire_history_requests, every: 1h }
     handles:
       - { message: PushObjectsRequest, response: PushResult }
       - { message: PullChangesRequest, response: ChangeSet }
-      - { message: BackfillRequest, response: ChangeSet }
+      - { message: AckGenerationRequest, response: AckResult }
       - { message: GetHeadsRequest, response: HeadList }
-      - { message: ListObjectIdsRequest, response: ObjectIdList }
+      - { message: RequestHistoryRequest, response: HistoryRequest }
+      - { message: ListHistoryRequestsRequest, response: HistoryRequestList }
+      - { message: DeviceLeftGroup }
+      - { message: BundleReady }
       - { message: PurgeGroupObjectsRequest, response: PurgeResult }
     sends:
       - { message: CheckMembershipRequest, response: MembershipCheck }
       - { message: CheckBlobRequest, response: Blob }
       - { message: GroupHeadAdvanced }
       - { message: ObjectDeleted }
+      - { message: HistoryRequested }
+      - { message: HistoryReady }
     api:
       service: LedgerService
       methods:
         - { name: PushObjects, request: PushObjectsRequest, response: PushObjectsResponse }
         - { name: PullChanges, request: PullChangesRequest, response: PullChangesResponse }
-        - { name: Backfill, request: BackfillRequest, response: BackfillResponse }
+        - { name: AckGeneration, request: AckGenerationRequest, response: AckGenerationResponse }
         - { name: GetHeads, request: GetHeadsRequest, response: GetHeadsResponse }
-        - { name: ListObjectIds, request: ListObjectIdsRequest, response: ListObjectIdsResponse }
+        - { name: RequestHistory, request: RequestHistoryRequest, response: RequestHistoryResponse }
+        - { name: ListHistoryRequests, request: ListHistoryRequestsRequest, response: ListHistoryRequestsResponse }
 
   - name: storage
-    description: Owns blobs in the private bucket and drives their upload, retention, expiry and re-upload lifecycle.
+    description: Owns blob rows, their holders and their 48 hours in the private bucket; presigns uploads and downloads.
     owns:
-      processingObjects:
-        - name: blob
-          prefix: blb
-          spec:
-            - { name: group_id, type: uuid, immutable: true }
-            - { name: object_id, type: uuid, nullable: true }
-            - { name: kind, type: string, immutable: true }
-            - { name: storage_key, type: string, immutable: true }
-            - { name: sha256, type: bytes, immutable: true }
-            - { name: declared_size, type: int64, immutable: true }
-            - { name: uploader_device, type: uuid, immutable: true }
-            - { name: retention_days, type: int32 }
-          status:
-            - { name: phase, type: string }
-            - { name: size_bytes, type: int64, nullable: true }
-            - { name: uploaded_at, type: timestamp, nullable: true }
-            - { name: expires_at, type: timestamp, nullable: true }
-            - { name: requested_at, type: timestamp, nullable: true }
-            - { name: last_error, type: string, nullable: true }
       tables:
-        - name: blob_access
+        - name: blob
           columns:
-            - { name: blob_id, type: uuid, primaryKey: true }
-            - { name: last_access_at, type: timestamp }
-            - { name: requested_at, type: timestamp, nullable: true }
+            - { name: id, type: uuid, primaryKey: true }
+            - { name: group_id, type: uuid }
+            - { name: kind, type: string }
+            - { name: storage_key, type: string }
+            - { name: sha256, type: bytes }
+            - { name: declared_size, type: int64 }
+            - { name: uploader_device, type: uuid }
+            - { name: request_id, type: uuid, nullable: true }
+            - { name: in_bucket, type: bool }
+            - { name: expires_at, type: timestamp, nullable: true }
+            - { name: created_at, type: timestamp }
+          indexes: [ { columns: [group_id] }, { columns: [expires_at] } ]
         - name: blob_holder
           columns:
             - { name: blob_id, type: uuid }
             - { name: device_id, type: uuid }
             - { name: downloaded_at, type: timestamp }
-          indexes: [ { columns: [blob_id, device_id] }, { columns: [device_id] } ]
+          indexes: [ { columns: [blob_id, device_id], unique: true }, { columns: [device_id] } ]
       configTypes:
         - name: blob_kind
           prefix: bkind
@@ -266,12 +289,15 @@ nanoservices:
       - name: object_storage
         calls:
           - { name: delete_object, strategy: idempotent }
+    schedules:
+      - { name: expire_blobs, every: 1h }
     handles:
       - { message: CreateUploadRequest, response: UploadGrant }
       - { message: ConfirmUploadRequest, response: Blob }
+      - { message: ReuploadBlobRequest, response: UploadGrant }
       - { message: GetDownloadRequest, response: DownloadGrant }
-      - { message: RequestBlobRequest, response: Blob }
-      - { message: DropBlobHoldRequest, response: Blob }
+      - { message: RequestBlobsRequest }
+      - { message: DropBlobHoldRequest }
       - { message: CheckBlobRequest, response: Blob }
       - { message: ObjectDeleted }
       - { message: PurgeGroupBlobsRequest, response: PurgeResult }
@@ -279,11 +305,13 @@ nanoservices:
       - { message: CheckMembershipRequest, response: MembershipCheck }
       - { message: CheckHolderCoverageRequest, response: HolderCoverage }
       - { message: BlobRequested }
+      - { message: BundleReady }
     api:
       service: StorageService
       methods:
         - { name: CreateUpload, request: CreateUploadRequest, response: CreateUploadResponse }
         - { name: ConfirmUpload, request: ConfirmUploadRequest, response: ConfirmUploadResponse }
+        - { name: ReuploadBlob, request: ReuploadBlobRequest, response: ReuploadBlobResponse }
         - { name: GetDownload, request: GetDownloadRequest, response: GetDownloadResponse }
-        - { name: RequestBlob, request: RequestBlobRequest, response: RequestBlobResponse }
+        - { name: RequestBlobs, request: RequestBlobsRequest, response: RequestBlobsResponse }
         - { name: DropBlobHold, request: DropBlobHoldRequest, response: DropBlobHoldResponse }

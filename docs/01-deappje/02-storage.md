@@ -1,48 +1,31 @@
 # `storage`
 
-Owns blobs: the encrypted files in the environment's private bucket and their lifecycle. This is
-the one nanoservice with a processing-object type, because a blob is driven against a third
-party over time: wait for the upload to land, expire it, delete it from the bucket, wait for a
-re-upload. Directive §3, §5, §6 bind the type; §2 the side table; §6 the delete call; §7 the
-messages.
+Owns blobs: a row per encrypted file, who holds a copy, and the file's 48 hours in the private
+bucket. Plain executor with one hourly sweep. Nothing here has a state machine: a blob is in the
+bucket until its expiry or until everyone has it, and after that it comes from a holder device.
+Directive §2 for the tables, §6 for the delete call, §7 for the messages.
 
-## Processing object `blob` (prefix `blb`)
+## Tables
 
-### Spec (desired state)
+### `blob`
 
-| field | type | immutable | notes |
-|---|---|---|---|
-| group_id | uuid | yes | |
-| object_id | uuid, nullable | no | the ledger object that references it; set on first push |
-| kind | string | yes | a `blob_kind` config name: `full`, `thumbnail`, `attachment` |
-| storage_key | string | yes | `g/<group>/b/<blob>` — no empty, `.` or `..` segments |
-| sha256 | bytes | yes | of the ciphertext, declared at create time |
-| declared_size | int64 | yes | checked against the kind's cap at create |
-| uploader_device | uuid | yes | the holder of last resort |
-| retention_days | int32 | no | copied from the kind at create (2 for `full` and `attachment`: the bucket is a 48-hour cache, extended on every download) |
+| column | type | notes |
+|---|---|---|
+| id | uuid | primary key |
+| group_id | uuid | |
+| kind | string | a `blob_kind` config name: `full`, `thumbnail`, `attachment`, `bundle` |
+| storage_key | string | `g/<group>/b/<blob>`; no empty, `.` or `..` segments |
+| sha256 | bytes | of the ciphertext, declared by the uploader; verified by the downloader |
+| declared_size | int64 | checked against the kind's cap and the group quota |
+| uploader_device | uuid | the holder of last resort |
+| request_id | uuid, nullable | for kind `bundle`: the `ledger` history request it answers |
+| in_bucket | bool | true between a confirmed upload and the bucket delete |
+| expires_at | timestamp, nullable | set on confirm: `now + retention`; passed ⇒ the sweep deletes |
+| created_at | timestamp | |
 
-### Status (observed state)
+Indexes: `(group_id)`; `(expires_at)` where `in_bucket`.
 
-| field | type |
-|---|---|
-| phase | string: `pending_upload`, `available`, `expired`, `requested` |
-| size_bytes | int64, nullable |
-| uploaded_at | timestamp, nullable |
-| expires_at | timestamp, nullable |
-| requested_at | timestamp, nullable |
-| last_error | string, nullable |
-
-### Side table `blob_access`
-
-| column | type |
-|---|---|
-| blob_id | uuid, primary key |
-| last_access_at | timestamp |
-
-Written by the `GetDownloadRequest` handler (unclaimed input: invariant 3 forbids writing status
-from the request path), followed by `nudge`. The pass reads it and extends `expires_at`.
-
-### Side table `blob_holder`
+### `blob_holder`
 
 | column | type |
 |---|---|
@@ -50,119 +33,73 @@ from the request path), followed by `nudge`. The pass reads it and extends `expi
 | device_id | uuid |
 | downloaded_at | timestamp |
 
-Unique `(blob_id, device_id)`, index `(device_id)`. Written by `GetDownloadRequest` too: a device
-that was granted a download is assumed to hold the ciphertext from then on (the client keeps it
-in its local store). With a 48-hour cache this is the holder set that makes re-requests work;
-`BlobRequested` names every holder plus the uploader. A phone may be short on storage: when it
-evicts a blob it calls `DropBlobHoldRequest` (batched, best effort), and when it is woken for
-bytes it no longer has it calls the same, so the holder set converges on the truth. Rows go with
-the blob. If no holder is left, the blob is gone: the thumbnail stays and the client shows the
-full size as unavailable.
+Unique `(blob_id, device_id)`, index `(device_id)`. A device that was granted a download is a
+holder until it says otherwise (`DropBlobHoldRequest`: evicted under storage pressure, or woken
+for bytes it no longer has). The uploader is always a holder. If no holder is left, the blob is
+gone: the thumbnail, if any, stays and the client shows the full size as unavailable.
 
-### Reconcile pass (level-triggered, one `Outcome` per pass)
+## Config
 
-1. `meta.deleting()` ⇒ `HEAD` the key. Present ⇒ `delete_object`, then `Retry` (confirm on the
-   next pass, never settle on an accepted delete: invariant 6). Absent ⇒ `Delete`.
-2. `pending_upload` ⇒ `HEAD` the key. Present with matching size and (via the stored ETag or a
-   ranged read of the first bytes when the provider exposes no hash) plausible ⇒ phase
-   `available`, `uploaded_at = now`, `expires_at = now + retention_days`,
-   `Converged.after(expires_at - now)`. Absent ⇒ `Converged.after(5m)`; the confirm handler nudges
-   so the poll is only a fallback. Pending longer than 24h ⇒ `Blocked` (abandoned upload; a new
-   `CreateUploadRequest` makes a new object).
-3. `available` ⇒ if `blob_access.last_access_at + retention_days > expires_at`, extend
-   `expires_at`. Then, if a download happened since the last coverage check, send
-   `CheckHolderCoverageRequest { group_id, device_ids: holders ∪ uploader }` → `HolderCoverage
-   { complete }`; `complete` ⇒ `delete_object`, phase `expired`, `Settled` (everyone has it; the
-   bucket copy is pure cost). If `now >= expires_at` ⇒ the same. Otherwise
-   `Converged.after(expires_at - now)`.
-4. `expired` ⇒ `Settled` (parked until a `RequestBlobRequest` nudges).
-5. `requested` ⇒ `HEAD` the key. Present ⇒ as in 2, back to `available`. Absent ⇒ `Settled`
-   (parked until `ConfirmUploadRequest` nudges).
-
-Integrity: the client declares `sha256` of the ciphertext at create; the receiving client
-verifies it after download and before decrypting. The server only compares size. A mismatch on a
-re-upload is detected by the downloader, who calls `RequestBlobRequest` again; the uploader
-device is at fault and the audit log names it.
-
-### Worker policy
-
-`resync` 6h (every blob is re-examined at least that often, cheap `HEAD`s), `backoff` 30s
-exponential to 1h, `max_attempts` 20 before `Blocked`, `attempt_timeout` 60s. Identical on every
-replica (invariant 4).
-
-### Teardown
-
-`ObjectDeleted` ⇒ `mark_deleted`. The pass confirms absence in the bucket before `Delete`; a
-blob whose delete keeps failing stays loud by age, never parks.
-
-## Config type `blob_kind` (prefix `bkind`)
-
-| field | type |
-|---|---|
-| retention_days | int32 |
-| max_size_bytes | int64 |
-
-Seeds under `config/base/`: `full` (2, 26214400), `thumbnail` (3650, 204800), `attachment`
-(2, 26214400). Read by `CreateUploadRequest`; edited by a human only.
-
-## Config type `storage_quota` (prefix `squo`)
-
-| field | type |
-|---|---|
-| max_group_bytes | int64 |
-
-One seed, `default` (21474836480, 20 GiB). `CreateUploadRequest` sums `declared_size` of the
-group's blobs in `pending_upload` or `available` (read of own status, derived at request time, not
-stored) and refuses when the sum plus the new size exceeds it. Retention keeps real usage far
-below the cap; the cap bounds the bill against a client that uploads without viewing.
+`blob_kind` (prefix `bkind`): `retention_days`, `max_size_bytes`. Seeds: `full` (2, 25 MiB),
+`thumbnail` (3650, 200 KiB), `attachment` (2, 25 MiB), `bundle` (2, 256 MiB). Thumbnails are the
+one long-lived kind, so an album grid works on a new device without waking anyone; set it to 2 to
+make the bucket a pure cache. `storage_quota` (prefix `squo`): `max_group_bytes`, 20 GiB.
+`04-config.md`.
 
 ## External calls
 
 | System | Call | Strategy | Irreversible | Argument |
 |---|---|---|---|---|
-| object_storage | delete_object | idempotent | no (the ciphertext is recoverable from a holder device, and the pass re-drives) | S3 `DeleteObject` on a missing key succeeds; a re-send converges. |
+| object_storage | delete_object | idempotent | no (holders have the bytes) | S3 `DeleteObject` on a missing key succeeds; a re-send converges. |
 
-Presigned PUT/GET generation and `HEAD` are reads, not adapters. Presigning is virtual-hosted,
-then the origin is replaced by `S3_PRIVATE_URL` (the platform's rule). The simulator models a
-bucket with `put`, `head`, `delete` and ack loss on delete; the `effecttest` audit covers it.
+Presigned PUT/GET and `HEAD` are reads. Presigning is virtual-hosted, then the origin is replaced
+by `S3_PRIVATE_URL`. Dispatched `Unfenced` from handlers and the sweep through `Call::dispatch`
+with `classify_transport`; a failed delete leaves `in_bucket = true` with a passed `expires_at`,
+so the next sweep retries. The simulator models a bucket with `put`, `head`, `delete` and ack
+loss on delete; the `effecttest` audit covers it.
 
 ## Messages
 
 | Handles | Response | Behaviour |
 |---|---|---|
-| CreateUploadRequest | UploadGrant | member check; kind lookup; size cap; group quota; `TypedStore::create` in `pending_upload`; presigned PUT, 15 minutes |
-| ConfirmUploadRequest | Blob | `nudge`; returns current phase |
-| GetDownloadRequest | DownloadGrant | member check; if `available`: presigned GET (5 minutes), write `blob_access` and `blob_holder`, `nudge`; else the phase so the client can request |
-| RequestBlobRequest | Blob | member check; write `requested_at` into `blob_access`, `nudge`; the pass moves `expired` → `requested` and sends `BlobRequested` |
-| DropBlobHoldRequest | Blob | delete the caller's `blob_holder` rows for the listed blobs; no nudge needed |
-| CheckBlobRequest | Blob | from `ledger`: group and phase |
-| ObjectDeleted | (void) | `mark_deleted` for `blob_id` |
-| PurgeGroupBlobsRequest | PurgeResult | from `group`'s purge pass: `mark_deleted` every blob of the group not already deleting; answer `remaining` = blobs of the group still present (deleting ones included, since the bucket delete is confirmed by their own passes). Idempotent. |
+| CreateUploadRequest | UploadGrant | member check; kind lookup; size cap; quota (`SUM(declared_size)` of the group's rows with `in_bucket`, derived at request time); insert row with `in_bucket = false`; presigned PUT, 15 minutes |
+| ConfirmUploadRequest | Blob | `HEAD` the key; size must equal `declared_size`; set `in_bucket = true`, `expires_at = now + retention`, uploader as holder; if `request_id` is set send `BundleReady` to `ledger` |
+| ReuploadBlobRequest | UploadGrant | member check; a holder re-uploads to the same key; presigned PUT; then `ConfirmUpload` as above |
+| GetDownloadRequest | DownloadGrant | member check; if `in_bucket` and `expires_at > now`: presigned GET (5 minutes), upsert holder, then `CheckHolderCoverageRequest { group_id, holders ∪ uploader }` → `complete` ⇒ `delete_object`, `in_bucket = false` (everyone has it; the bucket copy is pure cost); else answer `gone` so the client requests it |
+| RequestBlobsRequest | (void) | member check; send `BlobRequested { group_id, blob_ids, holders }` to `device` with every holder of every listed blob; the client batches (an album scroll asks for its missing thumbnails in one call) |
+| DropBlobHoldRequest | (void) | delete the caller's holder rows for the listed blobs |
+| CheckBlobRequest | Blob | from `ledger`: `{ group_id, present }` where present = a row exists (the bucket copy may already be gone; the object may still reference it) |
+| ObjectDeleted | (void) | from `ledger`: `delete_object`, delete the row and its holders; on a failed delete set `expires_at = now` and leave `in_bucket` for the sweep |
+| PurgeGroupBlobsRequest | PurgeResult | from `group`'s purge pass: for a batch of the group's rows `delete_object` where `in_bucket`, delete rows and holders; answer `remaining`. Idempotent. |
 
-Phase is status and status is written only under claim, so neither the download nor the
-re-request handler touches it: both write the `blob_access` side table and nudge, and the next
-pass observes the marker.
+A re-uploaded blob keeps its id, key and sha256, so every reference in every document stays
+valid and the downloader's hash check still applies.
 
 | Sends | Response | To |
 |---|---|---|
 | CheckMembershipRequest | MembershipCheck | group |
 | CheckHolderCoverageRequest | HolderCoverage | device |
 | BlobRequested | (void) | device |
+| BundleReady | (void) | ledger |
 
-`BlobRequested { group_id, blob_id, holders }` (the uploader plus every `blob_holder` device) is
-sent from the reconcile pass between fences, after the status write that records `requested`.
+## Sweep
+
+`expire_blobs`, hourly: rows with `in_bucket` and `expires_at < now` ⇒ `delete_object`, then
+`in_bucket = false`. The row and its holders stay: they are the registry a re-request needs.
+Rows of kind `bundle` are deleted outright once expired (nobody re-requests a bundle; the
+requester asks `ledger` for a new one).
 
 ## API
 
-`StorageService`: CreateUpload, ConfirmUpload, GetDownload, RequestBlob, DropBlobHold.
+`StorageService`: CreateUpload, ConfirmUpload, ReuploadBlob, GetDownload, RequestBlobs,
+DropBlobHold.
 
 ## Tests
 
-- Unit: pass outcomes per phase × bucket state (table-driven); retention extension math; size
-  cap; group quota at the boundary.
-- Integration (testkit + bucket simulator): create → confirm → available → expiry deletes →
-  request → re-upload → available; `ObjectDeleted` with a present key deletes and confirms on
-  the next pass; two replicas never both delete; once the last key-holder device downloads, the
-  next pass deletes the bucket copy; a dropped hold removes the device from the next
-  `BlobRequested`.
+- Unit: quota at the boundary; size cap; expiry arithmetic; coverage ⇒ delete.
+- Integration (testkit + bucket simulator): create → confirm → download → expiry sweep deletes
+  → request wakes holders → re-upload → download again; once the last key-holder device
+  downloads, the bucket copy is deleted at once; a dropped hold leaves the next `BlobRequested`;
+  `ObjectDeleted` with a failing delete is retried by the sweep; a `bundle` confirm sends
+  `BundleReady` once.
 - `effecttest`: `delete_object` with ack loss.
