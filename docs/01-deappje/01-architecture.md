@@ -87,26 +87,23 @@ the system is here. Member devices are the store: the server keeps a live row fo
 tombstone until every device has acked it.
 
 - **Tables**: `object` (id, group, parent, type, schema version, key id, value, blob id, version,
-  seq, creator device, `deleted`), `group_head` (group, head seq, `last_delete_seq`,
-  `evicted_through_seq`): the counter row; `group_device` (group, device, `acked_seq`);
-  `history_request`. Directive §2, §7 (serialize on a counter row under `FOR UPDATE`).
-- **Push**: one transaction per batch: lock `group_head`; refuse the batch if the device's cursor
-  is below `last_delete_seq` (someone deleted since it last pulled: it pulls first); then per
-  object compare `base_version` with the stored version (no row ⇒ take the client's word: a
-  device past `last_delete_seq` has applied every delete, so it cannot resurrect anything, and
-  the first re-creation of an evicted row makes every later stale base conflict), on match write
+  seq, creator device, `deleted`), `group_head` (group, head seq, `evicted_through_seq`): the
+  counter row; `group_device` (group, device, `acked_seq`); `history_request`. Directive §2, §7
+  (serialize on a counter row under `FOR UPDATE`).
+- **Push**: one transaction per batch: lock `group_head`; per object compare `base_version` with
+  the stored version (no row ⇒ take the client's word: deleted objects are never evicted, only
+  hard-deleted after this device acked past them, so nothing can be resurrected, and the first
+  re-creation of an evicted row makes every later stale base conflict), on match write
   `version + 1` and `seq = head + 1`, on mismatch report a conflict carrying the current row. A
-  delete tombstones the subtree by `parent_id` in the same transaction and moves
-  `last_delete_seq`. A tombstone's deletion mark is its own seq; there is no second counter.
-  Commit, then `GroupHeadAdvanced` and, per deleted object with a blob, `ObjectDeleted`
-  (invariant 7).
+  delete tombstones the subtree by `parent_id` in the same transaction. A tombstone's deletion
+  mark is its own seq; there is no second counter and no "pull before you push" check. Commit,
+  then `GroupHeadAdvanced` and, per deleted object with a blob, `ObjectDeleted` (invariant 7).
 - **Pull and ack**: `PullChangesRequest` returns entries with `seq > cursor`, tombstones included,
-  with `last_delete_seq`, the minimum acked cursor and the eviction floor; a device whose cursor
-  is below the floor asks a member device for the gap. After applying a pull the device
-  `AckSeq`s the head it received; the server keeps the minimum per group, hard-deletes tombstones
-  at or below it, and hands the minimum back so devices drop their own tombstones. An ack that
-  goes backwards means a restored backup and forces a resync. `GetHeadsRequest` returns
-  `(group, head, last delete, min ack)`.
+  with the minimum acked cursor and the eviction floor; a device whose cursor is below the floor
+  asks a member device for the gap. After applying a pull the device `AckSeq`s the head it
+  received; the server keeps the minimum per group, hard-deletes tombstones at or below it, and
+  hands the minimum back so devices drop their own tombstones. An ack that goes backwards means a
+  restored backup and forces a resync. `GetHeadsRequest` returns `(group, head, min ack)`.
 - **History**: `RequestHistoryRequest` records a range and wakes every key-holding device through
   `device`; one of them uploads a `bundle` blob; `storage` reports `BundleReady`; the requester is
   woken. No server-side retries: the requester asks again. This is how a new member, a new device
@@ -143,9 +140,9 @@ Plain executor with one hourly sweep; no state machine.
 
 ## What the server computes
 
-Six things, and nothing else: whether a user is a member of a group; the next sequence number;
-whether a version matches; whether a cursor is behind the last delete; the minimum acked cursor
-of a group; whether a blob is past its retention. Every other byte is relayed, never read.
+Five things, and nothing else: whether a user is a member of a group; the next sequence number;
+whether a version matches; the minimum acked cursor of a group; whether a blob is past its
+retention. Every other byte is relayed, never read.
 
 ## Values and conflicts (client core)
 
@@ -160,6 +157,10 @@ client core has one way to handle it:
    push wins. A few immediate retries, then the object waits in the outbox for the next sync.
 3. A tombstone in the returned row ends the loop: the local edit is dropped and the client shows
    "deleted".
+4. A child whose parent the device holds as a tombstone is dead, whatever its own row says; the
+   first client to notice pushes its tombstone. This is what covers a device that commented on a
+   photo someone deleted while it was offline: the server does not check parents, since they may
+   already be evicted.
 
 No conflicted copies and no merge policies: a friends-group app edits small objects one field at
 a time, and field-level rebase covers it.

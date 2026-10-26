@@ -199,7 +199,6 @@ nanoservices:
           columns:
             - { name: group_id, type: uuid, primaryKey: true }
             - { name: head_seq, type: int64 }
-            - { name: last_delete_seq, type: int64 }
             - { name: evicted_through_seq, type: int64 }
         - name: group_device
           columns:

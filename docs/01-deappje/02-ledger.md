@@ -35,7 +35,6 @@ garbage collection; `(updated_at)` for eviction.
 |---|---|---|
 | group_id | uuid | primary key |
 | head_seq | int64 | last assigned sequence |
-| last_delete_seq | int64 | seq of the most recent tombstone; a push from a device whose cursor is below it is refused |
 | evicted_through_seq | int64 | every live row with `seq ≤` this has been evicted |
 
 Created with zeros on the first push to a group.
@@ -70,9 +69,8 @@ Index `(group_id, status)`. Rows older than 48 hours are dropped by the sweep.
 
 ## Push
 
-`PushObjectsRequest { group_id, cursor, objects: [{ id, parent_id?, type, schema_version,
-key_id, value?, blob_id?, base_version, deleted }] }`. `cursor` is the seq the device has pulled
-through and applied.
+`PushObjectsRequest { group_id, objects: [{ id, parent_id?, type, schema_version, key_id,
+value?, blob_id?, base_version, deleted }] }`.
 
 Before the transaction: `CheckMembershipRequest`; for every `blob_id`, `CheckBlobRequest` must
 answer `present` for this group (remote I/O outside the transaction, invariant 7). A `value`
@@ -81,43 +79,41 @@ over 1 MiB refuses the whole batch.
 One transaction:
 
 1. `SELECT ... FROM group_head WHERE group_id = $1 FOR UPDATE` (insert if absent).
-2. If `cursor < head.last_delete_seq` ⇒ answer `PushResult { stale: true, last_delete_seq }` and
-   write nothing: someone deleted since this device last pulled, so it pulls, applies the
-   tombstones, and pushes again. On a busy chat without deletes this never fires.
-3. Per object, in request order, read the current row:
+2. Per object, in request order, read the current row:
    - **No row** (new, or evicted) ⇒ accept with `version = base_version + 1`.
    - **Tombstone** ⇒ a delete is a no-op accept; anything else is a conflict carrying the
      tombstone (the client shows "deleted").
    - **Live row, `base_version == version`** ⇒ accept: `version + 1`, `seq = head + 1`, head
      advances. If `deleted`: null `value` and `blob_id`, `deleted = true`, and tombstone every
-     descendant (recursive by `parent_id`) each with its own next `seq`; `last_delete_seq` becomes
-     the highest of them.
+     descendant (recursive by `parent_id`) each with its own next `seq`.
    - **Live row, mismatch** ⇒ conflict `{ id, current }` with the stored row as it is.
-4. Commit.
+3. Commit.
 
 After commit: `GroupHeadAdvanced { group_id, head_seq, writer_device }` once; `ObjectDeleted
 { group_id, object_id, blob_id }` per tombstoned row that had a blob.
 
-Response: `PushResult { accepted: [{ id, version, seq }], conflicts: [{ id, current }], head_seq,
-last_delete_seq }`.
+Response: `PushResult { accepted: [{ id, version, seq }], conflicts: [{ id, current }], head_seq }`.
 
 A tombstone's deletion mark is its seq, so "device acked cursor `c`" means "device has applied
-every tombstone with `seq ≤ c`", with no second counter. Several tombstones from one push, or
-from several pushes, simply have their own seqs.
+every tombstone with `seq ≤ c`", with no second counter. There is no "pull before you push"
+check: an edit or a re-creation of a deleted object conflicts on the tombstone, which stays until
+this very device has acked past it, and a child added under a parent the device did not know was
+deleted is handled by the clients (a child whose parent is a tombstone is dead; the first client
+to notice pushes its tombstone). The server cannot check parents anyway once they are evicted.
 
 Why a locked counter row and not a sequence: a sequence is non-transactional, so a lower value can
 commit after a higher one and a client that pulled in between misses it forever (Directive §7).
 
-Accepting a push for an evicted object on the client's word is safe: a device whose cursor is
-past `last_delete_seq` has applied every delete, so it cannot resurrect anything, and the first
-re-creation of an evicted row makes every later stale base conflict, which the client rebases
-(`01-architecture.md`).
+Accepting a push for an evicted object on the client's word is safe: a deleted object is never
+evicted, only hard-deleted after this device acked past its tombstone, so nothing can be
+resurrected, and the first re-creation of an evicted row makes every later stale base conflict,
+which the client rebases (`01-architecture.md`).
 
 ## Pull and ack
 
 - `PullChangesRequest { group_id, since_seq, limit }` → `ChangeSet { entries (seq ascending,
-  live rows still present and tombstones), head_seq, last_delete_seq, min_acked_seq?,
-  evicted_through_seq, more }`. If `since_seq < evicted_through_seq`, live entries in
+  live rows still present and tombstones), head_seq, min_acked_seq?, evicted_through_seq,
+  more }`. If `since_seq < evicted_through_seq`, live entries in
   `(since_seq, evicted_through_seq]` may be gone from the server: the device asks a member device
   for that range with `RequestHistoryRequest`. Tombstones in that range are still here, since
   they stay until acked.
@@ -128,8 +124,8 @@ re-creation of an evicted row makes every later stale base conflict, which the c
   and the device drops its local store and requests history from zero. The device drops its own
   local tombstones with `seq ≤ min_acked_seq`, since no device can ever hand it a live copy of
   those again.
-- `GetHeadsRequest { group_ids }` → `HeadList [{ group_id, head_seq, last_delete_seq,
-  min_acked_seq? }]`, one `CheckMembershipRequest` per id.
+- `GetHeadsRequest { group_ids }` → `HeadList [{ group_id, head_seq, min_acked_seq? }]`, one
+  `CheckMembershipRequest` per id.
 
 `min_acked_seq` is `MIN(acked_seq)` over the group's `group_device` rows; null if any row is null
 or there are no rows.
@@ -203,17 +199,16 @@ ListHistoryRequests. The api crate maps the proto entry to the plain Rust struct
 
 ## Tests
 
-- Unit: CAS acceptance matrix (no row, match, mismatch, tombstone, delete of a tombstone);
-  stale rule (cursor below `last_delete_seq` refused, at or above accepted, a deleting batch
-  moves `last_delete_seq` to its highest tombstone); cascade collects the full subtree; eviction
-  floor arithmetic.
+- Unit: CAS acceptance matrix (no row, match, mismatch, tombstone, delete of a tombstone,
+  re-creation of a tombstoned id); cascade collects the full subtree; eviction floor arithmetic.
 - Integration: two replicas pushing to one group concurrently produce a gap-free sequence; a pull
   during a concurrent push never returns a seq the next pull skips; delete cascades in one
   transaction; **the ack invariant**: after N devices interleave pushes, deletes, pulls and acks
-  at random, every tombstone the gc removed had `seq ≤` every device's ack at the time, and every
-  device that acked `c` had pulled every tombstone with `seq ≤ c`; eviction leaves tombstones and
-  sets the floor; an ack below the stored one answers `resync_required`; a history request is
-  fulfilled once and a late bundle is ignored.
+  at random, every tombstone the gc removed had `seq ≤` every device's ack at the time, every
+  device that acked `c` had pulled every tombstone with `seq ≤ c`, and a stale device's edit of
+  a deleted object always conflicts; eviction leaves tombstones and sets the floor; an ack below
+  the stored one answers `resync_required`; a history request is fulfilled once and a late
+  bundle is ignored.
 - Property test: random interleavings of push/pull/ack/evict across N simulated devices, with
   history served by a simulated holder, converge to the same row per object on every device, and
   no deleted object is ever live on any device after every device has acked past its tombstone.

@@ -4,8 +4,8 @@
 
 - `group`: invite acceptance rules, subgroup subset rule, last-admin rule.
 - `device`: rotation batch acceptance, member checks on wrap.
-- `ledger`: the CAS matrix, the stale-cursor rule, cascade collection, eviction floor
-  arithmetic, response shaping for pull.
+- `ledger`: the CAS matrix, cascade collection, eviction floor arithmetic, response shaping for
+  pull.
 - `storage`: quota and size cap at the boundary, expiry arithmetic, coverage ⇒ delete.
 
 ## `effecttest` audits (one per adapter, in each nanoservice's `tests/effects_audit.rs`)
@@ -26,10 +26,10 @@ definitive rejection is classified as such.
   single-use invite.
 - **Sequence integrity**: N tasks push to one group concurrently; the resulting `seq` set is
   `1..=N` with no gaps; a reader polling during the run never observes a seq it later misses.
-- **Delete semantics**: tombstone cascade; delete wins over a concurrent edit; a push from a
-  cursor below the last delete is refused and succeeds after a pull; the **ack invariant** under
-  random interleavings of push, delete, pull, ack and evict across N devices (every tombstone the
-  gc removed was at or below every device's acked cursor, and no device ever holds a live copy of
+- **Delete semantics**: tombstone cascade; delete wins over a concurrent edit; a stale device's
+  edit or re-creation of a deleted object conflicts; the **ack invariant** under random
+  interleavings of push, delete, pull, ack and evict across N devices (every tombstone the gc
+  removed was at or below every device's acked cursor, and no device ever holds a live copy of
   an object whose tombstone it has acked past); an ack that goes backwards gets
   `resync_required`.
 - **History**: a device with a cursor below the floor requests the gap; a simulated holder
@@ -60,7 +60,8 @@ it and refuses to write it), the keyring (wrap/unwrap round trips), the rebase l
 editing different fields of one object offline both keep their edits; the same field goes to the
 later push; a delete during a retry wins; an invalid rebase result is shown, not pushed), notes
 (two devices typing offline produce two `note_update` children that combine to the same text in
-either order), the invite tag, and a simulated multi-device sync harness that drives random
+either order), the orphan rule (a child of a tombstoned parent is dead and gets tombstoned), the
+invite tag, and a simulated multi-device sync harness that drives random
 push/pull/ack/offline interleavings, with eviction and a simulated holder serving history,
 against an in-memory model of `ledger`'s contract and asserts that every device ends with the
 same rows. These
