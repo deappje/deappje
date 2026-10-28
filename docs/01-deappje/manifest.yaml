@@ -173,7 +173,7 @@ nanoservices:
         - { name: RemoveDevice, request: RemoveDeviceRequest, response: RemoveDeviceResponse }
 
   - name: ledger
-    description: The relay — 48 hours of ciphertext per group, the counter, tombstones until acked, per-device acked cursors, history requests.
+    description: The relay — 48 hours of ciphertext per group, tombstones included, the counter, per-device acked cursor and coverage floor, history requests.
     owns:
       tables:
         - name: object
@@ -190,7 +190,6 @@ nanoservices:
             - { name: uploaded_at, type: timestamp }
           indexes:
             - { columns: [group_id, seq], unique: true }
-            - { columns: [group_id, deleted, seq] }
             - { columns: [uploaded_at] }
         - name: group_head
           columns:
@@ -201,7 +200,8 @@ nanoservices:
           columns:
             - { name: group_id, type: uuid }
             - { name: device_id, type: uuid }
-            - { name: acked_seq, type: int64, nullable: true }
+            - { name: acked_seq, type: int64 }
+            - { name: covered_from_seq, type: int64 }
             - { name: updated_at, type: timestamp }
           indexes: [ { columns: [group_id, device_id], unique: true }, { columns: [device_id] } ]
         - name: history_request
@@ -213,13 +213,13 @@ nanoservices:
             - { name: to_seq, type: int64 }
             - { name: object_id, type: uuid, nullable: true }
             - { name: status, type: string }
+            - { name: covered_from_seq, type: int64, nullable: true }
             - { name: claimed_by, type: uuid, nullable: true }
             - { name: claimed_at, type: timestamp, nullable: true }
             - { name: created_at, type: timestamp }
           indexes: [ { columns: [group_id, status] } ]
     schedules:
       - { name: evict_objects, every: 1h }
-      - { name: gc_tombstones, every: 1h }
       - { name: expire_history_requests, every: 1h }
     handles:
       - { message: PushObjectsRequest, response: PushResult }

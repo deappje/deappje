@@ -59,7 +59,7 @@ for another device and hands it back.
   removed user's wrapped keys for that group are deleted and every other member's devices are
   pushed so one of them rotates.
 - **Also**: `DeviceLeftGroup` to `ledger` whenever a device loses its keys for a group, so a
-  gone device stops blocking garbage collection.
+  gone device is no longer a candidate for history requests.
 - **Trust rule**: the server never seeds trust. A device holds a group's keys only because a
   person on a device that already holds them approved its key request, by scanning the new
   device's fingerprint QR or comparing the code. That includes the user's own new devices: a
@@ -77,51 +77,62 @@ for another device and hands it back.
   new devices), key requests and fulfilment, publishing a rotated key set, fetching wrapped keys;
   plus the void events `GroupHeadAdvanced`, `HistoryRequested` and `HistoryReady` (from `ledger`)
   and `MemberRemoved` (from `group`), each turned into pushes; `PurgeUserDevicesRequest` from `group`'s account purge; `RemoveDeviceRequest`
-  so a user can drop a dead device, which otherwise blocks garbage collection in its groups.
+  so a user can drop a dead device, which otherwise stays a candidate for history requests.
 - **Sends**: `CheckMembershipRequest`; `DeviceLeftGroup` to `ledger` whenever a device loses its
   keys for a group (member removed, device removed, account purged).
 - **API**: `DeviceService`.
 
 ### `ledger`
 
-Owns the relay. Plain executor with three hourly sweeps; the one piece of concurrency control in
-the system is here. Member devices are the store: the server keeps a live row for 48 hours and a
-tombstone until every device has acked it.
+Owns the relay. Plain executor with two hourly sweeps; the one piece of concurrency control in
+the system is here. Member devices are the store: the server keeps every row, tombstones
+included, for 48 hours and nothing longer.
 
 - **Tables**: `object` (id, group, type, schema version, key id, value, seq, creator device,
   `deleted`; the parent and any file references are inside the value), `group_head` (group, head seq, `evicted_through_seq`): the
-  counter row; `group_device` (group, device, `acked_seq`); `history_request`. Directive §2, §7
+  counter row; `group_device` (group, device, `acked_seq`, `covered_from_seq`); `history_request`. Directive §2, §7
   (serialize on a counter row under `FOR UPDATE`).
-- **Push**: one transaction per batch: lock `group_head`; per object compare `base_seq`, the seq
-  of the row the device edited from, with the stored row's seq (no row ⇒ take the client's word:
-  deleted objects are never evicted, only hard-deleted after this device acked past them, so
-  nothing can be resurrected, and the first re-creation of an evicted row makes every later
-  stale base conflict), on match write it at `seq = head + 1`, on mismatch report a conflict
-  carrying the current row. There is no per-object version: a row's seq identifies its state. A
-  delete is a push with `deleted = true`; the client puts the children it holds in the same
-  batch, and the server does no cascade, since it neither sees parents nor holds children older
-  than 48 hours. A tombstone's deletion mark is its own seq; there is no second counter, no "pull
-  before you push" check, and no rule about editing a tombstone: a stale base conflicts on the
-  seq, and a deliberate un-delete is the client's call. Commit, then `GroupHeadAdvanced` and,
-  per tombstone, `ObjectDeleted` so `storage` drops the object's files (invariant 7).
+- **Push**: one transaction per batch: lock `group_head`; refuse the batch as `behind_floor`
+  when it edits anything (`base_seq > 0`) and the device's ack is below `evicted_through_seq`,
+  since the device has not seen everything the server evicted (creates alone go through); then
+  per object compare `base_seq`, the seq of the row the device edited from, with the stored
+  row's seq (no row ⇒ take the client's word, which the floor check just made good: any write
+  it missed would still be a row here and conflict), on match write it at `seq = head + 1`, on
+  mismatch report a conflict carrying the current row. There is no per-object version: a row's
+  seq identifies its state. A delete is a push with `deleted = true`; the client puts the
+  children it holds in the same batch, and the server does no cascade, since it neither sees
+  parents nor holds children older than 48 hours. A tombstone's deletion mark is its own seq,
+  and a tombstone is a row like any other: 48 hours here, kept by a device until the floor
+  passes it. There is no pull-to-head check before a push and no rule about editing a
+  tombstone: a stale base conflicts on the seq, and a deliberate un-delete is the client's call.
+  Commit, then `GroupHeadAdvanced` and, per tombstone, `ObjectDeleted` so `storage` drops the
+  object's files (invariant 7).
 - **Pull and ack**: `PullChangesRequest` returns entries with `seq > cursor`, tombstones included,
-  with the minimum acked cursor and the eviction floor; a device whose cursor is below the floor
-  asks a member device for the gap. After applying a pull the device `AckSeq`s the head it
-  received; the server keeps the minimum per group, hard-deletes tombstones at or below it, and
-  hands the minimum back so devices drop their own tombstones. An ack that goes backwards means a
-  restored backup and forces a resync. `GetHeadsRequest` returns `(group, head, min ack)`.
-- **History**: `RequestHistoryRequest` records a range, or one object, and wakes every
-  key-holding device through `device`; one of them claims the request (a conditional update;
-  the first wins, a claim older than five minutes is taken over) and pushes the entries it holds
-  back with `PushHistoryRequest`, and the server re-inserts them **with their original seqs**, skipping
-  any id that already has a row, without moving the head; the requester is woken and pulls them
-  from its low cursor, while every other device's cursor is already past them. Restored rows
-  are evicted again 48 hours after their re-insert. No server-side retries: the requester asks
-  again. This is how a new member, a new device or a long-offline device gets anything older than
-  48 hours, and how an expired photo comes back (the holder re-uploads the file to its derived
-  key, then reports the request complete).
-- **Sweeps**: `evict_objects` (live rows uploaded more than 48h ago, floor advances), `gc_tombstones`
-  (`seq ≤` min acked cursor), `expire_history_requests` (48h).
+  with the eviction floor. A device whose cursor is below the floor is behind: rows it never
+  saw, tombstones among them, are gone from the server, so it throws the group away and starts
+  over as a new device (unpushed creates are pushed, files stay as a content-addressed cache),
+  pulling from 0 and refilling lazily by range, by reference and by file. After applying a pull
+  the device `AckSeq`s the head it received with its coverage floor, the seq from which it
+  holds every row of the group: one interval per device, extended only backwards, so one number
+  says what it can serve and what it lacks. An ack that goes backwards is stored as it is: the
+  rows after it are still here, or the device is behind the floor. No minimum over acks exists
+  and nothing waits for a slow device. `GetHeadsRequest` returns `(group, head, floor)`.
+- **History**: `RequestHistoryRequest` records a range, or one object, and wakes through
+  `device` the key-holding devices whose floor reaches the range, or answers `unfillable` at
+  once when there is none; one of them claims the request (a conditional update; the first
+  wins, a claim older than five minutes is taken over, a claimer behind the floor or above the
+  range is refused) and pushes the rows it holds back with `PushHistoryRequest`, tombstones
+  included, reporting how far down it got, and the server re-inserts them **with their original
+  seqs**, skipping any id that already has a row, without moving the head; the requester is
+  woken and pulls them from its low cursor, while every other device's cursor is already past
+  them, and its floor follows. When the claimer's own floor ends the answer, the remainder goes
+  back out to the holders below it; the request is fulfilled when the range is closed or no
+  device covers the rest. Restored rows are evicted again 48 hours after their re-insert. No
+  server-side retries: the requester asks again. This is how a new member, a new device or a
+  device that started over gets anything older than 48 hours, and how an expired photo comes
+  back (the holder re-uploads the file to its derived key, then reports the request complete).
+- **Sweeps**: `evict_objects` (rows uploaded more than 48h ago, tombstones included, floor
+  advances), `expire_history_requests` (48h).
 - **Sends**: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`,
   `HistoryReady`.
 - **API**: `LedgerService`.
@@ -149,11 +160,12 @@ GET, an expired file the bucket's 404.
 
 ## What the server computes
 
-Five things, and nothing else: whether a user is a member of a group, and its role; the next
-sequence number; whether an object's seq still matches the one a device edited from; the minimum
-acked cursor of a group; whether a key is under the caller's group prefix and within its slot's
+Six things, and nothing else: whether a user is a member of a group, and its role; the next
+sequence number; whether an object's seq still matches the one a device edited from; whether a
+device's acked cursor is at or above the group's eviction floor; which devices' coverage floors
+reach a requested range; whether a key is under the caller's group prefix and within its slot's
 cap and the group's upload quota. Every other byte is relayed, never read. Expiry is the
-bucket's.
+bucket's and the window's.
 
 ## Values and conflicts (client core)
 
