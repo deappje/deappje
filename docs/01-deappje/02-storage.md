@@ -10,7 +10,7 @@ the delete call, §7 for the messages.
 
 | key | content | lifecycle |
 |---|---|---|
-| `g/<group_id>/o/<object_id>/<slot>` | one encrypted file of an object; slots `full`, `thumb`, `file` | `full` and `file` expire 2 days after upload; `thumb` never |
+| `g/<group_id>/o/<object_id>/<slot>` | one encrypted file of an object; slots `full`, `thumb`, `file` | `full` and `file` expire 7 days after upload; `thumb` never |
 
 The group prefix is the authorization boundary: a member may be given a presigned URL for any
 key under its group's prefix and nothing else. The slot names the size cap and the retention.
@@ -31,15 +31,15 @@ state on the server.
 | hour | timestamp | truncated to the hour |
 | bytes | int64 | declared sizes of uploads presigned in that hour |
 
-`PresignUploadRequest` sums the group's last 48 rows and refuses when the sum plus the new size
-exceeds `storage_quota.max_bytes_per_48h` (20 GiB). Rows older than 48 hours are dropped by the
-hourly sweep. This bounds what a group can put into the bucket per two days, which is the cost
+`PresignUploadRequest` sums the group's last 168 rows and refuses when the sum plus the new size
+exceeds `storage_quota.max_bytes_per_168h` (20 GiB). Rows older than 168 hours are dropped by the
+hourly sweep. This bounds what a group can put into the bucket per seven days, which is the cost
 that matters for a cache.
 
 ## Config
 
 `slot` (prefix `slot`): `max_size_bytes` per slot: `full` 25 MiB, `thumb` 200 KiB, `file` 25
-MiB. `storage_quota` (prefix `squo`): `max_bytes_per_48h`, 20 GiB. `04-config.md`.
+MiB. `storage_quota` (prefix `squo`): `max_bytes_per_168h`, 20 GiB. `04-config.md`.
 
 ## External calls
 
@@ -73,7 +73,7 @@ downloader's hash check still applies.
 
 ## Sweep
 
-`expire_usage`, hourly: delete `upload_usage` rows older than 48 hours.
+`expire_usage`, hourly: delete `upload_usage` rows older than 168 hours.
 
 ## API
 
@@ -82,7 +82,7 @@ downloader's hash check still applies.
 ## Tests
 
 - Unit: key parsing (prefix, slot; `..` and empty segments refused); quota at the boundary over
-  a rolling 48 hours; slot caps.
+  a rolling 168 hours; slot caps.
 - Integration (testkit + bucket simulator): presign, upload, download; a key outside the caller's
   group prefix is refused; `ObjectDeleted` deletes every slot of the object and nothing else; a
   failed delete is retried by the next `ObjectDeleted`; purge empties the group prefix across

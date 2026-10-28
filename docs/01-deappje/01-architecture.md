@@ -2,7 +2,7 @@
 
 One Rust binary, four nanoservices, one Postgres database with a schema per nanoservice, blobs
 in the platform's private bucket, Kratos for identity. The server is a relay, not a store: member
-devices hold the data, the server keeps 48 hours of it so devices can catch up, and anything
+devices hold the data, the server keeps 168 hours of it so devices can catch up, and anything
 older is fetched from a member device on request. It never holds a group key and never reads a
 payload: every `value` is ciphertext, every blob is ciphertext, and the plaintext columns are the
 minimum needed to route, order, authorise and expire.
@@ -86,7 +86,7 @@ for another device and hands it back.
 
 Owns the relay. Plain executor with two hourly sweeps; the one piece of concurrency control in
 the system is here. Member devices are the store: the server keeps every row, tombstones
-included, for 48 hours and nothing longer.
+included, for 168 hours and nothing longer.
 
 - **Tables**: `object` (id, group, type, schema version, key id, value, seq, creator device,
   `deleted`; the parent and any file references are inside the value), `group_head` (group, head seq, `evicted_through_seq`): the
@@ -102,8 +102,8 @@ included, for 48 hours and nothing longer.
   mismatch report a conflict carrying the current row. There is no per-object version: a row's
   seq identifies its state. A delete is a push with `deleted = true`; the client puts the
   children it holds in the same batch, and the server does no cascade, since it neither sees
-  parents nor holds children older than 48 hours. A tombstone's deletion mark is its own seq,
-  and a tombstone is a row like any other: 48 hours here, kept by a device until the floor
+  parents nor holds children older than 168 hours. A tombstone's deletion mark is its own seq,
+  and a tombstone is a row like any other: 168 hours here, kept by a device until the floor
   passes it. There is no pull-to-head check before a push and no rule about editing a
   tombstone: a stale base conflicts on the seq, and a deliberate un-delete is the client's call.
   Commit, then `GroupHeadAdvanced` and, per tombstone, `ObjectDeleted` so `storage` drops the
@@ -128,12 +128,12 @@ included, for 48 hours and nothing longer.
   woken and pulls them from its low cursor, while every other device's cursor is already past
   them, and its floor follows. When the claimer's own floor ends the answer, the remainder goes
   back out to the holders below it; the request is fulfilled when the range is closed or no
-  device covers the rest. Restored rows are evicted again 48 hours after their re-insert. No
+  device covers the rest. Restored rows are evicted again 168 hours after their re-insert. No
   server-side retries: the requester asks again. This is how a new member, a new device or a
-  device that started over gets anything older than 48 hours, and how an expired photo comes
+  device that started over gets anything older than 168 hours, and how an expired photo comes
   back (the holder re-uploads the file to its derived key, then reports the request complete).
-- **Sweeps**: `evict_objects` (rows uploaded more than 48h ago, tombstones included, floor
-  advances), `expire_history_requests` (48h).
+- **Sweeps**: `evict_objects` (rows uploaded more than 168h ago, tombstones included, floor
+  advances), `expire_history_requests` (168h).
 - **Sends**: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`,
   `HistoryReady`.
 - **API**: `LedgerService`.
@@ -143,11 +143,11 @@ included, for 48 hours and nothing longer.
 Presigns bucket access under the caller's group prefix and cleans up. No table of blobs: a file's
 reference (slot, hash, size, content key) is inside the owning object's encrypted value, its key
 is derived (`g/<group>/o/<object>/<slot>`), and the bucket's lifecycle rules expire `full` and
-`file` after two days while `thumb` stays. An upload is a presigned PUT, a download a presigned
+`file` after seven days while `thumb` stays. An upload is a presigned PUT, a download a presigned
 GET, an expired file the bucket's 404.
 
 - **Table**: `upload_usage` (group, hour, bytes): the quota is a cap on bytes uploaded per group
-  per rolling 48 hours (20 GiB), which is what a cache needs bounded. Directive §2.
+  per rolling 168 hours (20 GiB), which is what a cache needs bounded. Directive §2.
 - **Config types**: `slot` (size cap per slot), `storage_quota`. Edited by a human.
 - **External**: `delete_object`, `idempotent`, dispatched from handlers. Presigning and prefix
   listing are reads.

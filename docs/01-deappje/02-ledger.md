@@ -1,9 +1,9 @@
 # `ledger`
 
-Owns the relay: a 48-hour window of ciphertext rows per group, tombstones included, the group's
+Owns the relay: a 168-hour window of ciphertext rows per group, tombstones included, the group's
 counter, per device one acked cursor and one coverage floor, and a row per pending history
 request. Plain executor with two hourly sweeps. Member devices are the store; this nanoservice
-forgets everything after 48 hours. Directive §2 per table, §7 (counter row under
+forgets everything after 168 hours. Directive §2 per table, §7 (counter row under
 `FOR UPDATE`; a boolean or a number is all that crosses) for its messages.
 
 ## Tables
@@ -21,7 +21,7 @@ forgets everything after 48 hours. Directive §2 per table, §7 (counter row und
 | seq | int64 | per group, strictly increasing; an edit takes a new seq, so a row's seq identifies its state |
 | created_by_device | uuid | |
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark; a tombstone is evicted like any row |
-| uploaded_at | timestamp | when this row landed on the server, by push or by a history re-insert; evicted 48 hours later |
+| uploaded_at | timestamp | when this row landed on the server, by push or by a history re-insert; evicted 168 hours later |
 
 Indexes: unique `(group_id, seq)`; `(uploaded_at)` for eviction. The parent of an object lives inside its encrypted value: the server
 never sees the structure of a group's data.
@@ -67,7 +67,7 @@ request goes to the rows whose floor reaches it.
 | claimed_at | timestamp, nullable | a claim older than 5 minutes without `complete` counts as abandoned |
 | created_at | timestamp | |
 
-Index `(group_id, status)`. Rows older than 48 hours are dropped by the sweep.
+Index `(group_id, status)`. Rows older than 168 hours are dropped by the sweep.
 
 ## Push
 
@@ -121,7 +121,7 @@ other device would apply it as the later write, with no conflict anywhere. Hence
 There is no cascade either: the deleting client puts the children it holds in the same batch (one
 push is one transaction, so they take consecutive seqs together), and a child it did not hold is
 tombstoned by the first device that holds it and sees the parent's tombstone. The server could
-not do this completely anyway, since children older than 48 hours are already evicted from it.
+not do this completely anyway, since children older than 168 hours are already evicted from it.
 
 Why a locked counter row and not a sequence: a sequence is non-transactional, so a lower value can
 commit after a higher one and a client that pulled in between misses it forever (Directive §7).
@@ -235,7 +235,7 @@ request its floor reaches waits for it rather than closing. Nothing records who 
 entries were encrypted under the group key, so the answerer was a key holder, and nothing reads
 it later.
 
-This is the only way anything older than 48 hours reaches a device: a new member, a new device,
+This is the only way anything older than 168 hours reaches a device: a new member, a new device,
 a device that started over after falling behind the floor, a device scrolling past what it
 holds, or a device that finds a photo's file expired from the bucket. The lazy refill is the
 same mechanism: the last stretch of the group by range, then older ranges as the user scrolls,
@@ -253,13 +253,13 @@ may keep a device that reduces nothing (`00-scope.md`, keeper device).
 
 ## Sweeps (schedules, hourly, idempotent)
 
-- `evict_objects`: delete rows with `uploaded_at < now - 48h`, tombstones included, batched 10k
+- `evict_objects`: delete rows with `uploaded_at < now - 168h`, tombstones included, batched 10k
   per statement; per group set `evicted_through_seq = GREATEST(evicted_through_seq, MAX(seq)
   evicted)`. By age, not by position, so a row restored by a history request at an old seq gets
-  its own 48 hours.
-- `expire_history_requests`: delete rows older than 48 hours.
+  its own 168 hours.
+- `expire_history_requests`: delete rows older than 168 hours.
 
-Postgres therefore holds, per group, two days of activity, whatever the group's age. No device
+Postgres therefore holds, per group, seven days of activity, whatever the group's age. No device
 can hold anything back: a device that does not keep up falls behind the floor and starts over.
 
 ## Messages
@@ -318,7 +318,7 @@ ListHistoryRequests, ClaimHistory, PushHistory. The api crate maps the proto ent
   restores a tombstone as a tombstone, and is refused once the request is fulfilled or from a
   device without the claim; two holders claiming at once leave exactly one claimer; a claim
   older than 5 minutes is taken over and the second claimer continues from the row's
-  `covered_from_seq`; a restored row is evicted 48 hours after its re-insert.
+  `covered_from_seq`; a restored row is evicted 168 hours after its re-insert.
 - Property test: random interleavings of push/pull/ack/evict across N simulated devices, with
   history re-inserted by simulated holders and a device that falls behind starting over and
   refilling lazily, converge to the same row per object on every device that holds it; every

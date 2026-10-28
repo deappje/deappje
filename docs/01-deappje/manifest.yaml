@@ -173,7 +173,7 @@ nanoservices:
         - { name: RemoveDevice, request: RemoveDeviceRequest, response: RemoveDeviceResponse }
 
   - name: ledger
-    description: The relay — 48 hours of ciphertext per group, tombstones included, the counter, per-device acked cursor and coverage floor, history requests.
+    description: The relay — 168 hours of ciphertext per group, tombstones included, the counter, per-device acked cursor and coverage floor, history requests.
     owns:
       tables:
         - name: object
@@ -268,7 +268,7 @@ nanoservices:
         - name: storage_quota
           prefix: squo
           fields:
-            - { name: max_bytes_per_48h, type: int64 }
+            - { name: max_bytes_per_168h, type: int64 }
     externalSystems:
       - name: object_storage
         calls:

@@ -49,7 +49,7 @@ definitive rejection is classified as such.
   row; `complete` at `from_seq` fulfils the request once and a later push for it is refused; a
   claimer that stops is taken over after 5 minutes and the take-over continues from
   `covered_from_seq`; the requester pulls, acks with its floor lowered, and ends with the same
-  rows as the holder; the restored rows are evicted 48 hours after the re-insert and no earlier.
+  rows as the holder; the restored rows are evicted 168 hours after the re-insert and no earlier.
 - **Key lifecycle**: register two devices, request keys, fulfil, remove member, rotation batch,
   `GetWrappedKeys` returns both key ids for a surviving device and nothing for the removed one.
 - **Files**: against the bucket simulator: presign, upload, confirm, download; a key outside the
@@ -66,8 +66,8 @@ definitive rejection is classified as such.
   a promoted admin, a group purge, a rotation push, no device rows, one identity deletion.
 - **Device trust**: a device row inserted directly into the table (simulating a hostile server)
   appears in no `ListDevices` answer and receives no wrapped key through a rotation.
-- **Quota**: an upload that would cross the group's 48-hour cap is refused and one that lands
-  exactly on it is accepted; counters older than 48 hours stop counting.
+- **Quota**: an upload that would cross the group's 168-hour cap is refused and one that lands
+  exactly on it is accepted; counters older than 168 hours stop counting.
 
 ## Client core conformance (`core/` crate, in this repository)
 
