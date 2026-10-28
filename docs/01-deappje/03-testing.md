@@ -30,26 +30,26 @@ definitive rejection is classified as such.
   `1..=N` with no gaps; a reader polling during the run never observes a seq it later misses.
 - **Delete semantics**: a parent and its children in one batch take consecutive seqs; a delete
   and an edit racing on one object leave exactly one of them accepted and the other holding the
-  current row; a stale device's edit or re-creation of a deleted object conflicts while the
-  tombstone is in the window and is refused as `behind_floor` once it is evicted; the **floor
-  invariant** under random interleavings of push, delete, pull, ack and evict across N devices
-  (every device at or above the floor has applied every row the server evicted, and no device at
-  or above the floor holds a live copy of an object whose tombstone was evicted); an edit
-  evicted while a device was offline is never replaced silently; a batch of creates from
-  behind the floor is refused like any other, so a new member posts only after its first ack; a
-  device that falls behind starts over and ends with no object that was deleted while it was
-  away.
-- **History**: a device starting over pulls from 0 and refills the last stretch by range; two
-  simulated holders claim and exactly one wins; it pushes the rows back, tombstones included;
-  they land at their original seqs, the head does not move, an id with a current row is
-  skipped, a push without the claim is refused, a claim from a holder whose floor is above the
-  range or whose ack is behind the floor is refused; a holder whose floor is inside the range
-  answers down to it and the remainder reopens for the lower holder only, or is fulfilled at
-  that floor when there is none; a range no floor reaches is answered `unfillable` without a
-  row; `complete` at `from_seq` fulfils the request once and a later push for it is refused; a
-  claimer that stops is taken over after 5 minutes and the take-over continues from
-  `covered_from_seq`; the requester pulls, acks with its floor lowered, and ends with the same
-  rows as the holder; the restored rows are evicted 168 hours after the re-insert and no earlier.
+  current row; a stale holder's edit or re-creation of a deleted object conflicts while the
+  tombstone is here, and a device that is not a holder is refused as `behind_floor`; the
+  **holder invariant** under random interleavings of push, delete, pull, ack and both evictions
+  across N devices (every device with an ack row has applied every row the server evicted,
+  every row the ack rule removed was at or below every holder's ack, and no holder holds a live
+  copy of an object whose tombstone is gone); the age rule deletes the ack rows it passed and an
+  ack below the floor is refused; an edit evicted while a device was offline is never replaced
+  silently; a batch of creates from a device without a row is refused like any other, so a new
+  member posts only after its history has arrived and it has acked; a device that falls behind
+  starts over and ends with no object that was deleted while it was away.
+- **History**: a joining device pulls from 0, asks for everything up to the floor, pulls again
+  and acks; two simulated holders claim and exactly one wins; it pushes the rows back,
+  tombstones included; they land at their original seqs, the head does not move, an id with a
+  current row is skipped, a push without the claim is refused, a claim from a device without an
+  ack row is refused; a request from a group with no other holder is answered `unfillable`
+  without a row; `complete` fulfils the request once and a later push for it is refused; a
+  claimer that stops is taken over after 5 minutes and the take-over re-push restores only what
+  is missing; an eviction between the answer and the final pull makes the joiner ask for the
+  difference, and it ends with the same rows as the holder; the restored rows are never taken
+  by the ack rule and are evicted 168 hours after the re-insert and no earlier.
 - **Key lifecycle**: register two devices, request keys, fulfil, remove member, rotation batch,
   `GetWrappedKeys` returns both key ids for a surviving device and nothing for the removed one.
 - **Files**: against the bucket simulator: presign, upload, confirm, download; a key outside the

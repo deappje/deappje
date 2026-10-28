@@ -2,7 +2,7 @@
 
 One Rust binary, four nanoservices, one Postgres database with a schema per nanoservice, blobs
 in the platform's private bucket, Kratos for identity. The server is a relay, not a store: member
-devices hold the data, the server keeps 168 hours of it so devices can catch up, and anything
+devices hold the data, the server keeps up to 168 hours of it so devices can catch up, and anything
 older is fetched from a member device on request. It never holds a group key and never reads a
 payload: every `value` is ciphertext, every blob is ciphertext, and the plaintext columns are the
 minimum needed to route, order, authorise and expire.
@@ -85,55 +85,59 @@ for another device and hands it back.
 ### `ledger`
 
 Owns the relay. Plain executor with two hourly sweeps; the one piece of concurrency control in
-the system is here. Member devices are the store: the server keeps every row, tombstones
-included, for 168 hours and nothing longer.
+the system is here. Member devices are the store, and every holder holds the whole group: the
+server keeps a row, tombstones included, until every holder has acked it, 168 hours at most.
 
 - **Tables**: `object` (id, group, type, schema version, key id, value, seq, creator device,
   `deleted`; the parent and any file references are inside the value), `group_head` (group, head seq, `evicted_through_seq`): the
-  counter row; `group_device` (group, device, `acked_seq`, `covered_from_seq`); `history_request`. Directive §2, §7
+  counter row; `group_device` (group, device, `acked_seq`); `history_request`. Directive §2, §7
   (serialize on a counter row under `FOR UPDATE`).
 - **Push**: one transaction per batch: lock `group_head`; refuse the batch as `behind_floor`
-  when the device's ack is below `evicted_through_seq`, whatever the batch holds, since the
-  device has not seen everything the server evicted and `base_seq = 0` is its claim like any
-  other (a new member pulls and acks before its first post); then
-  per object compare `base_seq`, the seq of the row the device edited from, with the stored
-  row's seq (no row ⇒ take the client's word, which the floor check just made good: any write
-  it missed would still be a row here and conflict), on match write it at `seq = head + 1`, on
-  mismatch report a conflict carrying the current row. There is no per-object version: a row's
-  seq identifies its state. A delete is a push with `deleted = true`; the client puts the
-  children it holds in the same batch, and the server does no cascade, since it neither sees
-  parents nor holds children older than 168 hours. A tombstone's deletion mark is its own seq,
-  and a tombstone is a row like any other: 168 hours here, kept by a device until the floor
-  passes it. There is no pull-to-head check before a push and no rule about editing a
-  tombstone: a stale base conflicts on the seq, and a deliberate un-delete is the client's call.
-  Commit, then `GroupHeadAdvanced` and, per tombstone, `ObjectDeleted` so `storage` drops the
-  object's files (invariant 7).
+  when the device has no `group_device` row, whatever the batch holds: it never acked, or an
+  eviction passed its ack and took its row, so it has not seen everything the server evicted
+  and `base_seq = 0` is its claim like any other (a new member pulls, gets the history and acks
+  before its first post); then per object compare `base_seq`, the seq of the row the device
+  edited from, with the stored row's seq (no row ⇒ take the holder's word, which the holder
+  check just made good: any write it missed would still be a row here and conflict), on match
+  write it at `seq = head + 1`, on mismatch report a conflict carrying the current row. There
+  is no per-object version: a row's seq identifies its state. A delete is a push with
+  `deleted = true`; the client puts the children it holds in the same batch, and the server
+  does no cascade, since it neither sees parents nor holds children older than the window. A
+  tombstone's deletion mark is its own seq, and a tombstone is a row like any other: here until
+  every holder has acked it, kept by a device until the minimum ack passes it. There is no
+  pull-to-head check before a push and no rule about editing a tombstone: a stale base
+  conflicts on the seq, and a deliberate un-delete is the client's call. Commit, then
+  `GroupHeadAdvanced` and, per tombstone, `ObjectDeleted` so `storage` drops the object's files
+  (invariant 7).
 - **Pull and ack**: `PullChangesRequest` returns entries with `seq > cursor`, tombstones included,
-  with the eviction floor. A device whose cursor is below the floor is behind: rows it never
-  saw, tombstones among them, are gone from the server, so it throws the group away and starts
-  over as a new device (every unpushed write goes; files stay as a content-addressed cache),
-  pulling from 0 and refilling lazily by range, by reference and by file. After applying a pull
-  the device `AckSeq`s the head it received with its coverage floor, the seq from which it
-  holds every row of the group: one interval per device, extended only backwards, so one number
-  says what it can serve and what it lacks. An ack that goes backwards is stored as it is: the
-  rows after it are still here, or the device is behind the floor. No minimum over acks exists
-  and nothing waits for a slow device. `GetHeadsRequest` returns `(group, head, floor)`.
+  with the eviction floor and the minimum ack. A device whose cursor is below the floor is
+  behind: rows it never saw, tombstones among them, are gone from the server and so is its
+  `group_device` row, since an eviction evicts every device that had not acked the rows it
+  took; the device throws the group away (every unpushed write goes; files stay as a
+  content-addressed cache) and takes the path of a new device: pull from 0, ask a holder for
+  everything from seq 1 up to the floor, pull again, and ack the head once it holds the whole
+  group. Objects come whole; files come lazily. An ack is the one number per device: a holder
+  holds the group from seq 1 through its ack. An ack that goes backwards but stays at or above
+  the floor is stored as it is, since the rows after it are still here; one below the floor is
+  refused. The server keeps the minimum ack over the group's rows and hands it back so devices
+  drop their tombstones; nothing waits for a slow device beyond the window, since the eviction
+  that passes its ack takes its row. `GetHeadsRequest` returns `(group, head, floor, min ack)`.
 - **History**: `RequestHistoryRequest` records a range, or one object, and wakes through
-  `device` the key-holding devices whose floor reaches the range, or answers `unfillable` at
-  once when there is none; one of them claims the request (a conditional update; the first
-  wins, a claim older than five minutes is taken over, a claimer behind the floor or above the
-  range is refused) and pushes the rows it holds back with `PushHistoryRequest`, tombstones
-  included, reporting how far down it got, and the server re-inserts them **with their original
-  seqs**, skipping any id that already has a row, without moving the head; the requester is
-  woken and pulls them from its low cursor, while every other device's cursor is already past
-  them, and its floor follows. When the claimer's own floor ends the answer, the remainder goes
-  back out to the holders below it; the request is fulfilled when the range is closed or no
-  device covers the rest. Restored rows are evicted again 168 hours after their re-insert. No
-  server-side retries: the requester asks again. This is how a new member, a new device or a
-  device that started over gets anything older than 168 hours, and how an expired photo comes
-  back (the holder re-uploads the file to its derived key, then reports the request complete).
-- **Sweeps**: `evict_objects` (rows uploaded more than 168h ago, tombstones included, floor
-  advances), `expire_history_requests` (168h).
+  `device` every holder (every device with an ack row), or answers `unfillable` at once when
+  there is none; one of them claims the request (a conditional update; the first wins, a claim
+  older than five minutes is taken over, a claimer without a row is refused) and pushes the rows
+  it holds in the range back with `PushHistoryRequest`, tombstones included, and the server
+  re-inserts them **with their original seqs**, skipping any id that already has a row, without
+  moving the head; the requester is woken and pulls them from its low cursor, while every other
+  device's cursor is already past them. An answer marked complete is complete, since every
+  holder holds the whole group. Restored rows sit below the floor, which the ack rule never
+  touches, and age out 168 hours after their re-insert. No server-side retries: the requester
+  asks again. This is how a new member, a new device or a device that started over gets
+  everything from seq 1, and how an expired photo comes back (the holder re-uploads the file to
+  its derived key, then reports the request complete).
+- **Sweeps**: `evict_objects` (by ack: rows every holder has acked, floor up to the minimum ack;
+  by age: rows uploaded more than 168h ago, floor up to the highest seq taken, and the devices
+  whose ack it passed lose their row), `expire_history_requests` (168h).
 - **Sends**: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`,
   `HistoryReady`.
 - **API**: `LedgerService`.
@@ -161,11 +165,10 @@ GET, an expired file the bucket's 404.
 
 ## What the server computes
 
-Six things, and nothing else: whether a user is a member of a group, and its role; the next
+Five things, and nothing else: whether a user is a member of a group, and its role; the next
 sequence number; whether an object's seq still matches the one a device edited from; whether a
-device's acked cursor is at or above the group's eviction floor; which devices' coverage floors
-reach a requested range; whether a key is under the caller's group prefix and within its slot's
-cap and the group's upload quota. Every other byte is relayed, never read. Expiry is the
+device holds the whole group, and the lowest seq every holder has reached; whether a key is
+under the caller's group prefix and within its slot's cap and the group's upload quota. Every other byte is relayed, never read. Expiry is the
 bucket's and the window's.
 
 ## Values and conflicts (client core)

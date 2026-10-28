@@ -173,7 +173,7 @@ nanoservices:
         - { name: RemoveDevice, request: RemoveDeviceRequest, response: RemoveDeviceResponse }
 
   - name: ledger
-    description: The relay — 168 hours of ciphertext per group, tombstones included, the counter, per-device acked cursor and coverage floor, history requests.
+    description: The relay — ciphertext per group until every holder has acked it, 168 hours at most, tombstones included; the counter; per-device acked cursor; history requests.
     owns:
       tables:
         - name: object
@@ -201,7 +201,6 @@ nanoservices:
             - { name: group_id, type: uuid }
             - { name: device_id, type: uuid }
             - { name: acked_seq, type: int64 }
-            - { name: covered_from_seq, type: int64 }
             - { name: updated_at, type: timestamp }
           indexes: [ { columns: [group_id, device_id], unique: true }, { columns: [device_id] } ]
         - name: history_request
@@ -213,7 +212,6 @@ nanoservices:
             - { name: to_seq, type: int64 }
             - { name: object_id, type: uuid, nullable: true }
             - { name: status, type: string }
-            - { name: covered_from_seq, type: int64, nullable: true }
             - { name: claimed_by, type: uuid, nullable: true }
             - { name: claimed_at, type: timestamp, nullable: true }
             - { name: created_at, type: timestamp }

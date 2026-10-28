@@ -9,7 +9,7 @@ feature area; a breaking change takes the next free number in its block.
 
 | # | Type | Parent | Fields | Files (slots) | Notes |
 |---|---|---|---|---|---|
-| 1 | `group_profile` | none | name, description, avatar | thumb | singleton: id = UUIDv5(group_id, "profile") |
+| 1 | `group_profile` | none | name, description, avatar, message_retention_months | thumb | singleton: id = UUIDv5(group_id, "profile"); `message_retention_months` (default 12, 0 = off) is the chat's auto-delete setting: any device that sees a `message` older than that tombstones it, with the children it holds, batched, the first to notice doing it (round 13) |
 | 2 | `member_profile` | none | display_name, avatar, birthday (month, day, year?) | thumb | one per member: id = UUIDv5(group_id, user_id); the calendar derives birthdays from it |
 | 3 | `invite_secret` | none | invite_id, secret | | lets any holder verify a key request that came through the invite (`02-device.md`) |
 | 10 | `post` | none | text | | timeline entry; photos are children |
