@@ -33,23 +33,25 @@ definitive rejection is classified as such.
   current row; a stale holder's edit or re-creation of a deleted object conflicts while the
   tombstone is here, and a device that is not a holder is refused as `behind_floor`; the
   **holder invariant** under random interleavings of push, delete, pull, ack and both evictions
-  across N devices (every device with an ack row has applied every row the server evicted,
-  every row the ack rule removed was at or below every holder's ack, and no holder holds a live
-  copy of an object whose tombstone is gone); the age rule deletes the ack rows it passed and an
-  ack below the floor is refused; an edit evicted while a device was offline is never replaced
-  silently; a batch of creates from a device without a row is refused like any other, so a new
-  member posts only after its history has arrived and it has acked; a device that falls behind
-  starts over and ends with no object that was deleted while it was away.
-- **History**: a joining device pulls from 0, asks for everything up to the floor, pulls again
-  and acks; two simulated holders claim and exactly one wins; it pushes the rows back,
+  across N devices (every holder has applied every row the server evicted, every row the ack
+  rule removed was at or below every device's ack, and no holder holds a live copy of an object
+  whose tombstone is gone); the age rule evicts a device below the floor that has not acked for
+  168 hours and leaves one that is catching up; a backwards ack is refused and 0 resets the
+  row; an edit evicted while a device was offline is never replaced silently; a batch of
+  creates from a non-holder is refused like any other, so a new member posts only after its
+  history has arrived and its ack has reached the floor; a device that falls behind starts over
+  and ends with no object that was deleted while it was away.
+- **History**: a joining device acks 0, pulls the window, asks for everything up to the floor,
+  pages and acks the restored rows as they land, and acks the head; its ack 0 pins the minimum
+  so nothing is evicted by ack from under it, and the restored rows go as it acks past them;
+  two simulated holders claim and exactly one wins; it pushes the rows back oldest first,
   tombstones included; they land at their original seqs, the head does not move, an id with a
-  current row is skipped, a push without the claim is refused, a claim from a device without an
-  ack row is refused; a request from a group with no other holder is answered `unfillable`
-  without a row; `complete` fulfils the request once and a later push for it is refused; a
-  claimer that stops is taken over after 5 minutes and the take-over re-push restores only what
-  is missing; an eviction between the answer and the final pull makes the joiner ask for the
-  difference, and it ends with the same rows as the holder; the restored rows are never taken
-  by the ack rule and are evicted 168 hours after the re-insert and no earlier.
+  current row is skipped, a push without the claim is refused, a claim from a non-holder is
+  refused; a request from a group with no other holder is answered `unfillable` without a row;
+  `complete` fulfils the request once and a later push for it is refused; a claimer that stops
+  is taken over after 5 minutes and the take-over re-push restores only what is missing; the
+  joiner ends with the same rows as the holder; a restored row the requester never acks is
+  evicted 168 hours after the re-insert and no earlier.
 - **Key lifecycle**: register two devices, request keys, fulfil, remove member, rotation batch,
   `GetWrappedKeys` returns both key ids for a surviving device and nothing for the removed one.
 - **Files**: against the bucket simulator: presign, upload, confirm, download; a key outside the
