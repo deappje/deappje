@@ -150,9 +150,11 @@ server keeps a row, tombstones included, until every device has acked it, 168 ho
 
 Presigns bucket access under the caller's group prefix and cleans up. No table of blobs: a file's
 reference (slot, hash, size, content key) is inside the owning object's encrypted value, its key
-is derived (`g/<group>/o/<object>/<slot>`), and the bucket's lifecycle rules expire `full` and
-`file` after seven days while `thumb` stays. An upload is a presigned PUT, a download a presigned
-GET, an expired file the bucket's 404.
+is derived (`g/<group>/o/<object>/<slot>`), and the bucket's one lifecycle rule expires
+everything seven days after upload. Thumbnails are not files: a photo's thumbnail is a field
+inside its encrypted value, so a holder of the object has the grid and the bucket holds only
+full-size files and attachments. An upload is a presigned PUT, a download a presigned GET, an
+expired file the bucket's 404.
 
 - **Table**: `upload_usage` (group, hour, bytes): the quota is a cap on bytes uploaded per group
   per rolling 168 hours (20 GiB), which is what a cache needs bounded. Directive §2.

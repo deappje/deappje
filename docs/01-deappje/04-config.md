@@ -14,11 +14,11 @@ Seed, `config/base/storage/slot.json`, namespace `default`:
 | name | max_size_bytes |
 |---|---|
 | full | 26214400 |
-| thumb | 204800 |
 | file | 26214400 |
 
-Retention is not config here: it is the bucket's lifecycle rules per prefix (`full` and `file`
-seven days; `thumb` none), a platform setting on the environment's bucket.
+Retention is not config here: it is the bucket's one lifecycle rule, seven days after upload for
+everything in it, a platform setting on the environment's bucket. Thumbnails are not files: they
+live inside the object's value, capped by the client at 64 KiB (`06-object-types.md`).
 
 ## `storage_quota` (owner: `storage`, prefix `squo`)
 

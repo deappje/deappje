@@ -2,7 +2,7 @@
 
 Presigns bucket access and cleans up. No table of blobs: the reference to a file (slot, hash,
 size, content key) lives inside the encrypted value of the object that owns it, the storage key
-is derived from the object id, and the bucket's own lifecycle rules expire what is old. The one
+is derived from the object id, and the bucket's own lifecycle rule expires what is old. The one
 table is a counter of upload bytes per group per hour, for the quota. Directive §2 for it, §6 for
 the delete call, §7 for the messages.
 
@@ -10,13 +10,16 @@ the delete call, §7 for the messages.
 
 | key | content | lifecycle |
 |---|---|---|
-| `g/<group_id>/o/<object_id>/<slot>` | one encrypted file of an object; slots `full`, `thumb`, `file` | `full` and `file` expire 7 days after upload; `thumb` never |
+| `g/<group_id>/o/<object_id>/<slot>` | one encrypted file of an object; slots `full`, `file` | expires 7 days after upload |
 
 The group prefix is the authorization boundary: a member may be given a presigned URL for any
-key under its group's prefix and nothing else. The slot names the size cap and the retention.
-Lifecycle rules per prefix are the platform's: the environment's bucket carries them, and the
-app never deletes on a timer. If the platform cannot carry lifecycle rules, the fallback is an
-hourly sweep over a bucket listing, which this plan does not build.
+key under its group's prefix and nothing else. The slot names the size cap. The bucket has one
+lifecycle rule, expiry seven days after upload, for everything in it; it is the platform's: the
+environment's bucket carries it, and the app never deletes on a timer. If the platform cannot
+carry a lifecycle rule, the fallback is an hourly sweep over a bucket listing, which this plan
+does not build. Thumbnails are not in the bucket: they are a field inside the owning object's
+value (`06-object-types.md`), so the bucket holds only full-size files and attachments, and
+nothing in it needs to outlive the week.
 
 An upload is a presigned PUT; a download is a presigned GET; a file that has expired is the 404
 the bucket answers, and the client then asks `ledger` for the object (`02-ledger.md`), which
@@ -38,8 +41,8 @@ that matters for a cache.
 
 ## Config
 
-`slot` (prefix `slot`): `max_size_bytes` per slot: `full` 25 MiB, `thumb` 200 KiB, `file` 25
-MiB. `storage_quota` (prefix `squo`): `max_bytes_per_168h`, 20 GiB. `04-config.md`.
+`slot` (prefix `slot`): `max_size_bytes` per slot: `full` 25 MiB, `file` 25 MiB.
+`storage_quota` (prefix `squo`): `max_bytes_per_168h`, 20 GiB. `04-config.md`.
 
 ## External calls
 

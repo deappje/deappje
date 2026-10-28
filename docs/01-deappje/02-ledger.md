@@ -18,7 +18,7 @@ hours. Directive §2 per table, §7 (counter row under
 | type | int32 | client-defined type number |
 | schema_version | int32 | |
 | key_id | int32 | which group key encrypts `value` |
-| value | bytes, nullable | ciphertext (≤ 1 MiB); null on a tombstone; a blob reference (slot, hash, size, content key) is inside it |
+| value | bytes, nullable | ciphertext (≤ 1 MiB); null on a tombstone; a blob reference (slot, hash, size, content key) is inside it, and so is a photo's thumbnail |
 | seq | int64 | per group, strictly increasing; an edit takes a new seq, so a row's seq identifies its state |
 | created_by_device | uuid | |
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark; a tombstone is evicted like any row |
@@ -165,8 +165,9 @@ Then it replays its outbox against the store it just fetched: a create goes as i
 or delete goes only if its object is still there, rebased onto the current row with that row's
 seq as its base, and is dropped when the object is gone, since a holder pushing a stale base
 into an empty slot would be the silent overwrite the holder check exists to prevent. The seq
-check catches whatever raced it. Objects come whole, from seq 1; files come lazily: a full-size
-file when it is viewed, a thumbnail for a grid. Nothing can be evicted by ack from under a
+check catches whatever raced it. Objects come whole, from seq 1, thumbnails inside them, so
+every grid is complete as soon as the objects are; full-size files come lazily, when viewed.
+Nothing can be evicted by ack from under a
 device on this path, because its own ack is the minimum, and the rows it has acked, restored
 ones included, go as soon as everyone else is past them too. A device drops its local
 tombstones with `seq ≤ min_acked_seq`: every device has applied them, and a device that starts
@@ -242,8 +243,8 @@ photo's file expired from the bucket asks for that object.
 When nobody holds it: a range request is answered `unfillable` on the spot, and the window is
 the history. A one-object request for a file no online holder kept stays open until it expires,
 and the client then treats the file as gone; asking again later is always safe because
-re-inserts skip existing rows. Thumbnails never expire from the bucket, so an album keeps its
-grid even when a full size is gone for good. A group loses an object only when every holder is
+re-inserts skip existing rows. A thumbnail lives inside its object's value, so an album keeps
+its grid wherever the object is, even when a full size is gone for good. A group loses an object only when every holder is
 gone or wiped; export is the backup, and a member may keep a device that reduces nothing
 (`00-scope.md`, keeper device). Old messages are tombstoned by the clients on the group's
 retention setting (`06-object-types.md`), which is what keeps "everything from seq 1" a bounded
