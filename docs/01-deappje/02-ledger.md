@@ -3,7 +3,7 @@
 Owns the relay: a window of ciphertext rows per group, tombstones included, that some device
 has not yet acked, 672 hours at most; the group's counter; one acked cursor per device; and a
 row per pending history request. Plain executor with two hourly sweeps. Member devices are the
-store, each of them holding the whole group; this nanoservice forgets everything after 168
+store, each of them holding the whole group; this nanoservice forgets everything after 672
 hours. Directive §2 per table, §7 (counter row under
 `FOR UPDATE`; a boolean or a number is all that crosses) for its messages.
 
