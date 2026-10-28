@@ -40,7 +40,7 @@ These were settled in discussion before this plan was written; they are not open
 | Keys | A group key per group, a keyring with key ids; rotate on member removal; new devices get keys wrapped for them by an existing member's device. New members get full history. | MLS is designed to deny history to new members, the opposite of the requirement. |
 | Subgroups | A separate group with its own key and `parent_group_id`; members ⊆ parent, enforced server-side; leaving the parent cascades. | A key boundary is a group boundary. |
 | Identity | Kratos, email code and passkeys. Identity never carries keys. | Platform default; exactly the requested login. |
-| Payloads | Protobuf per type, `schema_version` in plaintext metadata. Add fields, never repurpose a number; a breaking change is a new type number. Old clients read newer objects (unknown fields ignored for display) but never write them. A note's CRDT lives inside the payload: a `note` parent plus append-only `note_update` children, each one `yrs` update, combined on the device. | Round 7. Plain values plus a rebase cover every type but notes; a CRDT for everything was more machinery than the app needs. Old clients not writing newer objects is what keeps fields from being dropped. |
+| Payloads | Protobuf per type, behind a plaintext header in the value that names the type, the `schema_version` and the key id; the server stores the value as one byte string and never parses it (round 16, 2026-10-28). Add fields, never repurpose a number; a breaking change is a new type number. Old clients read newer objects (unknown fields ignored for display) but never write them. A note's CRDT lives inside the payload: a `note` parent plus append-only `note_update` children, each one `yrs` update, combined on the device. | Round 7. Plain values plus a rebase cover every type but notes; a CRDT for everything was more machinery than the app needs. Old clients not writing newer objects is what keeps fields from being dropped. |
 | Client core | One Rust core (sync, local store, conflict rebase, the note CRDT, keyring, crypto, schemas) bound to Swift and Kotlin through UniFFI and to the browser through wasm. Three UI shells. | Three sync engines and three crypto implementations diverge. |
 | Cost | Single CNPG instance, one app replica in preview, blob traffic never touches the app (presigned URLs), push instead of polling, client-side resize before upload. | |
 
@@ -104,7 +104,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Upload quality per device (and per group) | n/a | applied before encryption, so it sets what everyone gets; the uploaded bytes are the file; the thumbnail is always generated at a fixed size, under 64 KiB, and lives inside the value | Round 11 (2026-10-26). Client-side; nothing for the backend. |
 | Local quality per device for downloaded photos | n/a | applied after decryption, affects only that device's copy; a device that keeps a reduced copy is no longer a holder of that file (the reference's hash is of the uploaded ciphertext), so it answers history requests but cannot re-upload it; a device always keeps its own uploads byte for byte | Round 11. Client-side; the holder rule is what keeps re-uploads correct. |
 
-### Feature types (all client-side; the server sees only a type number)
+### Feature types (all client-side; the server sees only bytes)
 
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
@@ -168,7 +168,11 @@ implementing session owns. Round 15 (2026-10-28) moved the window to 672 hours f
 history requests and files: since round 13 a row leaves as soon as every device has acked it,
 so the window only says how long a device may stay away and how much a slow one costs, and a
 restart re-fetches thumbnails now. The upload cap stays at 20 GiB per 168 hours as a rate, so
-the bucket holds at most four times that per group.
+the bucket holds at most four times that per group. Round 16 (2026-10-28) moved the type, the
+schema version and the key id out of the `object` columns into a plaintext header inside the
+value: the key id must be readable before decryption, and a plaintext header is, so the server
+keeps three fewer columns it never read and the header travels with the ciphertext as its
+associated data.
 
 ## Status
 

@@ -15,17 +15,15 @@ hours. Directive §2 per table, §7 (counter row under
 |---|---|---|
 | id | uuid | primary key, client-minted |
 | group_id | uuid | |
-| type | int32 | client-defined type number |
-| schema_version | int32 | |
-| key_id | int32 | which group key encrypts `value` |
-| value | bytes, nullable | ciphertext (≤ 1 MiB); null on a tombstone; a blob reference (slot, hash, size, content key) is inside it, and so is a photo's thumbnail |
+| value | bytes, nullable | ≤ 1 MiB; null on a tombstone. A plaintext header (`type`, `schema_version`, `key_id`) followed by the ciphertext; the server never parses it. A blob reference (slot, hash, size, content key) is inside the ciphertext, and so is a photo's thumbnail |
 | seq | int64 | per group, strictly increasing; an edit takes a new seq, so a row's seq identifies its state |
 | created_by_device | uuid | |
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark; a tombstone is evicted like any row |
 | uploaded_at | timestamp | when this row landed on the server, by push or by a history re-insert; evicted 672 hours later |
 
-Indexes: unique `(group_id, seq)`; `(uploaded_at)` for eviction. The parent of an object lives inside its encrypted value: the server
-never sees the structure of a group's data.
+Indexes: unique `(group_id, seq)`; `(uploaded_at)` for eviction. The parent of an object lives inside its encrypted value, and
+its type, schema version and key id in the value's plaintext header (`06-object-types.md`): the
+server never sees the structure of a group's data, nor what kind of thing a row is.
 
 ### `group_head`
 
@@ -73,8 +71,7 @@ Index `(group_id, status)`. Rows older than 672 hours are dropped by the sweep.
 
 ## Push
 
-`PushObjectsRequest { group_id, objects: [{ id, type, schema_version, key_id, value?, base_seq,
-deleted }] }`. `base_seq` is the seq of the row the device edited
+`PushObjectsRequest { group_id, objects: [{ id, value?, base_seq, deleted }] }`. `base_seq` is the seq of the row the device edited
 from, 0 for a new object.
 
 Before the transaction: `CheckMembershipRequest`, and the role must be `admin` or `member` (a
@@ -207,8 +204,7 @@ requester's own devices claim at once, everyone else waits a random few seconds 
 
 The claimer pushes the rows it holds with seq in `[from_seq, to_seq]` back to the server,
 exactly as they were in the log, tombstones included while it still has them:
-`PushHistoryRequest { request_id, entries: [{ id, type, schema_version, key_id, value?, seq,
-deleted }], complete }`, **oldest first**, a few thousand entries per call, `complete = true` on
+`PushHistoryRequest { request_id, entries: [{ id, value?, seq, deleted }], complete }`, **oldest first**, a few thousand entries per call, `complete = true` on
 the last call. A row belongs to the range when its seq, the seq of the object's current state,
 is in it. The handler, under the group's counter lock, re-inserts each entry **with its original
 seq** and `uploaded_at = now`, skipping any id that already has a row, at any seq, live or

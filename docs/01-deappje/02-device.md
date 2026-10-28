@@ -28,7 +28,7 @@ Index `(user_id)`. A device is registered by the logged-in user and only they ca
 |---|---|---|
 | id | uuid | primary key |
 | group_id | uuid | |
-| key_id | int32 | the group's key generation; objects name it in plaintext metadata |
+| key_id | int32 | the group's key generation; an object names it in the plaintext header of its value |
 | device_id | uuid | the device this copy is wrapped for |
 | wrapped | bytes | ciphertext |
 | wrapped_by_device | uuid | provenance |
@@ -98,7 +98,7 @@ reads, and no person approves it. The first device in a group is the creator's, 
 | Key | Where | Algorithm |
 |---|---|---|
 | device key | one X25519 keypair per device, generated on the device, private half in the Secure Enclave-backed keychain / Android Keystore / a non-extractable WebCrypto key; the public half is `device.public_key` | X25519 |
-| group key | 32 random bytes per `(group_id, key_id)`, minted on a member's device | XChaCha20-Poly1305 for object values, random 24-byte nonce, associated data = the plaintext metadata (`group_id`, `id`, `type`, `schema_version`, `key_id`) so the server cannot re-label a ciphertext |
+| group key | 32 random bytes per `(group_id, key_id)`, minted on a member's device | XChaCha20-Poly1305 for object values, random 24-byte nonce, associated data = `group_id`, `id` and the value's plaintext header (`type`, `schema_version`, `key_id`) so nobody can re-label a ciphertext |
 | blob key | 32 random bytes per file, stored with the file's slot, hash and size inside the owning object's value | XChaCha20-Poly1305 over the file; unchanged by rotation, so a holder re-uploads the same bytes to the same key |
 
 A wrap (`wrapped_key.wrapped`) is HPKE (RFC 9180) in **Auth mode**: DHKEM(X25519, HKDF-SHA256),

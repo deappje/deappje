@@ -180,9 +180,6 @@ nanoservices:
           columns:
             - { name: id, type: uuid, primaryKey: true }
             - { name: group_id, type: uuid }
-            - { name: type, type: int32 }
-            - { name: schema_version, type: int32 }
-            - { name: key_id, type: int32 }
             - { name: value, type: bytes, nullable: true }
             - { name: seq, type: int64 }
             - { name: created_by_device, type: uuid }

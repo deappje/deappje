@@ -88,8 +88,9 @@ Owns the relay. Plain executor with two hourly sweeps; the one piece of concurre
 the system is here. Member devices are the store, and every holder holds the whole group: the
 server keeps a row, tombstones included, until every device has acked it, 672 hours at most.
 
-- **Tables**: `object` (id, group, type, schema version, key id, value, seq, creator device,
-  `deleted`; the parent and any file references are inside the value), `group_head` (group, head seq, `evicted_through_seq`): the
+- **Tables**: `object` (id, group, value, seq, creator device, `deleted`; the type, schema
+  version and key id are a plaintext header inside the value, the parent and any file
+  references are inside its ciphertext), `group_head` (group, head seq, `evicted_through_seq`): the
   counter row; `group_device` (group, device, `acked_seq`); `history_request`. Directive §2, §7
   (serialize on a counter row under `FOR UPDATE`).
 - **Push**: one transaction per batch: lock `group_head`; refuse the batch as `behind_floor`
@@ -179,7 +180,8 @@ bucket's and the window's.
 
 ## Values and conflicts (client core)
 
-Every `value` is a protobuf message of its type, encrypted (`06-object-types.md`). The server has
+Every `value` is a protobuf message of its type, encrypted, behind a plaintext header that names
+the type, the schema version and the key (`06-object-types.md`). The server has
 one rule, compare-and-set on the object's seq with the current row returned on a conflict, and
 the client core has one way to handle it:
 
@@ -213,7 +215,7 @@ later optimisation; nothing depends on it.
 
 ### Schemas and versions
 
-`schema_version` in plaintext metadata says which schema the writer used. Add fields, never
+`schema_version` in the value's plaintext header says which schema the writer used. Add fields, never
 repurpose a field number; a breaking change is a new type number. An old client reads a newer
 object by ignoring fields it does not know and shows it, but never writes to an object whose
 `schema_version` is above its own for that type, so no field is ever dropped by a re-serialise.

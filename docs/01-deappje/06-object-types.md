@@ -1,7 +1,12 @@
-# Object types (client-defined; the server stores a number)
+# Object types (client-defined; the server stores bytes)
 
 Every object is one protobuf message of its type (`01-architecture.md`, "Values and
-conflicts"). Common fields on every type: `author` (user id), `authored_at`, `edited_at`.
+conflicts"). On the wire and in the `object` table a value is an `Envelope` message: a plaintext
+header, `type`, `schema_version` and `key_id`, then `nonce` and `ciphertext`. The header is
+readable before decryption, which is what picking the key needs, and it is the AEAD's
+associated data together with the group id and the object id, so a header cannot be swapped
+onto another ciphertext. The server stores the envelope as one byte string and never parses it
+(round 16). Common fields on every type: `author` (user id), `authored_at`, `edited_at`.
 Ordering of lists is a `pos` fractional index on the item. A file reference is `{ slot, sha256,
 size, content_key }` inside the message; the bucket key is derived from the object id and the
 slot, and the server never sees the reference. A thumbnail is not a file: it is a `bytes` field
