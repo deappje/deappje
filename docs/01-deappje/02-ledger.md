@@ -137,16 +137,20 @@ commit after a higher one and a client that pulled in between misses it forever 
   more }`. If `since_seq < evicted_through_seq` the device is behind the floor: rows in
   `(since_seq, evicted_through_seq]` are gone from the server, tombstones among them, and so is
   the device's own `group_device` row, so it cannot know which of the objects it holds were
-  deleted meanwhile. It starts over: it throws the group away (objects, tombstones and every
-  unpushed write; files stay as a content-addressed cache, since a file is reachable only
-  through an object's reference and brings nothing back by itself) and takes the path of a new
-  device. That path: pull from 0 and apply the window; ask a holder for everything older with
+  deleted meanwhile. It starts over: it throws the group away (objects and tombstones; files
+  stay as a content-addressed cache, since a file is reachable only through an object's
+  reference and brings nothing back by itself; unpushed writes stay in the outbox) and takes
+  the path of a new device. That path: pull from 0 and apply the window; ask a holder for everything older with
   `RequestHistoryRequest { from_seq: 1, to_seq: evicted_through_seq }`; when `HistoryReady`
   comes, pull from 0 again, which returns the restored rows with the window (entries it already
   holds at that seq are skipped); if that pull reports a floor above the request's `to_seq`, an
   eviction in between took rows it has not seen, so it asks for `(to_seq, floor]` and pulls
   again, until the floor it has caught up to is the floor the pull reports; then ack the head.
-  Until then its pushes are refused. Objects come whole, from seq 1; files come lazily: a
+  Until then its pushes are refused. Once it is a holder again it replays its outbox against
+  the store it just fetched: a create goes as it is; an edit or delete goes only if its object
+  is still there, rebased onto the current row with that row's seq as its base, and is dropped
+  when the object is gone, since a holder pushing a stale base into an empty slot would be the
+  silent overwrite the holder check exists to prevent. The seq check catches whatever raced it. Objects come whole, from seq 1; files come lazily: a
   full-size file when it is viewed, a thumbnail for a grid. A device drops its local tombstones
   with `seq ≤ min_acked_seq`: every holder has applied them, and a device that is not a holder
   starts over, so no device can ever hand it a live copy of those again.

@@ -113,10 +113,12 @@ server keeps a row, tombstones included, until every holder has acked it, 168 ho
   with the eviction floor and the minimum ack. A device whose cursor is below the floor is
   behind: rows it never saw, tombstones among them, are gone from the server and so is its
   `group_device` row, since an eviction evicts every device that had not acked the rows it
-  took; the device throws the group away (every unpushed write goes; files stay as a
-  content-addressed cache) and takes the path of a new device: pull from 0, ask a holder for
+  took; the device throws the group away (files stay as a content-addressed cache, unpushed
+  writes stay in the outbox) and takes the path of a new device: pull from 0, ask a holder for
   everything from seq 1 up to the floor, pull again, and ack the head once it holds the whole
-  group. Objects come whole; files come lazily. An ack is the one number per device: a holder
+  group, then replay the outbox against the fresh store: creates as they are, edits and
+  deletes rebased onto the current row and dropped when the object is gone. Objects come
+  whole; files come lazily. An ack is the one number per device: a holder
   holds the group from seq 1 through its ack. An ack that goes backwards but stays at or above
   the floor is stored as it is, since the rows after it are still here; one below the floor is
   refused. The server keeps the minimum ack over the group's rows and hands it back so devices
