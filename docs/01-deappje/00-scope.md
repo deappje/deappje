@@ -172,7 +172,8 @@ the bucket holds at most four times that per group. Round 16 (2026-10-28) moved 
 schema version and the key id out of the `object` columns into a plaintext header inside the
 value: the key id must be readable before decryption, and a plaintext header is, so the server
 keeps three fewer columns it never read and the header travels with the ciphertext as its
-associated data.
+associated data. The same round dropped `created_by_device`: nothing read it, the author is
+inside the ciphertext, and the push fan-out knows its caller without a column.
 
 ## Status
 

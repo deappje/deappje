@@ -182,7 +182,6 @@ nanoservices:
             - { name: group_id, type: uuid }
             - { name: value, type: bytes, nullable: true }
             - { name: seq, type: int64 }
-            - { name: created_by_device, type: uuid }
             - { name: deleted, type: bool }
             - { name: uploaded_at, type: timestamp }
           indexes:

@@ -88,7 +88,7 @@ Owns the relay. Plain executor with two hourly sweeps; the one piece of concurre
 the system is here. Member devices are the store, and every holder holds the whole group: the
 server keeps a row, tombstones included, until every device has acked it, 672 hours at most.
 
-- **Tables**: `object` (id, group, value, seq, creator device, `deleted`; the type, schema
+- **Tables**: `object` (id, group, value, seq, `deleted`; the type, schema
   version and key id are a plaintext header inside the value, the parent and any file
   references are inside its ciphertext), `group_head` (group, head seq, `evicted_through_seq`): the
   counter row; `group_device` (group, device, `acked_seq`); `history_request`. Directive §2, §7

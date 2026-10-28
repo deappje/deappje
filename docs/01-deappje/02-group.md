@@ -119,7 +119,8 @@ Reconcile pass:
 5. `Delete`.
 
 Worker policy as `group_purge`. Objects the user authored stay: they belong to their groups and
-are ciphertext; `created_by_device` becomes a dangling id, which clients already tolerate.
+are ciphertext, and the author inside them becomes an id without a profile, which clients
+already tolerate.
 
 ## Messages
 

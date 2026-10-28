@@ -17,13 +17,14 @@ hours. Directive §2 per table, §7 (counter row under
 | group_id | uuid | |
 | value | bytes, nullable | ≤ 1 MiB; null on a tombstone. A plaintext header (`type`, `schema_version`, `key_id`) followed by the ciphertext; the server never parses it. A blob reference (slot, hash, size, content key) is inside the ciphertext, and so is a photo's thumbnail |
 | seq | int64 | per group, strictly increasing; an edit takes a new seq, so a row's seq identifies its state |
-| created_by_device | uuid | |
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark; a tombstone is evicted like any row |
 | uploaded_at | timestamp | when this row landed on the server, by push or by a history re-insert; evicted 672 hours later |
 
 Indexes: unique `(group_id, seq)`; `(uploaded_at)` for eviction. The parent of an object lives inside its encrypted value, and
 its type, schema version and key id in the value's plaintext header (`06-object-types.md`): the
-server never sees the structure of a group's data, nor what kind of thing a row is.
+server never sees the structure of a group's data, nor what kind of thing a row is, nor who
+wrote it: the author is inside the ciphertext, and the writer of a push is only used to leave
+its own device out of the wake-up.
 
 ### `group_head`
 
