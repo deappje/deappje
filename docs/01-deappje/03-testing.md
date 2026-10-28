@@ -36,7 +36,7 @@ definitive rejection is classified as such.
   across N devices (every holder has applied every row the server evicted, every row the ack
   rule removed was at or below every device's ack, and no holder holds a live copy of an object
   whose tombstone is gone); the age rule evicts a device below the floor that has not acked for
-  168 hours and leaves one that is catching up; a backwards ack is refused and 0 resets the
+  672 hours and leaves one that is catching up; a backwards ack is refused and 0 resets the
   row; an edit evicted while a device was offline is never replaced silently; a batch of
   creates from a non-holder is refused like any other, so a new member posts only after its
   history has arrived and its ack has reached the floor; a device that falls behind starts over
@@ -51,7 +51,7 @@ definitive rejection is classified as such.
   `complete` fulfils the request once and a later push for it is refused; a claimer that stops
   is taken over after 5 minutes and the take-over re-push restores only what is missing; the
   joiner ends with the same rows as the holder; a restored row the requester never acks is
-  evicted 168 hours after the re-insert and no earlier.
+  evicted 672 hours after the re-insert and no earlier.
 - **Key lifecycle**: register two devices, request keys, fulfil, remove member, rotation batch,
   `GetWrappedKeys` returns both key ids for a surviving device and nothing for the removed one.
 - **Files**: against the bucket simulator: presign, upload, confirm, download; a key outside the

@@ -2,7 +2,7 @@
 
 One Rust binary, four nanoservices, one Postgres database with a schema per nanoservice, blobs
 in the platform's private bucket, Kratos for identity. The server is a relay, not a store: member
-devices hold the data, the server keeps up to 168 hours of it so devices can catch up, and anything
+devices hold the data, the server keeps up to 672 hours of it so devices can catch up, and anything
 older is fetched from a member device on request. It never holds a group key and never reads a
 payload: every `value` is ciphertext, every blob is ciphertext, and the plaintext columns are the
 minimum needed to route, order, authorise and expire.
@@ -86,7 +86,7 @@ for another device and hands it back.
 
 Owns the relay. Plain executor with two hourly sweeps; the one piece of concurrency control in
 the system is here. Member devices are the store, and every holder holds the whole group: the
-server keeps a row, tombstones included, until every device has acked it, 168 hours at most.
+server keeps a row, tombstones included, until every device has acked it, 672 hours at most.
 
 - **Tables**: `object` (id, group, type, schema version, key id, value, seq, creator device,
   `deleted`; the parent and any file references are inside the value), `group_head` (group, head seq, `evicted_through_seq`): the
@@ -115,7 +115,7 @@ server keeps a row, tombstones included, until every device has acked it, 168 ho
   are monotone, except 0, which is a device's first act in a group and its way to start over,
   and which gives it a row. A device's row pins the group's minimum ack, so nothing it has not
   acked can be evicted by ack while it catches up; a device that neither reaches the floor nor
-  acks for 168 hours loses its row to the age rule. A holder whose cursor is below the floor
+  acks for 672 hours loses its row to the age rule. A holder whose cursor is below the floor
   (a restored backup, or evicted while away) throws the group away (files stay as a
   content-addressed cache, unpushed writes stay in the outbox) and takes the path of a new
   device: ack 0, pull the window, ask a holder for everything from seq 1 up to the floor, page
@@ -134,14 +134,14 @@ server keeps a row, tombstones included, until every device has acked it, 168 ho
   each call and pages them from its low ack, acking as it goes, while every other device's
   cursor is already past them. An answer marked complete is complete, since every holder holds
   the whole group. Restored rows go by the ack rule as the requester acks past them, or by age
-  168 hours after their re-insert. No server-side retries: the requester asks again. This is how
+  672 hours after their re-insert. No server-side retries: the requester asks again. This is how
   a new member, a new device or a device that started over gets everything from seq 1, and how
   an expired photo comes back (the holder re-uploads the file to its derived key, then reports
   the request complete).
 - **Sweeps**: `evict_objects` (by ack: rows every device has acked, floor up to the minimum ack;
-  by age: rows uploaded more than 168h ago, floor up to the highest seq taken, and the devices
-  below the floor that have not acked for 168h lose their row), `expire_history_requests`
-  (168h).
+  by age: rows uploaded more than 672h ago, floor up to the highest seq taken, and the devices
+  below the floor that have not acked for 672h lose their row), `expire_history_requests`
+  (672h).
 - **Sends**: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`,
   `HistoryReady`.
 - **API**: `LedgerService`.
@@ -151,7 +151,7 @@ server keeps a row, tombstones included, until every device has acked it, 168 ho
 Presigns bucket access under the caller's group prefix and cleans up. No table of blobs: a file's
 reference (slot, hash, size, content key) is inside the owning object's encrypted value, its key
 is derived (`g/<group>/o/<object>/<slot>`), and the bucket's one lifecycle rule expires
-everything seven days after upload. Thumbnails are not files: a photo's thumbnail is a field
+everything 28 days after upload. Thumbnails are not files: a photo's thumbnail is a field
 inside its encrypted value, so a holder of the object has the grid and the bucket holds only
 full-size files and attachments. An upload is a presigned PUT, a download a presigned GET, an
 expired file the bucket's 404.

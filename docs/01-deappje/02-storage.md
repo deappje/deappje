@@ -10,11 +10,11 @@ the delete call, §7 for the messages.
 
 | key | content | lifecycle |
 |---|---|---|
-| `g/<group_id>/o/<object_id>/<slot>` | one encrypted file of an object; slots `full`, `file` | expires 7 days after upload |
+| `g/<group_id>/o/<object_id>/<slot>` | one encrypted file of an object; slots `full`, `file` | expires 28 days after upload |
 
 The group prefix is the authorization boundary: a member may be given a presigned URL for any
 key under its group's prefix and nothing else. The slot names the size cap. The bucket has one
-lifecycle rule, expiry seven days after upload, for everything in it; it is the platform's: the
+lifecycle rule, expiry 28 days after upload, for everything in it; it is the platform's: the
 environment's bucket carries it, and the app never deletes on a timer. If the platform cannot
 carry a lifecycle rule, the fallback is an hourly sweep over a bucket listing, which this plan
 does not build. Thumbnails are not in the bucket: they are a field inside the owning object's
@@ -36,7 +36,8 @@ state on the server.
 
 `PresignUploadRequest` sums the group's last 168 rows and refuses when the sum plus the new size
 exceeds `storage_quota.max_bytes_per_168h` (20 GiB). Rows older than 168 hours are dropped by the
-hourly sweep. This bounds what a group can put into the bucket per seven days, which is the cost
+hourly sweep. This bounds what a group can put into the bucket per 168 hours, and with files
+living 672 hours the bucket holds at most four times the cap per group, which is the cost
 that matters for a cache.
 
 ## Config

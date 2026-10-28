@@ -1,7 +1,7 @@
 # `ledger`
 
 Owns the relay: a window of ciphertext rows per group, tombstones included, that some device
-has not yet acked, 168 hours at most; the group's counter; one acked cursor per device; and a
+has not yet acked, 672 hours at most; the group's counter; one acked cursor per device; and a
 row per pending history request. Plain executor with two hourly sweeps. Member devices are the
 store, each of them holding the whole group; this nanoservice forgets everything after 168
 hours. Directive §2 per table, §7 (counter row under
@@ -22,7 +22,7 @@ hours. Directive §2 per table, §7 (counter row under
 | seq | int64 | per group, strictly increasing; an edit takes a new seq, so a row's seq identifies its state |
 | created_by_device | uuid | |
 | deleted | bool | tombstone flag; the tombstone's own `seq` is its deletion mark; a tombstone is evicted like any row |
-| uploaded_at | timestamp | when this row landed on the server, by push or by a history re-insert; evicted 168 hours later |
+| uploaded_at | timestamp | when this row landed on the server, by push or by a history re-insert; evicted 672 hours later |
 
 Indexes: unique `(group_id, seq)`; `(uploaded_at)` for eviction. The parent of an object lives inside its encrypted value: the server
 never sees the structure of a group's data.
@@ -49,7 +49,7 @@ Created with zeros on the first push to a group.
 Index `(device_id)`. A device's first act in a group is `AckSeqRequest { seq: 0 }`, which creates
 the row; a device that starts over sends the same. Deleted on `DeviceLeftGroup` from `device`,
 and by the age rule of `evict_objects` when the device's ack is below the floor and it has not
-acked for 168 hours: a device that has not acked a row that gets evicted is evicted with it. A
+acked for 672 hours: a device that has not acked a row that gets evicted is evicted with it. A
 row with `acked_seq ≥ evicted_through_seq` is a **holder**: it has the whole group. A row below
 the floor is a device catching up, and its ack pins `min_acked_seq`, the minimum over the
 group's rows, so nothing it has not acked can be evicted by ack from under it.
@@ -69,7 +69,7 @@ group's rows, so nothing it has not acked can be evicted by ack from under it.
 | claimed_at | timestamp, nullable | a claim older than 5 minutes without `complete` counts as abandoned |
 | created_at | timestamp | |
 
-Index `(group_id, status)`. Rows older than 168 hours are dropped by the sweep.
+Index `(group_id, status)`. Rows older than 672 hours are dropped by the sweep.
 
 ## Push
 
@@ -114,7 +114,7 @@ Response: `PushResult { accepted: [{ id, seq }], conflicts: [{ id, current }], h
 device skips entries it already holds at that seq.
 
 A tombstone's deletion mark is its seq, and a tombstone is a row like any other: it stays here
-until every device has acked it, 168 hours at most, and a device keeps the ones it pulled until
+until every device has acked it, 672 hours at most, and a device keeps the ones it pulled until
 the minimum ack passes them. There is no pull-to-head check before a push: the one rule is that
 the pusher is a holder, and it is what makes the no-row branch safe. A holder has seen every
 row the server evicted, so an evicted row it edits was last written at a seq it holds, and any
@@ -175,7 +175,7 @@ over drops everything, so no device can ever hand it a live copy of those again.
 
 `min_acked_seq` is `MIN(acked_seq)` over the group's `group_device` rows, null when there are
 none. Nothing waits for a slow device beyond the window: a device that neither reaches the
-floor nor acks for 168 hours loses its row, the minimum moves on, and the device starts over
+floor nor acks for 672 hours loses its row, the minimum moves on, and the device starts over
 when it is back. The window is therefore the longest a device may stay away without starting
 over, and the longest any row stays here; a row every device has acked goes sooner. One number
 per device, the ack, says everything: a device holds the group from seq 1 through its ack, it
@@ -224,7 +224,7 @@ complete: every holder holds the whole group, so what the claimer lacked no devi
 The requester pages the restored rows from its ack, which is below them, and acks as it goes;
 every other device's cursor is already past those numbers, so nobody else sees any traffic.
 Restored rows are ordinary rows: they go by the ack rule as soon as the requester, the last
-device below them, has acked past them, and by age 168 hours after their re-insert if it never
+device below them, has acked past them, and by age 672 hours after their re-insert if it never
 does.
 
 A request for one object (`object_id` set) is answered the same way with one entry and
@@ -256,14 +256,14 @@ download.
   with `seq ≤ min_acked_seq`, live and tombstones alike, restored ones included, and set
   `evicted_through_seq = GREATEST(evicted_through_seq, min_acked_seq)`: every device has them,
   so the cache has no reader left for them. **By age**: delete rows with
-  `uploaded_at < now - 168h`, batched 10k per statement; per group set `evicted_through_seq =
+  `uploaded_at < now - 672h`, batched 10k per statement; per group set `evicted_through_seq =
   GREATEST(evicted_through_seq, MAX(seq) evicted)`, then delete the group's `group_device` rows
-  with `acked_seq` below the new floor and `updated_at < now - 168h`: a device that had not
+  with `acked_seq` below the new floor and `updated_at < now - 672h`: a device that had not
   acked an evicted row is evicted with it, unless it is catching up, which its acks show. By
   age, not by position, so a restored row the requester never acked still goes.
-- `expire_history_requests`: delete rows older than 168 hours.
+- `expire_history_requests`: delete rows older than 672 hours.
 
-Postgres therefore holds, per group, what some device has not acked yet, for seven days at most.
+Postgres therefore holds, per group, what some device has not acked yet, for 28 days at most.
 No device can hold anything back: a device that does not keep up is evicted with the rows it did
 not ack, and starts over.
 
@@ -314,7 +314,7 @@ ListHistoryRequests, ClaimHistory, PushHistory. The api crate maps the proto ent
   every row the server evicted, every row the ack rule removed was at or below every device's
   ack, and no holder holds a live copy of an object whose tombstone is gone; the lost-update
   case (an edit evicted while a device was offline) ends in a refusal, never a replace; the age
-  rule deletes the rows of devices below the floor that have not acked for 168 hours and leaves
+  rule deletes the rows of devices below the floor that have not acked for 672 hours and leaves
   a device that is catching up; a backwards ack is refused and 0 resets the row; a joining
   device's ack 0 pins the minimum, so nothing it has not acked is evicted by ack while it
   catches up, and the restored rows go as it acks past them; a request from a group with no

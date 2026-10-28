@@ -16,7 +16,7 @@ Seed, `config/base/storage/slot.json`, namespace `default`:
 | full | 26214400 |
 | file | 26214400 |
 
-Retention is not config here: it is the bucket's one lifecycle rule, seven days after upload for
+Retention is not config here: it is the bucket's one lifecycle rule, 28 days after upload for
 everything in it, a platform setting on the environment's bucket. Thumbnails are not files: they
 live inside the object's value, capped by the client at 64 KiB (`06-object-types.md`).
 
@@ -32,6 +32,6 @@ Seed, `config/base/storage/storage_quota.json`, namespace `default`: one entry, 
 ## Not config
 
 - Object types and their schemas: client-defined; the server stores a number.
-- The 168-hour object window, the 1 MiB value cap and the purge worker policies: constants in the
+- The 672-hour object window, the 1 MiB value cap and the purge worker policies: constants in the
   nanoservice, identical across replicas by construction (Directive invariant 4).
 - Push payload shapes: constants in `device`.
