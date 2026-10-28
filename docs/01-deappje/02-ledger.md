@@ -82,11 +82,12 @@ One transaction:
 
 1. `SELECT ... FROM group_head WHERE group_id = $1 FOR UPDATE` (insert if absent), and the
    device's `group_device` row (no row counts as acked 0).
-2. **Behind the floor?** If the batch edits anything (`base_seq > 0`) and the device's
-   `acked_seq < evicted_through_seq`, refuse the whole batch with `behind_floor
-   { evicted_through_seq }`: the device has not seen everything the server has evicted, so its
-   word on an evicted row is worth nothing. A batch of creates alone goes through, so a new
-   member can post before any history has reached it.
+2. **Behind the floor?** If the device's `acked_seq < evicted_through_seq`, refuse the whole
+   batch with `behind_floor { evicted_through_seq }`, whatever it holds: the device has not seen
+   everything the server has evicted, so its word is worth nothing, and `base_seq = 0` is its
+   word too. The server cannot tell a create from an edit of a row it no longer has, so a batch
+   of "creates" from behind the floor could carry a hard-deleted object straight back in. A new
+   member therefore pulls and acks before its first post; one round trip.
 3. Per object, in request order, read the current row:
    - **No row** (new, or evicted) ⇒ accept.
    - **`base_seq == seq`** ⇒ accept: write the object at `seq = head + 1`, head advances. If
@@ -132,11 +133,10 @@ commit after a higher one and a client that pulled in between misses it forever 
   `since_seq < evicted_through_seq` the device is behind the floor: rows in
   `(since_seq, evicted_through_seq]` are gone from the server, tombstones among them, so the
   device cannot know which of the objects it holds were deleted meanwhile. It reconciles by
-  throwing the group away and starting over as a new device: objects, tombstones and unpushed
-  edits are dropped (an unpushed create is pushed, since a new object brings nothing back, and
-  the orphan rule catches a child whose parent is gone; files stay as a content-addressed cache,
-  since a file is reachable only through an object's reference), the device pulls from 0, acks
-  the head with floor `evicted_through_seq + 1`, and refills lazily: the last stretch of the
+  throwing the group away and starting over as a new device: objects, tombstones and every
+  unpushed write are dropped (files stay as a content-addressed cache, since a file is reachable
+  only through an object's reference and brings nothing back by itself), the device pulls from
+  0, acks the head with floor `evicted_through_seq + 1`, and refills lazily: the last stretch of the
   group by range, an object when a reference to it is opened, a full-size file when it is
   viewed. Until it has acked again its edits are refused. The device also drops its local
   tombstones with `seq ≤ evicted_through_seq`: every device at or above the floor has applied
@@ -299,7 +299,8 @@ ListHistoryRequests, ClaimHistory, PushHistory. The api crate maps the proto ent
 ## Tests
 
 - Unit: CAS-on-seq acceptance matrix (no row, match, mismatch, the same three on a tombstone);
-  the floor check (ack at, above and below the floor, a creates-only batch from below it);
+  the floor check (ack at, above and below the floor; a batch of creates from below it is
+  refused like any other);
   eviction floor arithmetic; the candidate set of a range request from a set of floors.
 - Integration: two replicas pushing to one group concurrently produce a gap-free sequence; a pull
   during a concurrent push never returns a seq the next pull skips; a batch of a parent and its

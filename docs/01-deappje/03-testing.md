@@ -35,9 +35,10 @@ definitive rejection is classified as such.
   invariant** under random interleavings of push, delete, pull, ack and evict across N devices
   (every device at or above the floor has applied every row the server evicted, and no device at
   or above the floor holds a live copy of an object whose tombstone was evicted); an edit
-  evicted while a device was offline is never replaced silently; a creates-only batch from
-  behind the floor is accepted; a device that falls behind starts over and ends with no object
-  that was deleted while it was away.
+  evicted while a device was offline is never replaced silently; a batch of creates from
+  behind the floor is refused like any other, so a new member posts only after its first ack; a
+  device that falls behind starts over and ends with no object that was deleted while it was
+  away.
 - **History**: a device starting over pulls from 0 and refills the last stretch by range; two
   simulated holders claim and exactly one wins; it pushes the rows back, tombstones included;
   they land at their original seqs, the head does not move, an id with a current row is

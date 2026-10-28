@@ -93,8 +93,9 @@ included, for 48 hours and nothing longer.
   counter row; `group_device` (group, device, `acked_seq`, `covered_from_seq`); `history_request`. Directive §2, §7
   (serialize on a counter row under `FOR UPDATE`).
 - **Push**: one transaction per batch: lock `group_head`; refuse the batch as `behind_floor`
-  when it edits anything (`base_seq > 0`) and the device's ack is below `evicted_through_seq`,
-  since the device has not seen everything the server evicted (creates alone go through); then
+  when the device's ack is below `evicted_through_seq`, whatever the batch holds, since the
+  device has not seen everything the server evicted and `base_seq = 0` is its claim like any
+  other (a new member pulls and acks before its first post); then
   per object compare `base_seq`, the seq of the row the device edited from, with the stored
   row's seq (no row ⇒ take the client's word, which the floor check just made good: any write
   it missed would still be a row here and conflict), on match write it at `seq = head + 1`, on
@@ -110,7 +111,7 @@ included, for 48 hours and nothing longer.
 - **Pull and ack**: `PullChangesRequest` returns entries with `seq > cursor`, tombstones included,
   with the eviction floor. A device whose cursor is below the floor is behind: rows it never
   saw, tombstones among them, are gone from the server, so it throws the group away and starts
-  over as a new device (unpushed creates are pushed, files stay as a content-addressed cache),
+  over as a new device (every unpushed write goes; files stay as a content-addressed cache),
   pulling from 0 and refilling lazily by range, by reference and by file. After applying a pull
   the device `AckSeq`s the head it received with its coverage floor, the seq from which it
   holds every row of the group: one interval per device, extended only backwards, so one number
