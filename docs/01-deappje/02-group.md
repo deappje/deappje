@@ -19,7 +19,7 @@ types, §6 for the Kratos call, §7 for every message.
 
 Invariants: `parent_group_id` never forms a cycle (depth is checked on create; one level is
 enough for now, but the column allows deeper). No name, no avatar: those are an encrypted object
-of type `group_profile` in the ledger, so the server stays blind.
+of type `group_profile` in the object log, so the server stays blind.
 
 Queries: by id; by `parent_group_id` (subgroups of a group); all groups a user is in (join on
 membership).
@@ -42,7 +42,7 @@ user from a group removes them from every subgroup in the same transaction; the 
 leave while other members remain.
 
 Roles. `admin` manages members, invites and roles and can delete the group. `member` reads and
-writes. `viewer` reads: holds the group keys like anyone else, but `ledger` refuses its pushes
+writes. `viewer` reads: holds the group keys like anyone else, but `sync` refuses its pushes
 to the log and `device` refuses it as the approver of another user's device. It may answer
 history requests and re-upload files, which is serving what it holds, not writing. An invite carries
 the role its joiners get (`member` or `viewer`); `SetMemberRoleRequest` (admin) changes it later.
@@ -142,7 +142,7 @@ already tolerate.
 | Sends | Response | To |
 |---|---|---|
 | MemberRemoved | (void) | device |
-| PurgeGroupObjectsRequest | PurgeResult | ledger |
+| PurgeGroupObjectsRequest | PurgeResult | sync |
 | PurgeGroupBlobsRequest | PurgeResult | storage |
 | PurgeGroupKeysRequest | PurgeResult | device |
 | PurgeUserDevicesRequest | PurgeResult | device |

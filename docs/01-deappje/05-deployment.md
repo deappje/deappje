@@ -57,10 +57,10 @@ tell the user where to get them.
 ## Database
 
 One CNPG cluster `app-db`, `instances: 1`, no storage class named, the pinned operator release
-the platform's own apps use. Schemas `group`, `device`, `ledger`, `storage`, each with its own
+the platform's own apps use. Schemas `group`, `device`, `sync`, `storage`, each with its own
 role (`basable-db`), plus the processing-object envelope schema. Separate `kratos` database on the
-same cluster. Migrations are dbmate files run by the migrate Job in wave -1; the app verifies the
-ledger at boot.
+same cluster. Migrations are dbmate files run by the migrate Job in wave -1. No nanoservice owns
+the accounting ledger (`owns.ledger`), so there is no restatement at boot.
 
 **Backups: later.** The private bucket exists from the first deploy, so adding
 `backup.barmanObjectStore` with `retentionPolicy: "14d"` and a daily `ScheduledBackup` is a

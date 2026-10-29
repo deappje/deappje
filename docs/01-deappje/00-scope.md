@@ -56,7 +56,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Leave group, remove member (admin) | include | triggers key rotation | Load-bearing. |
 | Subgroups (members ⊆ parent, own key) | include | | Requested; cheap once groups exist. |
 | Roles: admin, member, viewer | include | viewer reads only: the server refuses its pushes to the log and its approval of other users' devices; it may answer history requests and re-upload files, which is serving, not writing; invites carry the role; admins change it | Round 9 (2026-10-26). A read-only member is one role check in two handlers. |
-| Group deletion | include | a `group_purge` processing object in `group` drives the purge of ledger, storage and device until each reports nothing left; subgroups are purged first | Round 1. A purge must finish, so it is driven by a reconciler with direct requests, not an event. |
+| Group deletion | include | a `group_purge` processing object in `group` drives the purge of sync, storage and device until each reports nothing left; subgroups are purged first | Round 1. A purge must finish, so it is driven by a reconciler with direct requests, not an event. |
 | Data export | include | client-side: everything the device holds, bundled on the device | Round 1. No server work: the server cannot produce a readable export. |
 | Account deletion | include | a `user_purge` processing object in `group`: leave every group (promoting the longest-standing member where the user was the only admin, deleting groups where they were the only member), purge the user's devices and keys, delete the Kratos identity | Round 4 (2026-10-17). App stores require it; a purge must finish, so it is a reconciler. |
 | Group metadata (name, avatar) | include | stored as an encrypted object of a `group_profile` type, not in the group table | The server stays blind. |
@@ -70,7 +70,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Key rotation on removal | include | | Cheap; closes the ex-member hole. |
 | Push tokens (APNs, FCM) | include | silent push on group head advance | Replaces polling. |
 | Key backup / recovery without another member | exclude | | Rejoin via another member's device is the chosen path. |
-| Remove a device | include | the owner drops a lost or dead device; its keys go and `ledger` stops asking it for history | Round 7. Since round 12 a dead device blocks nothing beyond the window: the eviction that passes its ack takes its row. |
+| Remove a device | include | the owner drops a lost or dead device; its keys go and `sync` stops asking it for history | Round 7. Since round 12 a dead device blocks nothing beyond the window: the eviction that passes its ack takes its row. |
 
 ### Object log
 
@@ -179,7 +179,10 @@ identity (user ids, sessions, the account purge are unchanged) with its `oidc` m
 the provider being the `basable-login` client the platform writes into each environment; email
 codes, passkeys and the courier went, and with them the SMTP secret. The browser signs in with
 Basable and pairs with one QR; the phones run Kratos's native OIDC flow through the system
-browser and exchange the returned code for a session token.
+browser and exchange the returned code for a session token. Round 18 (2026-10-29) renamed the
+`ledger` nanoservice to `sync`: on this platform "ledger" is the declarative double-entry
+accounting ledger a nanoservice may own (`owns.ledger`), and this one is an object log that
+devices sync against. Same tables, same messages; only the name and `SyncService` changed.
 
 ## Status
 

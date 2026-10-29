@@ -61,7 +61,7 @@ its author and time inside the document, so the timeline is a projection of it:
    parent's timeline for members of that subgroup only, since nobody else holds its key.
 
 Scrolling back past what the device holds asks a member device for the older range
-(`RequestHistoryRequest`, `02-ledger.md`), so the feed fills across types in `seq` order. The
+(`RequestHistoryRequest`, `02-sync.md`), so the feed fills across types in `seq` order. The
 same classification produces the local notification text after a silent push; the server never
 knows what happened.
 
