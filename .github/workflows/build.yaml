@@ -30,6 +30,11 @@ jobs:
     # pick with runs-on; a job container is how a job builds on one.
     container:
       image: docker.io/library/debian:13.7@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
+    # The runner's default shell inside a job container is sh, and the steps
+    # below are bash (`${repo,,}`, `set -o pipefail`); Debian ships bash.
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: read
       # The job's OIDC identity token is what logs in to the platform
@@ -56,16 +61,19 @@ jobs:
       # with (cmake is aws-lc-sys's fallback when its cc build is refused);
       # git is for the checkout (without it actions/checkout downloads an
       # archive with no history, and the breaking-change check needs the
-      # branches); zstd keeps the cache entries in the format the platform's
-      # builder saves them in; curl and jq serve the registry login and the
-      # digests; kustomize and helm render the manifests; gh deletes the
+      # branches); python3 runs rules_pkg's build_tar (the migrations tarball);
+      # zstd keeps the cache entries in the format the platform's builder
+      # saves them in; curl and jq serve the registry login and the digests;
+      # bazelisk is the `bazel` the steps run (the VM's copy is outside the
+      # container); kustomize and helm render the manifests; gh deletes the
       # superseded caches.
       - name: Install the toolchain and tools
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates cmake curl git jq zstd
+          apt-get install -y --no-install-recommends build-essential ca-certificates cmake curl git jq python3 zstd
+          curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/download/v1.30.0/bazelisk-linux-amd64" -o /usr/local/bin/bazel && chmod +x /usr/local/bin/bazel
           curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz" | tar -xz -C /usr/local/bin kustomize
           curl -fsSL "https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz" | tar -xz --strip-components=1 -C /usr/local/bin linux-amd64/helm
           curl -fsSL "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz" | tar -xz --strip-components=2 -C /usr/local/bin gh_2.102.0_linux_amd64/bin/gh
