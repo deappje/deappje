@@ -11,8 +11,8 @@
 
 | Nanoservice | Adapter | Simulator models |
 |---|---|---|
-| device | apns.send_push | accepted, rejected token (410), transport failure, ack loss |
-| device | fcm.send_push | accepted, `UNREGISTERED`, transport failure, ack loss |
+| device | apns.send_apns | accepted, rejected token (410), transport failure, ack loss |
+| device | fcm.send_fcm | accepted, `UNREGISTERED`, transport failure, ack loss |
 | storage | object_storage.delete_object | present, absent, transport failure, ack loss |
 | group | kratos.delete_identity | present, absent (404), transport failure, ack loss |
 

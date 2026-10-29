@@ -48,13 +48,12 @@ a bad wrap is detected on the receiving device and re-requested.
 | id | uuid | primary key |
 | group_id | uuid | |
 | device_id | uuid | the device asking |
-| status | string | `pending`, `fulfilled`, `cancelled` |
 | invite_id | uuid, nullable | set when the request follows an invite |
 | invite_tag | bytes, nullable | `HMAC-SHA256(invite_secret, device_public_key)`; opaque to the server |
 | created_at | timestamp | |
-| fulfilled_at | timestamp, nullable | |
 
-Unique `(group_id, device_id)` where pending. A request is created by a device whose user is a
+Unique `(group_id, device_id)`: a row is an open request, a repeat from the same device returns
+it, and fulfilment deletes it. A request is created by a device whose user is a
 member but which holds no key; every device that holds a key for the group is pushed. Fulfilment
 is a human act: the holder's client shows the requesting user, platform and the fingerprint of
 the requesting device's public key (the requester reads it off their own screen), and a tap
@@ -133,13 +132,13 @@ holds all of them.
 | RegisterDeviceRequest | Device | upsert for the caller |
 | SetPushTokenRequest | Device | |
 | ListDevicesRequest | DeviceList | the devices holding a key for a group, with public keys; caller must be a holder |
-| RequestGroupKeysRequest | KeyRequest | caller's user must be a member; insert pending with optional `invite_id` and `invite_tag`, relayed opaque; push every holder device |
-| ListKeyRequestsRequest | KeyRequestList | pending requests in groups the caller holds a key for, with the requesting device's platform and public key |
-| FulfilKeyRequestRequest | KeyRequest | caller must hold a key for the group, and be `admin` or `member` unless the requesting device is the caller's own; insert the wrapped keys for the requesting device, mark fulfilled, push it |
+| RequestGroupKeysRequest | KeyRequest | caller's user must be a member; insert the row with optional `invite_id` and `invite_tag`, relayed opaque; push every holder device |
+| ListKeyRequestsRequest | KeyRequestList | open requests in groups the caller holds a key for, with the requesting device's platform and public key |
+| FulfilKeyRequestRequest | KeyRequest | caller must hold a key for the group, and be `admin` or `member` unless the requesting device is the caller's own; insert the wrapped keys for the requesting device and delete the row in one transaction, push it; the requester sees its keys arrive, which is the fulfilment |
 | PublishWrappedKeysRequest | WrappedKeyList | batch insert, rotation rule above |
 | GetWrappedKeysRequest | WrappedKeyList | every wrapped key for the calling device, optionally one group |
 | GroupHeadAdvanced | (void) | silent push to every member device except the writer's |
-| MemberRemoved | (void) | delete wrapped keys; send `DeviceLeftGroup` per device of the user; push `rotate` to remaining devices |
+| MemberRemoved | (void) | delete the wrapped keys and key requests of the user's devices; send `DeviceLeftGroup` per device of the user; push `rotate` to remaining devices |
 | HistoryRequested | (void) | from `sync`: push `history` wake-up (request id, range) to the listed devices, which `sync` chose as the group's holders (every device whose ack is at or above the eviction floor), the requester excluded |
 | HistoryReady | (void) | from `sync`: push `history` wake-up (request id) to the requester device, which pulls |
 | RemoveDeviceRequest | Device | the owner removes one of their devices: delete its `wrapped_key` and `key_request` rows and the device; send `DeviceLeftGroup` per group it held a key for |
@@ -160,8 +159,8 @@ second membership read path and keeps `group`'s table private.
 
 | System | Call | Strategy | Irreversible | Argument |
 |---|---|---|---|---|
-| apns | send_push | idempotent | no | The payload is a content-less wake-up naming a group or a reason; a duplicate costs one extra wake. Nothing a user sees. |
-| fcm | send_push | idempotent | no | Same. |
+| apns | send_apns | idempotent | no | The payload is a content-less wake-up naming a group or a reason; a duplicate costs one extra wake. Nothing a user sees. |
+| fcm | send_fcm | idempotent | no | Same. |
 
 Dispatched `Unfenced` from the request-path handlers (there is no claim), through `Call::dispatch`,
 with `classify_transport`. Delivery failures are logged and dropped; the client polls heads on

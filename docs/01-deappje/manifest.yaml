@@ -127,19 +127,17 @@ nanoservices:
             - { name: id, type: uuid, primaryKey: true }
             - { name: group_id, type: uuid }
             - { name: device_id, type: uuid }
-            - { name: status, type: string }
             - { name: invite_id, type: uuid, nullable: true }
             - { name: invite_tag, type: bytes, nullable: true }
             - { name: created_at, type: timestamp }
-            - { name: fulfilled_at, type: timestamp, nullable: true }
-          indexes: [ { columns: [group_id, status] } ]
+          indexes: [ { columns: [group_id, device_id] } ]
     externalSystems:
       - name: apns
         calls:
-          - { name: send_push, strategy: idempotent }
+          - { name: send_apns, strategy: idempotent }
       - name: fcm
         calls:
-          - { name: send_push, strategy: idempotent }
+          - { name: send_fcm, strategy: idempotent }
     handles:
       - { message: RegisterDeviceRequest, response: Device }
       - { message: SetPushTokenRequest, response: Device }
@@ -207,11 +205,10 @@ nanoservices:
             - { name: from_seq, type: int64 }
             - { name: to_seq, type: int64 }
             - { name: object_id, type: uuid, nullable: true }
-            - { name: status, type: string }
             - { name: claimed_by, type: uuid, nullable: true }
             - { name: claimed_at, type: timestamp, nullable: true }
             - { name: created_at, type: timestamp }
-          indexes: [ { columns: [group_id, status] } ]
+          indexes: [ { columns: [group_id] } ]
     schedules:
       - { name: evict_objects, every: 1h }
       - { name: expire_history_requests, every: 1h }

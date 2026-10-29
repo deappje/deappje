@@ -54,7 +54,7 @@ executor. Group keys are opaque bytes to this nanoservice: it stores what a memb
 for another device and hands it back.
 
 - **Tables**: `device` (user, public key, platform, push token), `wrapped_key` (group, key id,
-  device, ciphertext, wrapped by), `key_request` (group, device, status). Directive §2.
+  device, ciphertext, wrapped by), `key_request` (group, device, invite id and tag). Directive §2.
 - **Invariants**: a device belongs to one user; a wrapped key exists only for a device whose user
   is a member (checked through `CheckMembershipRequest` at write time); on `MemberRemoved` the
   removed user's wrapped keys for that group are deleted and every other member's devices are
@@ -71,7 +71,7 @@ for another device and hands it back.
   the requesting device's platform and the fingerprint of its public key, which the requester
   reads off their own screen. The exchange itself is HPKE Auth mode over X25519 (`02-device.md`),
   and clients pin peer device keys.
-- **External**: APNs and FCM, one `send_push` call each, strategy `idempotent`: the only push the
+- **External**: APNs and FCM, `send_apns` and `send_fcm`, strategy `idempotent`: the only push the
   server sends is a silent "group X advanced" or "key request pending" wake-up, and a duplicate is
   harmless. Directive §6.
 - **Handles**: device registration, push token, device listing (so members can wrap keys for

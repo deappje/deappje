@@ -2,7 +2,7 @@
 
 Owns the relay: a window of ciphertext rows per group, tombstones included, that some device
 has not yet acked, 672 hours at most; the group's counter; one acked cursor per device; and a
-row per pending history request. Plain executor with two hourly sweeps. Member devices are the
+row per open history request. Plain executor with two hourly sweeps. Member devices are the
 store, each of them holding the whole group; this nanoservice forgets everything after 672
 hours. Directive §2 per table, §7 (counter row under
 `FOR UPDATE`; a boolean or a number is all that crosses) for its messages.
@@ -63,12 +63,11 @@ group's rows, so nothing it has not acked can be evicted by ack from under it.
 | from_seq | int64 | 1 for a device that joins or starts over |
 | to_seq | int64 | the eviction floor the requester saw; rows above it are still on the server |
 | object_id | uuid, nullable | a request for one object instead of a range |
-| status | string | `pending`, `claimed`, `fulfilled` |
 | claimed_by | uuid, nullable | the holder device answering it |
 | claimed_at | timestamp, nullable | a claim older than 5 minutes without `complete` counts as abandoned |
 | created_at | timestamp | |
 
-Index `(group_id, status)`. Rows older than 672 hours are dropped by the sweep.
+Index `(group_id)`. A row is an open request and `complete` deletes it. Rows older than 672 hours are dropped by the sweep.
 
 ## Push
 
@@ -189,14 +188,14 @@ candidates are the group's holders: the other `group_device` rows with `acked_se
 evicted_through_seq`, every one of which holds the whole group. When there are none the answer
 is `unfillable`, nothing is stored, and the requester knows at once that no device holds
 anything older than the window: it acks the head with what the window gave it, and the group's
-history is what the window had. Otherwise insert a `pending` row and send `HistoryRequested
+history is what the window had. Otherwise insert a row and send `HistoryRequested
 { request_id, group_id, requester_device, from_seq, to_seq, object_id, devices }` to `device`,
 which pushes a `history` wake-up to the listed devices.
 
 A holder that wakes lists the group's open requests (`ListHistoryRequestsRequest { group_id }`:
-`pending`, plus `claimed` where the claim is older than 5 minutes) and claims one:
-`ClaimHistoryRequest { request_id }` is a single conditional update (`status = pending`, or
-`claimed` with a stale `claimed_at`) that records the device and the time; the first caller wins
+unclaimed, plus claimed more than 5 minutes ago) and claims one:
+`ClaimHistoryRequest { request_id }` is a single conditional update (`claimed_by` null, or
+`claimed_at` older than 5 minutes) that records the device and the time; the first caller wins
 and the rest are answered `taken`. A caller that is not a holder is refused. Only the claimer
 may then push, so one holder uploads, not every holder. A claimer that dies is replaced after 5
 minutes by whoever claims next, and the rows it already restored are skipped on the re-push.
@@ -213,8 +212,8 @@ tombstone: the current row always wins, so a later edit, a delete, or a second h
 the same request cannot be overridden. No new seq is handed out and the head does not move.
 After each call it sends `HistoryReady { request_id, requester_device, through_seq, complete }`
 to `device`, which wakes the requester; `through_seq` is the last seq of the call, so the
-requester knows how far it may page and ack; `complete` marks the row `fulfilled`, and a call
-from a device that does not hold the claim, or for a request already fulfilled, is refused. Any
+requester knows how far it may page and ack; `complete` deletes the row, and a call
+from a device that does not hold the claim, or for a request that no longer exists, is refused. Any
 role may answer: serving history is reading, not writing. An answer marked complete is
 complete: every holder holds the whole group, so what the claimer lacked no device has.
 
@@ -320,7 +319,7 @@ ListHistoryRequests, ClaimHistory, PushHistory. The api crate maps the proto ent
   and the second claimer's re-push skips what the first restored; a history re-insert keeps the
   original seqs, moves neither head nor floor, skips ids that have a row (live or tombstone),
   restores a tombstone as a tombstone, arrives oldest first, and is refused once the request is
-  fulfilled or from a device without the claim.
+  gone or from a device without the claim.
 - Property test: random interleavings of push/pull/ack/evict across N simulated devices, with
   history re-inserted by simulated holders and a device that falls behind starting over,
   converge to the same row per object on every holder; every device holds exactly the group's

@@ -183,6 +183,12 @@ browser and exchange the returned code for a session token. Round 18 (2026-10-29
 `ledger` nanoservice to `sync`: on this platform "ledger" is the declarative double-entry
 accounting ledger a nanoservice may own (`owns.ledger`), and this one is an object log that
 devices sync against. Same tables, same messages; only the name and `SyncService` changed.
+Round 19 (2026-10-29), from the scaffold's manifest check: `key_request` and `history_request`
+lost their `status` column, since a lifecycle column on a plain table is what a processing
+object is for and neither is one: a row is an open request, a claim is the nullable
+`claimed_by` and `claimed_at` pair, and fulfilment deletes the row; `cancelled` was set by no
+message and went. The push calls are `send_apns` and `send_fcm`, since call names are unique per
+nanoservice.
 
 ## Status
 
