@@ -1,0 +1,13 @@
+{
+  "configSetName": "slot",
+  "items": [
+    {
+      "@type": "storage.v1.SlotConfiguration",
+      "header": {
+        "namespace": "#{NamespaceConfiguration:default}",
+        "name": "example"
+      },
+      "max_size_bytes": 0
+    }
+  ]
+}

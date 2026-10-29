@@ -1,0 +1,92 @@
+# The React frontend: a Vite app built by Bazel (rules_js) into dist/, which
+# the workflow uploads as the `static` artifact; the platform serves it at /
+# from the environment's public bucket. No image and no pod. package.json and
+# pnpm-lock.yaml pin the npm graph: add a dependency to package.json and the
+# verify build (.basable/verify.sh) refreshes the lock. The Connect client is
+# generated from //proto at build into src/gen/; nothing generated is
+# committed.
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_run_binary", "js_run_devserver")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//frontend/react:typescript/package_json.bzl", typescript = "bin")
+load("@npm//frontend/react:vite/package_json.bzl", vite = "bin")
+
+npm_link_all_packages(name = "node_modules")
+
+# Everything the app is made of; `:node_modules` is every package in
+# package.json, so a new dependency needs no edit here.
+SRCS = glob(["src/**"]) + [
+    "index.html",
+    "package.json",
+    "tsconfig.json",
+    ":node_modules",
+    ":proto_es",
+]
+
+# The Connect client: TypeScript messages and service descriptors for every
+# .proto under //proto (protoc-gen-es, target=ts), regenerated each build.
+js_binary(
+    name = "protoc_es",
+    data = [":node_modules/@bufbuild/protoc-gen-es"],
+    entry_point = "tools/protoc.mjs",
+)
+
+js_run_binary(
+    name = "proto_es",
+    srcs = ["//proto:protos"],
+    args = [
+        "$(execpath //tools:protoc)",
+        "proto",
+        "$(RULEDIR)/src/gen",
+        "$(execpaths //proto:protos)",
+    ],
+    # The protos are read where they are (another package); copying them
+    # into this package's bin tree is not possible.
+    copy_srcs_to_bin = False,
+    mnemonic = "ProtocEs",
+    out_dirs = ["src/gen"],
+    tool = ":protoc_es",
+    tools = ["//tools:protoc"],
+)
+
+vite.vite_binary(
+    name = "vite",
+    chdir = package_name(),
+    data = ["vite.config.mjs"],
+)
+
+# The production bundle: dist/, content-hashed assets under dist/assets/,
+# index.html at its root. The workflow uploads bazel-bin/frontend/react/dist
+# as the `static` artifact.
+js_run_binary(
+    name = "build",
+    srcs = SRCS,
+    args = ["build"],
+    mnemonic = "ViteBuild",
+    out_dirs = ["dist"],
+    tool = ":vite",
+    visibility = ["//visibility:public"],
+)
+
+# `ibazel run //frontend/react:start`: the dev server, /api proxied to an app
+# listening on localhost:8080.
+js_run_devserver(
+    name = "start",
+    args = [
+        ".",
+        "--host",
+    ],
+    data = SRCS + ["vite.config.mjs"],
+    tool = ":vite",
+)
+
+# The type check: Vite strips types without checking them, so this test is
+# what makes a type error a red build.
+typescript.tsc_test(
+    name = "typecheck",
+    args = [
+        "-p",
+        "tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = SRCS,
+)
