@@ -1,9 +1,0 @@
-# pnpm settings for frontend/react, a single project beside its lockfile.
-# allowBuilds answers which packages may run an install-time script: rules_js
-# refuses to translate the lockfile without an answer for each one. esbuild's
-# postinstall only re-checks the platform binary its optional dependency
-# already ships, so it is denied (pnpm's own default outside Bazel). When a
-# new dependency has a script, rules_js names it; add it here as
-# `name: true` (run it) or `name: false`.
-allowBuilds:
-  esbuild: false
