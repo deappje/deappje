@@ -14,6 +14,13 @@
 Preview total ≈ 750m / 1.5Gi; live ≈ 850m / 1.75Gi. Both inside the free quota. The organisation
 has a payment method, so growth is possible, but nothing here needs it.
 
+CPU limits are bounded too (2026-10-29, the first preview deploy): the host namespace quota
+grants the environment's CPU times 1.5 as burst, 3000m here, beside the vCluster control plane.
+The scaffold's shape now renders app 500m per replica, Postgres 1000m, Kratos 250m and 250m per
+migration Job, which leaves room for a rolling update's surge pod or a wave-0 Job; the 2 x 1000m
+it rendered before did not admit Kratos at all. Raising a limit means raising `cpu` in
+`.basable/config.yaml` first.
+
 ## `.basable/config.yaml`
 
 ```yaml
