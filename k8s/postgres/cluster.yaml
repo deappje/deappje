@@ -53,7 +53,5 @@ spec:
       cpu: 250m
       memory: 512Mi
     limits:
-      # Transition (2026-10-29): 500m for one deploy, so the instance restarts
-      # at wave -2 and frees quota before the wave-0 Jobs; back to "1" next.
-      cpu: 500m
+      cpu: "1"
       memory: 512Mi
