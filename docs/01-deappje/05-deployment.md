@@ -86,7 +86,10 @@ no Android SDK and no Xcode, never sees an app target.
 
 ## Deviations from the standard shape
 
-1. **`replicas: 1` in preview.** Cost. Live runs 2. Nothing in the code depends on the count.
+1. **`replicas: 1`.** The scaffold renders one `k8s/` for both environments, so the count is the
+   same in both: one until live has users (cost on preview, quota headroom on both; the first
+   deploy, 2026-10-29). Nothing in the code depends on the count, and the frameworks are
+   multi-replica safe, so raising it is one line.
 2. **Web client from the public bucket, later.** The scaffold serves `frontend/react` from an
    nginx-unprivileged container. Once the environment has object storage (it does, from the first
    deploy), the agent switches to `objectStorage: { website: true }`, a `site-upload` Job in wave

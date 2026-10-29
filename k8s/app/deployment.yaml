@@ -1,5 +1,5 @@
-# Wave 1: the nanoservice binary, two replicas (the frameworks are
-# multi-replica safe by construction). The image path is LITERAL with the
+# Wave 1: the nanoservice binary, one replica (docs/01-deappje/05-deployment.md,
+# deviation 1; the frameworks are multi-replica safe by construction). The image path is LITERAL with the
 # platform's tag placeholder; the workflow pins the digest by name.
 apiVersion: apps/v1
 kind: Deployment
@@ -8,7 +8,7 @@ metadata:
   annotations:
     basable.com/apply-wave: "1"
 spec:
-  replicas: 2
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
