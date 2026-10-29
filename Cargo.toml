@@ -1,0 +1,76 @@
+# Workspace metadata for crate_universe and `cargo check`. Bazel is the build;
+# nobody runs cargo here except the CI's smoke check. [workspace.dependencies]
+# is the ONLY dependency list: crates name what they use with
+# `{ workspace = true }` and never pin a version themselves.
+[workspace]
+resolver = "2"
+members = [
+    "crates/proto",
+    "crates/messages",
+    "crates/interfaces",
+    "crates/messenger",
+    "api",
+    "app",
+    # basable:members-begin — one line per nanoservice crate
+    "nanoservices/group",
+    "nanoservices/device",
+    "nanoservices/sync",
+    "nanoservices/storage",
+    # basable:members-end
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+# The basable frameworks, released in lockstep and pinned exactly.
+basable-core = "=0.8.0"
+basable-publicid = "=0.8.0"
+basable-db = "=0.8.0"
+basable-processingobject = "=0.8.0"
+basable-processingobject-testkit = "=0.8.0"
+basable-externaleffect = "=0.8.0"
+basable-effecttest = "=0.8.0"
+basable-config = "=0.8.0"
+basable-messenger = "=0.8.0"
+basable-messenger-gen = "=0.8.0"
+basable-connect = "=0.8.0"
+basable-auth = "=0.8.0"
+basable-pubsub = "=0.8.0"
+basable-app = "=0.8.0"
+basable-testkit = "=0.8.0"
+basable-ledger = "=0.8.0"
+basable-ledger-postgres = "=0.8.0"
+basable-ledger-testkit = "=0.8.0"
+
+# Protobuf and Connect (pre-1.0: pinned to the minor). The two protoc plugins
+# are build-time binaries (crate_universe gen_binaries in MODULE.bazel):
+# connectrpc-codegen's, and the platform's basable-protoc-gen-buffa.
+buffa = { version = "0.9", features = ["json"] }
+buffa-types = "0.9"
+connectrpc = { version = "0.9", features = ["axum", "json"] }
+connectrpc-codegen = "0.9"
+basable-protoc-gen-buffa = "=0.8.0"
+
+# The curated baseline. Never openssl, never a crate that needs a system
+# library (docs/adding-a-dependency.md).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+axum = "0.8"
+tower = "0.5"
+# macros: the FromRow derive on row structs (model.rs); query! is never used.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { version = "1", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2"] }
+http = "1"
+futures = "0.3"
+dashmap = "6"

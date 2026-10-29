@@ -1,0 +1,124 @@
+# Wave 1: Kratos, public (4433) and admin (4434) on one non-root Deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kratos
+  annotations:
+    basable.com/apply-wave: "1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kratos
+  template:
+    metadata:
+      labels:
+        app: kratos
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kratos
+          image: docker.io/oryd/kratos:v26.2.0@sha256:2a13bb8d362c7a7ae33bd7c0f5168aee46921f15c916a06346db91c06dc76643
+          args: ["serve", "all", "--config", "/etc/kratos/kratos.yaml"]
+          ports:
+            - name: public
+              containerPort: 4433
+            - name: admin
+              containerPort: 4434
+          env:
+            # The DSN is composed from the CNPG-minted `app` credentials
+            # ($(VAR) expands env vars declared above it). sslmode=require:
+            # in-cluster traffic, password auth over TLS.
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: app-postgres-app
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-postgres-app
+                  key: password
+            - name: DSN
+              value: postgres://$(PGUSER):$(PGPASSWORD)@app-postgres-rw:5432/kratos?sslmode=require&max_conns=10&max_idle_conns=2
+            # Kratos maps SECRETS_COOKIE_0 onto secrets.cookie[0]. The value
+            # is generated in-cluster by kratos/secret-job.yaml.
+            - name: SECRETS_COOKIE_0
+              valueFrom:
+                secretKeyRef:
+                  name: kratos-secrets
+                  key: cookie-secret
+            # secrets.cipher[0]: 32 characters, generated with the cookie
+            # secret. Kratos encrypts its OIDC state and the provider's tokens
+            # with it; OIDC sign-in refuses to run without one.
+            - name: SECRETS_CIPHER_0
+              valueFrom:
+                secretKeyRef:
+                  name: kratos-secrets
+                  key: cipher-secret
+            # Sign in with Basable. The platform writes the `basable-login`
+            # Secret into every environment's cluster (issuer, client id,
+            # client secret: preview and live have their own client) and
+            # keeps it there, so these are read, never written, here. The
+            # provider list below is the oidc method's whole configuration;
+            # $(VAR) expands the three variables above it. `pkce: force`
+            # makes Kratos's callback the generic
+            # /.ory/self-service/methods/oidc/callback, the redirect URI the
+            # platform registers on every hostname of the environment.
+            - name: BASABLE_LOGIN_ISSUER
+              valueFrom:
+                secretKeyRef:
+                  name: basable-login
+                  key: BASABLE_LOGIN_ISSUER
+            - name: BASABLE_LOGIN_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: basable-login
+                  key: BASABLE_LOGIN_CLIENT_ID
+            - name: BASABLE_LOGIN_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: basable-login
+                  key: BASABLE_LOGIN_CLIENT_SECRET
+            - name: SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS
+              value: '[{"id":"basable","provider":"generic","label":"Basable","issuer_url":"$(BASABLE_LOGIN_ISSUER)","client_id":"$(BASABLE_LOGIN_CLIENT_ID)","client_secret":"$(BASABLE_LOGIN_CLIENT_SECRET)","scope":["openid","email"],"pkce":"force","mapper_url":"file:///etc/kratos/oidc.basable.jsonnet"}]'
+            # The courier's SMTP connection (courier.smtp.connection_uri), a
+            # user-supplied secret: OPTIONAL, so the first deploy does not
+            # wait for it; absent, the ConfigMap's localhost placeholder
+            # applies and sign-in codes are in the logs (docs/operations.md).
+            - name: COURIER_SMTP_CONNECTION_URI
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SMTP_CONNECTION_URI
+                  optional: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kratos
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: admin
+            initialDelaySeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: kratos-config

@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package sync.v1;
+
+// SyncService: the API of nanoservice `sync`. Fill the
+// message fields; the build regenerates the Rust types and the Connect stubs.
+service SyncService {
+  rpc PushObjects(PushObjectsRequest) returns (PushObjectsResponse);
+  rpc PullChanges(PullChangesRequest) returns (PullChangesResponse);
+  rpc AckSeq(AckSeqRequest) returns (AckSeqResponse);
+  rpc GetHeads(GetHeadsRequest) returns (GetHeadsResponse);
+  rpc RequestHistory(RequestHistoryRequest) returns (RequestHistoryResponse);
+  rpc ListHistoryRequests(ListHistoryRequestsRequest) returns (ListHistoryRequestsResponse);
+  rpc ClaimHistory(ClaimHistoryRequest) returns (ClaimHistoryResponse);
+  rpc PushHistory(PushHistoryRequest) returns (PushHistoryResponse);
+}
+
+message PushObjectsRequest {
+  // TODO: the request fields.
+}
+
+message PushObjectsResponse {
+  // TODO: the response fields.
+}
+
+message PullChangesRequest {
+  // TODO: the request fields.
+}
+
+message PullChangesResponse {
+  // TODO: the response fields.
+}
+
+message AckSeqRequest {
+  // TODO: the request fields.
+}
+
+message AckSeqResponse {
+  // TODO: the response fields.
+}
+
+message GetHeadsRequest {
+  // TODO: the request fields.
+}
+
+message GetHeadsResponse {
+  // TODO: the response fields.
+}
+
+message RequestHistoryRequest {
+  // TODO: the request fields.
+}
+
+message RequestHistoryResponse {
+  // TODO: the response fields.
+}
+
+message ListHistoryRequestsRequest {
+  // TODO: the request fields.
+}
+
+message ListHistoryRequestsResponse {
+  // TODO: the response fields.
+}
+
+message ClaimHistoryRequest {
+  // TODO: the request fields.
+}
+
+message ClaimHistoryResponse {
+  // TODO: the response fields.
+}
+
+message PushHistoryRequest {
+  // TODO: the request fields.
+}
+
+message PushHistoryResponse {
+  // TODO: the response fields.
+}
