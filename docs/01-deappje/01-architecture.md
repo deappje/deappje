@@ -18,7 +18,7 @@ deletion.
 - **Tables**: `group` (id, `parent_group_id`, creator, timestamps), `membership` (group, user,
   role, joined), `invite` (group, code, creator, expiry, max uses, uses, revoked). Directive §2.
 - **Invariants**: a user is in a group at most once; a member of a subgroup is a member of its
-  parent (checked on accept, cascaded on leave/remove); only an admin removes members, sets roles
+  parent (checked on accept and on `AddMemberRequest`, cascaded on leave/remove); only an admin removes members, sets roles
   or revokes invites; the creator is the first admin. Roles are `admin`, `member`, `viewer`; a
   viewer holds keys and reads, and the server refuses its pushes to the log and its approval of
   another user's device (a file is inert without an object, so uploads are not role-checked). `MembershipCheck` carries the role,
@@ -265,6 +265,7 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 | CreateInviteRequest | Invite | api | group |
 | AcceptInviteRequest | Membership | api | group |
 | ListMembersRequest | MemberList | api | group |
+| AddMemberRequest | Membership | api | group |
 | RemoveMemberRequest | Membership | api | group |
 | SetMemberRoleRequest | Membership | api | group |
 | LeaveGroupRequest | Membership | api | group |

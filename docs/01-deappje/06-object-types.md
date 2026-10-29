@@ -16,7 +16,7 @@ are spaced by tens per feature area; a breaking change takes the next free numbe
 
 | # | Type | Parent | Fields | Files (slots) | Notes |
 |---|---|---|---|---|---|
-| 1 | `group_profile` | none | name, description, avatar (bytes, ≤ 64 KiB), message_retention_months | | singleton: id = UUIDv5(group_id, "profile"); `message_retention_months` (default 12, 0 = off) is the chat's auto-delete setting: any device that sees a `message` older than that tombstones it, with the children it holds, batched, the first to notice doing it (round 13) |
+| 1 | `group_profile` | none | name, description, avatar (bytes, ≤ 64 KiB), message_retention_months, kind (`group` / `chat`) | | singleton: id = UUIDv5(group_id, "profile"); `message_retention_months` (default 12, 0 = off) is the chat's auto-delete setting: any device that sees a `message` older than that tombstones it, with the children it holds, batched, the first to notice doing it (round 13); `kind` is how a subgroup renders: `chat` a side chat in the parent's chat list (a present for someone who is not in it), `group` a full group with albums, todos and expenses (round 20) |
 | 2 | `member_profile` | none | display_name, avatar (bytes, ≤ 64 KiB), birthday (month, day, year?) | | one per member: id = UUIDv5(group_id, user_id); the calendar derives birthdays from it |
 | 3 | `invite_secret` | none | invite_id, secret | | lets any holder verify a key request that came through the invite (`02-device.md`) |
 | 10 | `post` | none | text | | timeline entry; photos are children |
@@ -28,16 +28,17 @@ are spaced by tens per feature area; a breaking change takes the next free numbe
 | 21 | `todo_item` | todo_list | text, done, assignee, due, pos | | |
 | 30 | `note` | none | title | | the body is the combination of its `note_update` children |
 | 31 | `note_update` | note | update (bytes: one `yrs` update), seq_hint | | append-only, never edited; one per editing session per device; the device applies all children in any order into one `yrs` document; a tombstoned note cascades to them |
-| 40 | `expense` | none | amount (minor units), currency, paid_by, participants (repeated), split (`equal` / `weights` / `exact`), kind (`expense` / `ticket`), description, date | | shares and balances are derived; a ticket is an equal split, one share per participant |
-| 41 | `settlement` | none | from, to, amount, currency, date | | records a payment made outside the app; money never moves here |
+| 40 | `expense` | expense_pool | amount (minor units), currency, paid_by, participants (repeated), split (`equal` / `weights` / `exact`), kind (`expense` / `ticket`), description, date | | shares and balances are derived; a ticket is an equal split, one share per participant |
+| 41 | `settlement` | expense_pool | from, to, amount, currency, date | | records a payment made outside the app; money never moves here |
 | 42 | `ticket_share` | expense | holder (member id, or a name for a plus-one), status (`held` / `offered` / `used`) | file | the ticket file for one participant; a transfer is a holder change plus the matching participant change on the expense; the client pins the attachment of every share whose holder is the local user (downloaded at once, never evicted) so the gate needs no network |
+| 43 | `expense_pool` | none | title, archived | | expenses settled independently: a ski trip, the monthly dinners; balances are derived per pool and the client archives a pool whose balances are all zero; the group's general pool is a singleton, id = UUIDv5(group_id, "pool"), created by the first client that needs it, so every expense has a pool (round 20) |
 | 50 | `event` | none | title, starts, ends, all_day, location, geo, yearly | | a birthday for someone not in the app is a yearly all-day event |
 | 60 | `poll` | none | question, kind (`choice` / `dates`), options (repeated { id, text or slot, pos }), multi, closes_at | | the datepicker is kind `dates` |
 | 61 | `vote` | poll | answers (repeated { option_id, answer }) | | one per user: id = UUIDv5(poll_id, user_id) |
 | 70 | `message` | none, or a message (thread) | text, reply_to | | photos as children; an edit is a new seq, deletion a tombstone |
 | 80 | `venue` | none | name, category (`bar` / `pub` / `club` / `restaurant` / `other`), address, geo, url, notes | | recommendations; comments and reactions are children |
 
-Derived on the client, never stored: balances, poll tallies, the calendar (events plus member
+Derived on the client, never stored: balances per pool, poll tallies, the calendar (events plus member
 birthdays), unread counts, sort orders, and the timeline. Deleting a parent is the client's
 cascade (`01-architecture.md`): deleting a post pushes tombstones for its photos and comments in
 the same batch. The parent id is a field of the child, inside the ciphertext.
@@ -91,6 +92,7 @@ Three strategies, none on the server (`01-architecture.md`, "Values and conflict
 | note_update | append-only | nothing |
 | expense | rebase, elements for participants | field by field; shares and balances are derived, so they cannot disagree with the inputs |
 | settlement | append-only | nothing; undo is a delete |
+| expense_pool | rebase | title, archived |
 | ticket_share | rebase | holder, status |
 | event | rebase, validated | start and end edited apart can cross: shown to the user |
 | poll | rebase, elements for options | votes are children, so an option change never fights a vote |

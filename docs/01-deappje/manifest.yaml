@@ -70,6 +70,7 @@ nanoservices:
       - { message: CreateInviteRequest, response: Invite }
       - { message: AcceptInviteRequest, response: Membership }
       - { message: ListMembersRequest, response: MemberList }
+      - { message: AddMemberRequest, response: Membership }
       - { message: RemoveMemberRequest, response: Membership }
       - { message: SetMemberRoleRequest, response: Membership }
       - { message: LeaveGroupRequest, response: Membership }
@@ -93,6 +94,7 @@ nanoservices:
         - { name: CreateInvite, request: CreateInviteRequest, response: CreateInviteResponse }
         - { name: AcceptInvite, request: AcceptInviteRequest, response: AcceptInviteResponse }
         - { name: ListMembers, request: ListMembersRequest, response: ListMembersResponse }
+        - { name: AddMember, request: AddMemberRequest, response: AddMemberResponse }
         - { name: RemoveMember, request: RemoveMemberRequest, response: RemoveMemberResponse }
         - { name: SetMemberRole, request: SetMemberRoleRequest, response: SetMemberRoleResponse }
         - { name: LeaveGroup, request: LeaveGroupRequest, response: LeaveGroupResponse }

@@ -37,7 +37,8 @@ membership).
 Unique `(group_id, user_id)`. Index `(user_id)`.
 
 Invariants: the creator is inserted as `admin` in the same transaction as the group; a subgroup
-membership requires a parent membership (checked under the parent's membership row); removing a
+membership requires a parent membership (checked under the parent's membership row, on accept
+and on `AddMemberRequest`); removing a
 user from a group removes them from every subgroup in the same transaction; the last admin cannot
 leave while other members remain.
 
@@ -133,6 +134,7 @@ already tolerate.
 | ListGroupsRequest | GroupList | all groups of the caller, with parent ids |
 | CreateInviteRequest | Invite | caller must be admin |
 | AcceptInviteRequest | Membership | see invite invariants |
+| AddMemberRequest | Membership | subgroups only: caller is `admin` or `member` of the subgroup, the user a member of the parent; insert the membership with the given role (`member` or `viewer`); no invite, no acceptance; refused on a top-level group. The caller's device then wraps the subgroup keys for that user's devices (`02-device.md`, subgroup trust) |
 | ListMembersRequest | MemberList | user ids and roles; caller must be a member |
 | RemoveMemberRequest | Membership | caller admin; cascades to subgroups; sends `MemberRemoved` after commit |
 | SetMemberRoleRequest | Membership | caller admin; `admin`, `member` or `viewer`; the last admin cannot be demoted while other members remain |
@@ -162,14 +164,15 @@ The admin API is reached over the in-cluster service address; no secret.
 
 ## API
 
-`GroupService`: CreateGroup, GetGroup, ListGroups, CreateInvite, AcceptInvite, ListMembers,
+`GroupService`: CreateGroup, GetGroup, ListGroups, CreateInvite, AcceptInvite, AddMember, ListMembers,
 RemoveMember, SetMemberRole, LeaveGroup, DeleteGroup, DeleteAccount. Every method requires a Kratos session; the api crate
 passes the identity id as the caller.
 
 ## Tests
 
 - Unit: invite acceptance under expiry, revocation and max uses; subgroup accept without parent
-  membership is refused; last-admin rule, also against demotion; an invite's role lands on the
+  membership is refused, and so is `AddMember` of a non-member of the parent or on a top-level
+  group; last-admin rule, also against demotion; an invite's role lands on the
   membership; the purge pass as a function of
   `(subgroups_remaining, three counts)` → `Outcome`.
 - Integration (testkit, database per test): remove from parent cascades to subgroups in one

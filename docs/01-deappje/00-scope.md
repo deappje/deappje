@@ -54,7 +54,7 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 |---|---|---|---|
 | Create group, invite by link/code, accept | include | code with expiry, max uses and the joiner's role; no admin approval of joins | Load-bearing. Approval of join requests was not asked for; an admin controls exposure through max uses and revocation. |
 | Leave group, remove member (admin) | include | triggers key rotation | Load-bearing. |
-| Subgroups (members ⊆ parent, own key) | include | | Requested; cheap once groups exist. |
+| Subgroups (members ⊆ parent, own key) | include | since round 20 (2026-10-29): `AddMemberRequest` adds a parent member directly, no invite and no tap, the adder's device wrapping the subgroup keys for the devices that hold the parent's key; `group_profile.kind` renders a subgroup as a side chat or a full group | Requested; cheap once groups exist. A chat without one person (a present) is a subgroup: a key boundary is the only thing that hides it, and the subgroup's expenses and photos are hidden with it. |
 | Roles: admin, member, viewer | include | viewer reads only: the server refuses its pushes to the log and its approval of other users' devices; it may answer history requests and re-upload files, which is serving, not writing; invites carry the role; admins change it | Round 9 (2026-10-26). A read-only member is one role check in two handlers. |
 | Group deletion | include | a `group_purge` processing object in `group` drives the purge of sync, storage and device until each reports nothing left; subgroups are purged first | Round 1. A purge must finish, so it is driven by a reconciler with direct requests, not an event. |
 | Data export | include | client-side: everything the device holds, bundled on the device | Round 1. No server work: the server cannot produce a readable export. |
@@ -118,6 +118,9 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 | Cross-group friend graph for recommendations | exclude | | Needs a server-visible social graph; incompatible with E2E. Recommendations are per group. |
 | Read receipts, typing indicators | exclude | | Round 1. No live presence; silent push plus pull is the delivery model. |
 | Auto-delete of old messages | include | a per-group setting on `group_profile`, `message_retention_months` (default 12, 0 = off): any device that sees a `message` older than that tombstones it, with the children it holds, batched; the first to notice does it | Round 13 (2026-10-28), the user's rule, off by choice. Keeps "everything from seq 1" a bounded download; photos live in albums and posts, not only in the chat. |
+| Expense pools settled independently | include | `expense_pool` (43), the parent of `expense` and `settlement`; balances derived per pool; a general pool per group as a singleton | Round 20 (2026-10-29). Same people, separate tabs: no key boundary needed, so an object type, not a subgroup. |
+| Group calendar in the user's own calendar | include | client-side: the phones mirror a group's events and member birthdays into a system calendar per group (EventKit, the Android calendar provider), which the user keeps local or puts in an account calendar that syncs on its own; the web client exports an `.ics` file | Round 20 (2026-10-29). Live in practice: the mirror updates on every sync. |
+| Calendar subscription URL (webcal) | exclude | | Round 20. A feed is plaintext a calendar app fetches from the server, which holds only ciphertext; a device uploading a plaintext feed would put on the server the one thing it never sees. |
 
 ### Platform
 
@@ -188,7 +191,16 @@ lost their `status` column, since a lifecycle column on a plain table is what a 
 object is for and neither is one: a row is an open request, a claim is the nullable
 `claimed_by` and `claimed_at` pair, and fulfilment deletes the row; `cancelled` was set by no
 message and went. The push calls are `send_apns` and `send_fcm`, since call names are unique per
-nanoservice.
+nanoservice. Round 20 (2026-10-29): a chat without one member (a present) is a subgroup, which
+already hides everything behind its key; what was missing was a way in without an invite link
+and a tap, so `AddMemberRequest` adds a parent member to a subgroup directly and subgroup trust
+is parent trust (the adder's device wraps the subgroup keys for the devices that hold the
+parent's key, and a holder fulfils a subgroup key request from such a device without a tap);
+`group_profile.kind` says whether a subgroup renders as a side chat or a full group. Expenses
+got pools: `expense_pool` is the parent of `expense` and `settlement`, balances are derived per
+pool, and a general pool per group is a singleton. Events reach the user's own calendar through
+the phone's system calendar, mirrored per group and synced by the user's own account if they put
+it there; a subscription URL is excluded because the server cannot serve plaintext.
 
 ## Status
 

@@ -93,6 +93,14 @@ inserted on its own therefore never receives a key: it appears in no list a wrap
 reads, and no person approves it. The first device in a group is the creator's, which mints key
 1 and wraps it for itself.
 
+**Subgroup trust is parent trust.** A device that holds the parent's key was verified by a person
+when it joined the parent, so a subgroup needs no second verification: the device that adds a
+member (`AddMemberRequest`, `02-group.md`) lists that user's holder devices on the parent
+(`ListDevicesRequest`) and publishes the subgroup's keys wrapped for each of them at once, and a
+holder's client fulfils a subgroup key request from a device that holds the parent's key without
+a tap. The server checks nothing new: the wraps go through `PublishWrappedKeysRequest` under its
+membership rule, and the "no silent path" rule above stays for top-level groups.
+
 ## Key exchange protocol (client core; the server relays bytes)
 
 | Key | Where | Algorithm |
