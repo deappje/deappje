@@ -40,19 +40,19 @@ web client moves there (below).
 | `app-db-app` / `uri` | CNPG-minted | app, migrate Job |
 | `kratos-db-app` / `uri` | CNPG-minted | kratos |
 | `object-storage` (whole Secret) | platform-minted | app |
-| `app-secrets` / `SMTP_URL` | **user** | kratos courier (email codes). Any SMTP provider; the value is `smtps://user:pass@host:465`. |
+| `basable-login` / `BASABLE_LOGIN_ISSUER`, `BASABLE_LOGIN_CLIENT_ID`, `BASABLE_LOGIN_CLIENT_SECRET` | platform-written, per environment | kratos, the `oidc` provider list (`SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS` from three `secretKeyRef` env vars); never declared in `k8s/`, never asked of the user |
 | `app-secrets` / `APNS_KEY_P8`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` | **user** | `device`, from the Apple Developer account's push key |
 | `app-secrets` / `FCM_SERVICE_ACCOUNT_JSON` | **user** | `device`, a Firebase service account with the Messaging role |
-| kratos cookie/cipher secrets | generated in-cluster | kratos |
+| kratos cookie/cipher secrets | generated in-cluster | kratos; the 32-character cipher secret is what the `oidc` method needs |
 | Kratos admin API | in-cluster service address, no secret | `group`, for `delete_identity` |
 
 Each user secret is its own non-optional `secretKeyRef`; the first preview deploy waits at the
-secrets step until the user adds them, per environment. The push secrets can be added later than
-SMTP: the app starts without them and `device` logs and skips sends until they exist. That is
-the one place the implementation deviates from "non-optional": the app reads them at send time
-from the environment, which the deploy still requires to be present. Decision for the
-implementing session: require all four from day one (simplest) and tell the user where to get
-them.
+secrets step until the user adds them, per environment. The push secrets are the only user
+secrets left (round 17 removed SMTP): the app starts without them and `device` logs and skips
+sends until they exist. That is the one place the implementation deviates from "non-optional":
+the app reads them at send time from the environment, which the deploy still requires to be
+present. Decision for the implementing session: require all four from day one (simplest) and
+tell the user where to get them.
 
 ## Database
 
@@ -82,11 +82,19 @@ with digests → upload `rendered-manifests`) with `paths-ignore: ["docs/**"]`.
    app's route keeps only `/api` and `/.ory`. Saves 50m/64Mi and keeps the site up while preview
    sleeps. Done as a follow-up in a default session, not in the scaffold.
 3. **No Kratos UI container.** Login screens are the clients' own (native and React) against
-   Kratos's public API. The scaffold's default is the same; noted so nobody adds one.
+   Kratos's public API: one "Sign in with Basable" button that starts the `oidc` flow, the
+   browser flow on the web, the native flow on the phones. No email or passkey screens. The
+   scaffold's default is the same; noted so nobody adds one.
+4. **Sign in with Basable is the only method.** The scaffold's Kratos ConfigMap enables email
+   code, passkeys and Basable together, with an optional `SMTP_CONNECTION_URI` for the courier.
+   The implementing session turns `code` and `passkey` off, removes the courier reference, and
+   keeps the `oidc` method with the Basable provider, the `oidc.basable.jsonnet` mapper (verified
+   email or refused) and the two callback paths under `/.ory/` the platform registers. The
+   `kratos` database, the admin API for `delete_identity` and the session check in the api crate
+   are unchanged.
 
 ## Out of the scaffold, "later, via the agent"
 
-Email delivery configuration for Kratos's courier (SMTP secret above), database backups, the
-public-bucket website move, and the mobile apps themselves, which live in their own repositories
+Database backups, the public-bucket website move, and the mobile apps themselves, which live in their own repositories
 and build the `core/` crate from a pinned commit of this repository with UniFFI. The web client
 in this repository compiles the same crate to wasm in the build workflow.

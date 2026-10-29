@@ -1,7 +1,8 @@
 # Architecture
 
 One Rust binary, four nanoservices, one Postgres database with a schema per nanoservice, blobs
-in the platform's private bucket, Kratos for identity. The server is a relay, not a store: member
+in the platform's private bucket, Kratos for identity with Sign in with Basable as its only method.
+The server is a relay, not a store: member
 devices hold the data, the server keeps up to 672 hours of it so devices can catch up, and anything
 older is fetched from a member device on request. It never holds a group key and never reads a
 payload: every `value` is ciphertext, every blob is ciphertext, and the plaintext columns are the
@@ -228,8 +229,7 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 - `frontend: react`: the web client is an application, not a page, with local-first state in a
   wasm build of the shared Rust core and React rendering it. The browser is a full device of the
   user (own device key, paired by QR, syncs from the server), never a mirror of the phone; login
-  is a passkey, which with WebAuthn cross-device authentication is itself a QR scanned by the
-  phone. Browser storage: object and blob ciphertext at rest in the Origin Private File System
+  is Sign in with Basable (round 17), so pairing is the one QR the phone scans. Browser storage: object and blob ciphertext at rest in the Origin Private File System
   (files byte for byte as the bucket holds them, so the browser can re-upload them), decrypted into
   memory by the core at startup; the device key is a non-extractable WebCrypto key to which the
   core delegates the X25519 step of HPKE; `navigator.storage.persist()` is requested; eviction by
@@ -242,7 +242,15 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
   (`website: true`), which the environment already has for blobs.
 - CloudNativePG, `instances: 1`, one application database with schemas `group`, `device`,
   `ledger`, `storage`; a separate `kratos` database.
-- Kratos: email code and passkeys. Users are Kratos identity ids.
+- Kratos with the `oidc` method only, its one provider Basable, read from the `basable-login`
+  Secret the platform writes into each environment (issuer, client id, client secret; never in
+  the repository); `code` and `passkey` off, no courier. Users are Kratos identity ids; the
+  identity's email trait is the verified email from Basable's id token, and the mapper refuses a
+  sign-in without one. The web client runs the browser flow. A phone runs Kratos's native flow:
+  it creates the login flow asking for a session token exchange code, opens Kratos's redirect in
+  the system browser (ASWebAuthenticationSession, Custom Tabs), Basable signs the person in,
+  Kratos returns to the app's URL with a code, and the app exchanges both codes at
+  `/sessions/token-exchange` for the session token every API call carries.
 - API: protobuf over Connect, four services. The Rust core on every client speaks it.
 - Object storage declared in both environments: blobs in the private bucket, nothing in the public
   bucket until the web client moves there.

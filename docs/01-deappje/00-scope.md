@@ -39,7 +39,7 @@ These were settled in discussion before this plan was written; they are not open
 | Fetch shape | Catch-up since cursor from the server's 672-hour window; everything older is re-inserted into the window by a member device on request, with the original sequence numbers, and pulled like anything else: a new member, a new device, a device offline longer than the window, or scrolling past what the device holds. Restored rows are evicted again after 672 hours. | The server has nothing older to serve, and nothing else needs a second format: other devices' cursors are already past the restored numbers. |
 | Keys | A group key per group, a keyring with key ids; rotate on member removal; new devices get keys wrapped for them by an existing member's device. New members get full history. | MLS is designed to deny history to new members, the opposite of the requirement. |
 | Subgroups | A separate group with its own key and `parent_group_id`; members ⊆ parent, enforced server-side; leaving the parent cascades. | A key boundary is a group boundary. |
-| Identity | Kratos, email code and passkeys. Identity never carries keys. | Platform default; exactly the requested login. |
+| Identity | Kratos with one sign-in method: Sign in with Basable, the platform's OpenID Connect login, through Kratos's `oidc` method. No email codes, no passkeys in the app's Kratos, no courier. Identity never carries keys. | Round 1 asked for email code and passkeys; round 17 (2026-10-29) made Sign in with Basable the only method: nothing to set up, the verified email arrives in the id token, and a passkey belongs on Basable's login, not on every app's. |
 | Payloads | Protobuf per type, behind a plaintext header in the value that names the type, the `schema_version` and the key id; the server stores the value as one byte string and never parses it (round 16, 2026-10-28). Add fields, never repurpose a number; a breaking change is a new type number. Old clients read newer objects (unknown fields ignored for display) but never write them. A note's CRDT lives inside the payload: a `note` parent plus append-only `note_update` children, each one `yrs` update, combined on the device. | Round 7. Plain values plus a rebase cover every type but notes; a CRDT for everything was more machinery than the app needs. Old clients not writing newer objects is what keeps fields from being dropped. |
 | Client core | One Rust core (sync, local store, conflict rebase, the note CRDT, keyring, crypto, schemas) bound to Swift and Kotlin through UniFFI and to the browser through wasm. Three UI shells. | Three sync engines and three crypto implementations diverge. |
 | Cost | Single CNPG instance, one app replica in preview, blob traffic never touches the app (presigned URLs), push instead of polling, client-side resize before upload. | |
@@ -123,12 +123,12 @@ Decision: `include` is in the backend plan now; `later` is designed around but n
 
 | Feature | Decision | Note | Rationale |
 |---|---|---|---|
-| Web client (React + wasm core) in this repo | include | `frontend: react`; the browser is a full device of the same user: its own device key, paired by QR, syncing from the server like a phone. Login is a passkey, and WebAuthn cross-device authentication is the QR-scanned-by-phone login for free. "Remember this browser" is optional: without it keys stay in memory for the session. | Round 5 (2026-10-17). A companion that mirrors the phone over wifi dies when the phone locks and needs a second sync protocol; a separate user would be another person in every group. |
+| Web client (React + wasm core) in this repo | include | `frontend: react`; the browser is a full device of the same user: its own device key, paired by QR, syncing from the server like a phone. Login is Sign in with Basable in the browser (round 17); pairing is the one QR the phone scans. "Remember this browser" is optional: without it keys stay in memory for the session. | Round 5 (2026-10-17). A companion that mirrors the phone over wifi dies when the phone locks and needs a second sync protocol; a separate user would be another person in every group. |
 | Keeper device | later | a client setting: a device (a home computer, a browser profile) that never reduces local quality and keeps every object and file of its groups, so there is always a holder | Round 11. Nothing on the server; it is the user's answer to "what if nobody holds it". |
 | Direct device-to-device file transfer (WebRTC) | later | an optimisation of the re-request path, signalled through the server so it works on any network | Not needed: a re-request through the bucket already moves photos from phone to browser. |
 | Shared Rust client core in this repo | include | a `core/` crate in the Bazel workspace, compiled to wasm for the web client in the same build; the mobile repositories pin a commit of this repository and build it with UniFFI | Round 4. One repository versions server contract and client core together. |
 | Database backups | later | private bucket exists once `objectStorage` is declared | Add before live has users. |
-| Email delivery for Kratos codes | include | user-supplied SMTP secret | Required for login. |
+| Email delivery for Kratos codes | exclude | no courier: the only sign-in method sends no mail; the scaffold's optional `SMTP_CONNECTION_URI` reference goes together with the `code` method | Round 17 (2026-10-29). Was include since round 1, when email codes were the login. |
 
 ## Open candidates (not yet asked)
 
@@ -173,7 +173,13 @@ schema version and the key id out of the `object` columns into a plaintext heade
 value: the key id must be readable before decryption, and a plaintext header is, so the server
 keeps three fewer columns it never read and the header travels with the ciphertext as its
 associated data. The same round dropped `created_by_device`: nothing read it, the author is
-inside the ciphertext, and the push fan-out knows its caller without a column.
+inside the ciphertext, and the push fan-out knows its caller without a column. Round 17
+(2026-10-29) made Sign in with Basable the only sign-in method: Kratos stays as the app's local
+identity (user ids, sessions, the account purge are unchanged) with its `oidc` method alone,
+the provider being the `basable-login` client the platform writes into each environment; email
+codes, passkeys and the courier went, and with them the SMTP secret. The browser signs in with
+Basable and pairs with one QR; the phones run Kratos's native OIDC flow through the system
+browser and exchange the returned code for a session token.
 
 ## Status
 

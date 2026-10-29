@@ -79,10 +79,11 @@ verified tap from automation; what it enforces is the trust rule below, and what
 enforce is that nothing is wrapped for a device whose key a person did not verify one of these
 three ways.
 
-The browser is one of these devices: it pairs by showing the QR after a passkey login (WebAuthn
-cross-device authentication is already a QR the phone scans, so login and pairing are two scans
-in a row, or one when the client chains them). Without "remember this browser" its device key and
-local store live in memory for the session and the device row is deleted on logout.
+The browser is one of these devices: it pairs by showing the QR after Sign in with Basable
+(round 17; the pairing scan is the only one). Without "remember this browser" its device key and
+local store live in memory for the session and the device row is deleted on logout. A phone signs
+in through the same Kratos, by its native OIDC flow in the system browser (`01-architecture.md`);
+the session token it gets back is what `RegisterDeviceRequest` and every later call carry.
 
 ## Trust rule
 
