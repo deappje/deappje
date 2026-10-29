@@ -1,5 +1,0 @@
-bazel-*
-target/
-node_modules/
-rendered-manifests.yaml
-.DS_Store
