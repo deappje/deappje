@@ -1,10 +1,10 @@
 # Architecture
 
 One Rust binary, four nanoservices, one Postgres database with a schema per nanoservice, blobs
-in the platform's private bucket, Kratos for identity with Sign in with Basable as its only method.
-The server is a relay, not a store: member
-devices hold the data, the server keeps up to 672 hours of it so devices can catch up, and anything
-older is fetched from a member device on request. It never holds a group key and never reads a
+in the platform's private bucket, Kratos for identity with Sign in with Basable as its only
+method. The server is a relay, not a store: member devices hold the data, the server keeps up to
+672 hours of it so devices can catch up, and anything older is fetched from a member device on
+request. It never holds a group key and never reads a
 payload: every `value` is ciphertext, every blob is ciphertext, and the plaintext columns are the
 minimum needed to route, order, authorise and expire.
 

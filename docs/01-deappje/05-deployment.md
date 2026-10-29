@@ -95,6 +95,6 @@ with digests → upload `rendered-manifests`) with `paths-ignore: ["docs/**"]`.
 
 ## Out of the scaffold, "later, via the agent"
 
-Database backups, the public-bucket website move, and the mobile apps themselves, which live in their own repositories
-and build the `core/` crate from a pinned commit of this repository with UniFFI. The web client
-in this repository compiles the same crate to wasm in the build workflow.
+Database backups, the public-bucket website move, and the mobile apps themselves, which live in
+their own repositories and build the `core/` crate from a pinned commit of this repository with
+UniFFI. The web client in this repository compiles the same crate to wasm in the build workflow.
