@@ -88,8 +88,22 @@ same rows. These
 run in the same Bazel test target as the server suites; the wasm build of the crate is a build
 target the web client depends on, so a core that does not compile to wasm fails CI. The server-side contract those vectors assume is this plan's `02-relay.md`.
 
+## App shells (`ios/`, `android/`, behind `--//:apps`)
+
+The shells hold no logic the core does not, so their tests are about the binding and the
+rendering. Kotlin tests are `kt_jvm_test`s against the generated bindings with the host build of
+the core on the JNA library path, so a Kotlin call that no longer matches the core's exported
+interface fails on the Linux runner before any emulator exists. Swift tests are `ios_unit_test`s
+on the simulator against the same bindings. Each shell has one end-to-end test that signs in
+against a fake Kratos, pairs, pushes an object and sees it rendered, driven through the core's
+in-memory relay model from the conformance harness. Both run only in `apps.yaml`
+(`05-deployment.md`), never in the server's `//...`.
+
 ## CI gate
 
 The scaffold's workflow: lint → Bazel build and test (every unit and integration suite above,
 the core conformance vectors, the wasm build; testcontainers runs on `ubuntu-latest`) → image push → render `k8s/` → upload. A deploy to preview
 or live happens only after every suite is green. `.basable/verify.sh` runs the same locally.
+The apps have their own gate, `apps.yaml` (round 23): the Android job on Linux and the iOS job
+on macOS run the shell suites above with `--//:apps`, and `buf breaking` there fails the build,
+since a shipped app cannot be redeployed. Its result never gates a server deployment.
