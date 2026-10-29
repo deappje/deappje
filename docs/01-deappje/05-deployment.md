@@ -57,7 +57,7 @@ tell the user where to get them.
 ## Database
 
 One CNPG cluster `app-db`, `instances: 1`, no storage class named, the pinned operator release
-the platform's own apps use. Schemas `group`, `device`, `sync`, `storage`, each with its own
+the platform's own apps use. Schemas `group`, `device`, `relay`, `storage`, each with its own
 role (`basable-db`), plus the processing-object envelope schema. Separate `kratos` database on the
 same cluster. Migrations are dbmate files run by the migrate Job in wave -1. No nanoservice owns
 the accounting ledger (`owns.ledger`), so there is no restatement at boot.

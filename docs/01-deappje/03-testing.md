@@ -4,7 +4,7 @@
 
 - `group`: invite acceptance rules, subgroup subset rule, last-admin rule.
 - `device`: rotation batch acceptance, member checks on wrap.
-- `sync`: the CAS-on-seq matrix, eviction floor arithmetic, response shaping for pull.
+- `relay`: the CAS-on-seq matrix, eviction floor arithmetic, response shaping for pull.
 - `storage`: key parsing, quota and slot cap at the boundary.
 
 ## `effecttest` audits (one per adapter, in each nanoservice's `tests/effects_audit.rs`)
@@ -83,10 +83,10 @@ either order), the cascade (deleting a parent batches the children the device ho
 a tombstoned parent that arrives later is dead and gets tombstoned), the
 invite tag, and a simulated multi-device sync harness that drives random
 push/pull/ack/offline interleavings, with eviction and a simulated holder serving history,
-against an in-memory model of `sync`'s contract and asserts that every device ends with the
+against an in-memory model of `relay`'s contract and asserts that every device ends with the
 same rows. These
 run in the same Bazel test target as the server suites; the wasm build of the crate is a build
-target the web client depends on, so a core that does not compile to wasm fails CI. The server-side contract those vectors assume is this plan's `02-sync.md`.
+target the web client depends on, so a core that does not compile to wasm fails CI. The server-side contract those vectors assume is this plan's `02-relay.md`.
 
 ## CI gate
 

@@ -24,7 +24,7 @@ deletion.
   another user's device (a file is inert without an object, so uploads are not role-checked). `MembershipCheck` carries the role,
   so each of those is one comparison in the handler that cares.
 - **Processing object `group_purge`** (prefix `gpr`): created by `DeleteGroupRequest`, one per
-  group being deleted. Its pass drives `sync`, `storage` and `device` to hold nothing of the
+  group being deleted. Its pass drives `relay`, `storage` and `device` to hold nothing of the
   group, by direct requests (`PurgeGroupObjectsRequest`, `PurgeGroupBlobsRequest`,
   `PurgeGroupKeysRequest`, each → `PurgeResult { remaining }`), retrying until all three report
   zero, then removes the group row and returns `Delete`. A purge must finish, so it is a
@@ -59,7 +59,7 @@ for another device and hands it back.
   is a member (checked through `CheckMembershipRequest` at write time); on `MemberRemoved` the
   removed user's wrapped keys for that group are deleted and every other member's devices are
   pushed so one of them rotates.
-- **Also**: `DeviceLeftGroup` to `sync` whenever a device loses its keys for a group, so a
+- **Also**: `DeviceLeftGroup` to `relay` whenever a device loses its keys for a group, so a
   gone device is no longer a candidate for history requests.
 - **Trust rule**: the server never seeds trust. A device holds a group's keys only because a
   person on a device that already holds them approved its key request, by scanning the new
@@ -76,14 +76,14 @@ for another device and hands it back.
   harmless. Directive §6.
 - **Handles**: device registration, push token, device listing (so members can wrap keys for
   new devices), key requests and fulfilment, publishing a rotated key set, fetching wrapped keys;
-  plus the void events `GroupHeadAdvanced`, `HistoryRequested` and `HistoryReady` (from `sync`)
+  plus the void events `GroupHeadAdvanced`, `HistoryRequested` and `HistoryReady` (from `relay`)
   and `MemberRemoved` (from `group`), each turned into pushes; `PurgeUserDevicesRequest` from `group`'s account purge; `RemoveDeviceRequest`
   so a user can drop a dead device, which otherwise stays a candidate for history requests.
-- **Sends**: `CheckMembershipRequest`; `DeviceLeftGroup` to `sync` whenever a device loses its
+- **Sends**: `CheckMembershipRequest`; `DeviceLeftGroup` to `relay` whenever a device loses its
   keys for a group (member removed, device removed, account purged).
 - **API**: `DeviceService`.
 
-### `sync`
+### `relay`
 
 Owns the relay. Plain executor with two hourly sweeps; the one piece of concurrency control in
 the system is here. Member devices are the store, and every holder holds the whole group: the
@@ -146,7 +146,7 @@ server keeps a row, tombstones included, until every device has acked it, 672 ho
   (672h).
 - **Sends**: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`,
   `HistoryReady`.
-- **API**: `SyncService`.
+- **API**: `RelayService`.
 
 ### `storage`
 
@@ -164,7 +164,7 @@ expired file the bucket's 404.
 - **External**: `delete_object`, `idempotent`, dispatched from handlers. Presigning and prefix
   listing are reads.
 - **Handles**: `PresignUploadRequest` (member, key under the prefix, slot cap, quota, presigned
-  PUT), `PresignDownloadRequest` (member, presigned GET), `ObjectDeleted` (from `sync`, per
+  PUT), `PresignDownloadRequest` (member, presigned GET), `ObjectDeleted` (from `relay`, per
   tombstone: delete the object's prefix), `PurgeGroupBlobsRequest` (delete the group's prefix in
   batches).
 - **Sweep**: `expire_usage`, hourly.
@@ -241,7 +241,7 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
   container by the scaffold; `05-deployment.md` records the later move to the public bucket
   (`website: true`), which the environment already has for blobs.
 - CloudNativePG, `instances: 1`, one application database with schemas `group`, `device`,
-  `sync`, `storage`; a separate `kratos` database.
+  `relay`, `storage`; a separate `kratos` database.
 - Kratos with the `oidc` method only, its one provider Basable, read from the `basable-login`
   Secret the platform writes into each environment (issuer, client id, client secret; never in
   the repository); `code` and `passkey` off, no courier. Users are Kratos identity ids; the
@@ -271,9 +271,9 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 | LeaveGroupRequest | Membership | api | group |
 | DeleteGroupRequest | Group | api | group |
 | DeleteAccountRequest | AccountDeletion | api | group |
-| CheckMembershipRequest | MembershipCheck | device, sync, storage | group |
+| CheckMembershipRequest | MembershipCheck | device, relay, storage | group |
 | MemberRemoved | (void) | group | device |
-| PurgeGroupObjectsRequest | PurgeResult | group | sync |
+| PurgeGroupObjectsRequest | PurgeResult | group | relay |
 | PurgeGroupBlobsRequest | PurgeResult | group | storage |
 | PurgeGroupKeysRequest | PurgeResult | group | device |
 | PurgeUserDevicesRequest | PurgeResult | group | device |
@@ -286,19 +286,19 @@ Upgrades fill defaults for new fields on read; there are no converters and no co
 | PublishWrappedKeysRequest | WrappedKeyList | api | device |
 | GetWrappedKeysRequest | WrappedKeyList | api | device |
 | RemoveDeviceRequest | Device | api | device |
-| GroupHeadAdvanced | (void) | sync | device |
-| HistoryRequested | (void) | sync | device |
-| HistoryReady | (void) | sync | device |
-| DeviceLeftGroup | (void) | device | sync |
-| PushObjectsRequest | PushResult | api | sync |
-| PullChangesRequest | ChangeSet | api | sync |
-| AckSeqRequest | AckResult | api | sync |
-| GetHeadsRequest | HeadList | api | sync |
-| RequestHistoryRequest | HistoryRequest | api | sync |
-| ListHistoryRequestsRequest | HistoryRequestList | api | sync |
-| ClaimHistoryRequest | HistoryRequest | api | sync |
-| PushHistoryRequest | PushHistoryResult | api | sync |
-| ObjectDeleted | (void) | sync | storage |
+| GroupHeadAdvanced | (void) | relay | device |
+| HistoryRequested | (void) | relay | device |
+| HistoryReady | (void) | relay | device |
+| DeviceLeftGroup | (void) | device | relay |
+| PushObjectsRequest | PushResult | api | relay |
+| PullChangesRequest | ChangeSet | api | relay |
+| AckSeqRequest | AckResult | api | relay |
+| GetHeadsRequest | HeadList | api | relay |
+| RequestHistoryRequest | HistoryRequest | api | relay |
+| ListHistoryRequestsRequest | HistoryRequestList | api | relay |
+| ClaimHistoryRequest | HistoryRequest | api | relay |
+| PushHistoryRequest | PushHistoryResult | api | relay |
+| ObjectDeleted | (void) | relay | storage |
 | PresignUploadRequest | UploadGrant | api | storage |
 | PresignDownloadRequest | DownloadGrant | api | storage |
 

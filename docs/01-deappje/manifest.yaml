@@ -100,7 +100,7 @@ nanoservices:
         - { name: LeaveGroup, request: LeaveGroupRequest, response: LeaveGroupResponse }
 
   - name: device
-    description: Owns devices, push tokens, wrapped group keys and key requests; sends silent pushes; tells sync when a device leaves a group.
+    description: Owns devices, push tokens, wrapped group keys and key requests; sends silent pushes; tells relay when a device leaves a group.
     owns:
       tables:
         - name: device
@@ -172,7 +172,7 @@ nanoservices:
         - { name: GetWrappedKeys, request: GetWrappedKeysRequest, response: GetWrappedKeysResponse }
         - { name: RemoveDevice, request: RemoveDeviceRequest, response: RemoveDeviceResponse }
 
-  - name: sync
+  - name: relay
     description: The relay — ciphertext per group until every holder has acked it, 672 hours at most, tombstones included; the counter; per-device acked cursor; history requests.
     owns:
       tables:
@@ -232,7 +232,7 @@ nanoservices:
       - { message: HistoryRequested }
       - { message: HistoryReady }
     api:
-      service: SyncService
+      service: RelayService
       methods:
         - { name: PushObjects, request: PushObjectsRequest, response: PushObjectsResponse }
         - { name: PullChanges, request: PullChangesRequest, response: PullChangesResponse }

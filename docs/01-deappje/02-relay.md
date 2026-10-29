@@ -1,4 +1,4 @@
-# `sync`
+# `relay`
 
 Owns the relay: a window of ciphertext rows per group, tombstones included, that some device
 has not yet acked, 672 hours at most; the group's counter; one acked cursor per device; and a
@@ -293,7 +293,7 @@ a member" and purges locally. Idempotent.
 
 ## API
 
-`SyncService`: PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory,
+`RelayService`: PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory,
 ListHistoryRequests, ClaimHistory, PushHistory. The api crate maps the proto entry to the plain Rust struct one to one;
 `value` passes through untouched.
 

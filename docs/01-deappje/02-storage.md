@@ -22,7 +22,7 @@ value (`06-object-types.md`), so the bucket holds only full-size files and attac
 nothing in it needs to outlive the week.
 
 An upload is a presigned PUT; a download is a presigned GET; a file that has expired is the 404
-the bucket answers, and the client then asks `sync` for the object (`02-sync.md`), which
+the bucket answers, and the client then asks `relay` for the object (`02-relay.md`), which
 wakes every key holder, one of whom re-uploads the file to the same key. No confirm step and no
 state on the server.
 
@@ -65,7 +65,7 @@ the `effecttest` audit covers it.
 |---|---|---|
 | PresignUploadRequest | UploadGrant | `{ group_id, key, size }`: member check (any role: a file is inert without an object, and a viewer may re-upload one it holds); key under the group prefix with a valid slot; slot cap; quota; record usage; presigned PUT, 15 minutes |
 | PresignDownloadRequest | DownloadGrant | `{ group_id, key }`: member check; key under the group prefix; presigned GET, 5 minutes |
-| ObjectDeleted | (void) | from `sync`, per tombstone: list `g/<group_id>/o/<object_id>/`, `delete_object` each; most objects have no prefix and the list is empty |
+| ObjectDeleted | (void) | from `relay`, per tombstone: list `g/<group_id>/o/<object_id>/`, `delete_object` each; most objects have no prefix and the list is empty |
 | PurgeGroupBlobsRequest | PurgeResult | from `group`'s purge pass: list `g/<group_id>/`, delete a batch, answer `remaining` = what the listing still shows. Idempotent. |
 
 A re-upload goes to the same key, so every reference in every document stays valid and the
