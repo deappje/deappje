@@ -4,13 +4,14 @@ SET LOCAL search_path = nano_group;
 
 -- Plain table `groups` of nanoservice `group`. Only this
 -- nanoservice's role can reach it (the Directive §2).
+-- `created_at` and `updated_at` are added when the plan declares none of
+-- its own; a declared one is the plan's, without the default.
 CREATE TABLE groups (
     id UUID NOT NULL PRIMARY KEY,
     parent_group_id UUID,
     created_by UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     deleted_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 

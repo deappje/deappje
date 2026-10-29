@@ -4,6 +4,8 @@ SET LOCAL search_path = nano_relay;
 
 -- Plain table `object` of nanoservice `relay`. Only this
 -- nanoservice's role can reach it (the Directive §2).
+-- `created_at` and `updated_at` are added when the plan declares none of
+-- its own; a declared one is the plan's, without the default.
 CREATE TABLE object (
     id UUID NOT NULL PRIMARY KEY,
     group_id UUID NOT NULL,

@@ -4,6 +4,8 @@ SET LOCAL search_path = nano_device;
 
 -- Plain table `wrapped_key` of nanoservice `device`. Only this
 -- nanoservice's role can reach it (the Directive §2).
+-- `created_at` and `updated_at` are added when the plan declares none of
+-- its own; a declared one is the plan's, without the default.
 CREATE TABLE wrapped_key (
     id UUID NOT NULL PRIMARY KEY,
     group_id UUID NOT NULL,
@@ -12,7 +14,6 @@ CREATE TABLE wrapped_key (
     wrapped BYTEA NOT NULL,
     wrapped_by_device UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 

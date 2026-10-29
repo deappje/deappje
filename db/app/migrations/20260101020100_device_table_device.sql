@@ -4,6 +4,8 @@ SET LOCAL search_path = nano_device;
 
 -- Plain table `device` of nanoservice `device`. Only this
 -- nanoservice's role can reach it (the Directive §2).
+-- `created_at` and `updated_at` are added when the plan declares none of
+-- its own; a declared one is the plan's, without the default.
 CREATE TABLE device (
     id UUID NOT NULL PRIMARY KEY,
     user_id UUID NOT NULL,
@@ -13,7 +15,6 @@ CREATE TABLE device (
     push_token TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     last_seen_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
