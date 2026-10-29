@@ -190,7 +190,11 @@ Round 21 (2026-10-29) renamed it once more, to `relay`, the word the plan had us
 along: the scaffold renders a nanoservice as a struct of its PascalCase name, and `Sync` shadows
 the prelude trait inside its own crate, so every `Send + Sync` bound there failed to compile on
 the first CI run. The scaffold's validator now refuses a name that collides with the Rust
-prelude.
+prelude. Round 22 (2026-10-29), from the same build: the `group` table is `groups`, since
+`GROUP` is a reserved word in PostgreSQL and the scaffold renders identifiers unquoted, so the
+migration and every query on it would have failed; the validator now refuses reserved words for
+tables and columns. The scaffold's repositories also referred to a row and the nanoservice's
+own component by one name (`Device`), fixed in the scaffold by qualifying rows as `model::`.
 Round 19 (2026-10-29), from the scaffold's manifest check: `key_request` and `history_request`
 lost their `status` column, since a lifecycle column on a plain table is what a processing
 object is for and neither is one: a row is an open request, a claim is the nullable

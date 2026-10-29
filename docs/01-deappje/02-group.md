@@ -7,7 +7,10 @@ types, §6 for the Kratos call, §7 for every message.
 
 ## Tables
 
-### `group`
+### `groups`
+
+Named in the plural because `GROUP` is a reserved word in PostgreSQL and the scaffold renders
+identifiers unquoted (round 22). The nanoservice keeps its name.
 
 | column | type | notes |
 |---|---|---|

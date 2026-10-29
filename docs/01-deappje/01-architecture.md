@@ -15,7 +15,7 @@ minimum needed to route, order, authorise and expire.
 Owns groups and who is in them, and two lifecycles: a group's deletion and a user's account
 deletion.
 
-- **Tables**: `group` (id, `parent_group_id`, creator, timestamps), `membership` (group, user,
+- **Tables**: `groups` (id, `parent_group_id`, creator, timestamps), `membership` (group, user,
   role, joined), `invite` (group, code, creator, expiry, max uses, uses, revoked). Directive §2.
 - **Invariants**: a user is in a group at most once; a member of a subgroup is a member of its
   parent (checked on accept and on `AddMemberRequest`, cascaded on leave/remove); only an admin removes members, sets roles

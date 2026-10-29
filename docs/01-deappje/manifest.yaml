@@ -31,7 +31,7 @@ nanoservices:
             - { name: blobs_remaining, type: int64, nullable: true }
             - { name: keys_remaining, type: int64, nullable: true }
       tables:
-        - name: group
+        - name: groups
           columns:
             - { name: id, type: uuid, primaryKey: true }
             - { name: parent_group_id, type: uuid, nullable: true }
