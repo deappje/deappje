@@ -7,6 +7,7 @@ use std::sync::Arc;
 use basable_effecttest::{Harness, audit};
 use group::effects::*;
 use group::simulator::{Fault, Simulator};
+use uuid::Uuid;
 
 audit!(delete_identity, || async {
     let sim = Arc::new(Simulator::new());
@@ -17,7 +18,7 @@ audit!(delete_identity, || async {
     Harness::new(
         calls.delete_identity.clone(),
         || DeleteIdentityArgs {
-            key: "delete_identity-1".into(),
+            user_id: Uuid::from_u128(1),
         },
         move || {
             let sim = landed.clone();
@@ -32,7 +33,7 @@ audit!(delete_identity, || async {
         let sim = ambiguity.clone();
         async move { sim.inject("delete_identity", Fault::AckLoss, 1) }
     })
-    // A convergent effect with no intent scope in its args: the only
-    // possible late call is a duplicate.
+    // A convergent effect whose args name the one identity: the only
+    // possible late call is a duplicate, which finds nothing.
     .advance_intent(|a| a)
 });

@@ -16,7 +16,7 @@ CREATE TABLE membership (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE INDEX idx_membership_group_id_user_id ON membership (group_id, user_id);
+CREATE UNIQUE INDEX idx_membership_group_id_user_id ON membership (group_id, user_id);
 
 CREATE INDEX idx_membership_user_id ON membership (user_id);
 

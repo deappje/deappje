@@ -171,6 +171,45 @@ The admin API is reached over the in-cluster service address; no secret.
 RemoveMember, SetMemberRole, LeaveGroup, DeleteGroup, DeleteAccount. Every method requires a Kratos session; the api crate
 passes the identity id as the caller.
 
+## Implementation record
+
+What the code settled beyond the text above (`nanoservices/group`, 2026-10-30):
+
+- **The order of a deletion is stamp, object, rows.** `DeleteGroupRequest` stamps `deleted_at`
+  on the group and its subgroups under the group's lock and commits; creates the purge objects
+  (ids `UUIDv5(group_id, "group_purge")`, so a retry adopts); then deletes the memberships and
+  invites. A group stamped `deleted_at` answers no membership from the first commit on, whatever
+  rows remain, and the purge's first pass deletes any rows the handler did not get to. A retry
+  after a crash between stamp and object is authorised by the admin's row, still there; after
+  the rows went, the group is gone to everyone. `TypedStore::create` runs its own transaction,
+  so the handler cannot put the object and the rows in one, and this order is the one in which
+  no crash deletes what nobody asked for (`src/purge.rs`).
+- **A purge object removes itself in two passes.** `Delete` is accepted on a deleting object
+  only (invariant 6), so the pass that finds every receiver empty deletes the group row and
+  `mark_deleted`s its own object; the next pass, due at once, re-drives the same checks and
+  returns `Delete`. `user_purge` ends the same way.
+- **The identity deletion is confirmed by a read.** `identity_exists` (a lookup beside the
+  adapter, not an adapter) runs before the dispatch and again on the next pass; the status's
+  `identity_deleted` is set from the lookup, never from the ack. The admin API is
+  `KRATOS_ADMIN_URL` (`http://kratos-admin:4434`), set in `k8s/app/deployment.yaml`.
+- **Every membership change locks the group row first.** The last-admin rule and the one-row-per-
+  user rule are counts and inserts under that lock; the unique index on `(group_id, user_id)` is
+  the backstop. Locks are taken group first, then invite: an accept reads the invite's group
+  without a lock before locking either.
+- **Rules the text left open.** The last member cannot leave (`FailedPrecondition`: delete the
+  group instead), so no group is ever empty and unreachable. Removing oneself is refused in
+  favour of leaving. An invite or `AddMember` hands out `member` or `viewer` only. A subgroup
+  cannot have subgroups for now (the column allows it; the cascades are recursive). A member
+  accepting again is a no-op that consumes no use. An account being deleted is refused on
+  every `group` call but `CheckMembershipRequest` (the api crate has no table to read, and the
+  handler is the authority); `device`, `relay` and `storage` keep answering such a user until
+  its memberships are gone, as designed.
+- **Messages.** `MembershipCheck { role: Option<Role> }` (`is_member()` is `role.is_some()`);
+  `MemberRemoved { group_id, user_id, removed_at }`; the purge requests carry the one id and
+  `PurgeResult { remaining }`. `Role` is an enum in `crates/messages` with its lowercase names
+  on the wire and in the tables. On the API, ids are UUID text, times are milliseconds since
+  the epoch (0 unset), roles their names.
+
 ## Tests
 
 - Unit: invite acceptance under expiry, revocation and max uses; subgroup accept without parent

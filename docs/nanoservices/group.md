@@ -25,25 +25,30 @@ Design: `docs/01-deappje/02-group.md`. Code:
 
 ## TODO, in order
 
-- [ ] `handle_create_group_request` in `src/handlers.rs`.
-- [ ] `handle_get_group_request` in `src/handlers.rs`.
-- [ ] `handle_list_groups_request` in `src/handlers.rs`.
-- [ ] `handle_create_invite_request` in `src/handlers.rs`.
-- [ ] `handle_accept_invite_request` in `src/handlers.rs`.
-- [ ] `handle_list_members_request` in `src/handlers.rs`.
-- [ ] `handle_add_member_request` in `src/handlers.rs`.
-- [ ] `handle_remove_member_request` in `src/handlers.rs`.
-- [ ] `handle_set_member_role_request` in `src/handlers.rs`.
-- [ ] `handle_leave_group_request` in `src/handlers.rs`.
-- [ ] `handle_delete_group_request` in `src/handlers.rs`.
-- [ ] `handle_delete_account_request` in `src/handlers.rs`.
-- [ ] `handle_check_membership_request` in `src/handlers.rs`.
-- [ ] `user_purge`: the reconcile pass in `types/user_purge/reconciler.rs`; the worker policy.
-- [ ] `group_purge`: the reconcile pass in `types/group_purge/reconciler.rs`; the worker policy.
-- [ ] Table `groups`: the queries in `repository.rs`.
-- [ ] Table `membership`: the queries in `repository.rs`.
-- [ ] Table `invite`: the queries in `repository.rs`.
-- [ ] `send` for `delete_identity` in `effects.rs`, the real client in `provider.rs`; the audit stays green.
-- [ ] `GroupService` field mapping in `api/src/services/group.rs` and the messages in `proto/group/v1/group.proto`.
-- [ ] The message structs in `crates/messages/src/lib.rs`.
-- [ ] `flows.md` and this file kept true.
+- [x] `handle_create_group_request` in `src/handlers.rs`.
+- [x] `handle_get_group_request` in `src/handlers.rs`.
+- [x] `handle_list_groups_request` in `src/handlers.rs`.
+- [x] `handle_create_invite_request` in `src/handlers.rs`.
+- [x] `handle_accept_invite_request` in `src/handlers.rs`.
+- [x] `handle_list_members_request` in `src/handlers.rs`.
+- [x] `handle_add_member_request` in `src/handlers.rs`.
+- [x] `handle_remove_member_request` in `src/handlers.rs`.
+- [x] `handle_set_member_role_request` in `src/handlers.rs`.
+- [x] `handle_leave_group_request` in `src/handlers.rs`.
+- [x] `handle_delete_group_request` in `src/handlers.rs`.
+- [x] `handle_delete_account_request` in `src/handlers.rs`.
+- [x] `handle_check_membership_request` in `src/handlers.rs`.
+- [x] `user_purge`: the reconcile pass in `types/user_purge/reconciler.rs`; the worker policy.
+- [x] `group_purge`: the reconcile pass in `types/group_purge/reconciler.rs`; the worker policy.
+- [x] Table `groups`: the queries in `repository.rs`.
+- [x] Table `membership`: the queries in `repository.rs`.
+- [x] Table `invite`: the queries in `repository.rs`.
+- [x] `send` for `delete_identity` in `effects.rs`, the real client in `provider.rs`; the audit stays green.
+- [x] `GroupService` field mapping in `api/src/services/group.rs` and the messages in `proto/group/v1/group.proto`.
+- [x] The message structs in `crates/messages/src/lib.rs`.
+- [x] `flows.md` and this file kept true.
+
+Landed 2026-10-30 (`nanoservices/group`, the proto and the api mapping, the
+messages). Decisions beyond the plan's text are recorded in
+`docs/01-deappje/02-group.md`, "Implementation record", and the state
+machines in `nanoservices/group/flows.md`.

@@ -47,6 +47,10 @@ spec:
               value: https://TENANT_DOMAIN_PLACEHOLDER
             - name: KRATOS_PUBLIC_URL
               value: http://kratos-public:4433
+            # The admin API, in-cluster and unauthenticated: the account
+            # purge deletes the identity through it (nanoservices/group).
+            - name: KRATOS_ADMIN_URL
+              value: http://kratos-admin:4434
             - name: RUST_LOG
               value: info
             # A user-supplied secret (a provider's API key, a webhook's

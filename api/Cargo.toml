@@ -19,6 +19,7 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+chrono = { workspace = true }
 proto = { path = "../crates/proto" }
 messages = { path = "../crates/messages" }
 interfaces = { path = "../crates/interfaces" }

@@ -4,19 +4,15 @@
 //! What this nanoservice owns is what it is: 2 processing-object
 //! type(s), 3 plain table(s), 1 external call(s).
 
-// A rendered skeleton has stubs nothing calls yet; the allow goes once the
-// bodies are filled.
-#![allow(dead_code)]
-
-use basable_core::AppError;
 use basable_db::{NanoPool, Nanoservice, Stateful};
 
-pub mod handlers;
 pub mod effects;
-pub mod provider;
-pub mod simulator;
+pub mod handlers;
 pub mod model;
-pub mod repository;
+pub mod provider;
+pub mod purge;
+mod repository;
+pub mod simulator;
 pub mod types;
 
 /// The schema marker: this nanoservice owns `nano_group` and gets a
@@ -43,10 +39,16 @@ impl Group {
     /// Binding a type's store checks its migration ran; a missing one is a
     /// boot failure, which is the right time to find out.
     pub async fn new(_app: &basable_app::App, pool: NanoPool<Schema>) -> Self {
+        // Production wires the real provider; tests wire the simulator.
+        Self::with_calls(pool, effects::Calls::from_env()).await
+    }
+
+    /// The component over an explicit adapter set: what the tests build,
+    /// with `effects::Calls::new(simulator)`.
+    pub async fn with_calls(pool: NanoPool<Schema>, calls: effects::Calls) -> Self {
         Self {
             pool: pool.clone(),
-            // Production wires the real provider; tests wire the simulator.
-            calls: effects::Calls::from_env(),
+            calls,
             user_purge_store: types::user_purge::Store::bind(&pool, types::user_purge::decl())
                 .await
                 .expect("group: bind type user_purge (the migration must have run)"),
@@ -54,6 +56,17 @@ impl Group {
                 .await
                 .expect("group: bind type group_purge (the migration must have run)"),
         }
+    }
+
+    /// The typed store of `user_purge`, for a test that reads the object a
+    /// handler created.
+    pub fn user_purge_store(&self) -> &types::user_purge::Store {
+        &self.user_purge_store
+    }
+
+    /// The typed store of `group_purge`.
+    pub fn group_purge_store(&self) -> &types::group_purge::Store {
+        &self.group_purge_store
     }
 }
 
@@ -71,12 +84,4 @@ where
             .worker(types::user_purge::worker(router, self))
             .worker(types::group_purge::worker(router, self))
     }
-}
-
-/// The error a step not filled in yet answers with, so the skeleton deploys
-/// green instead of panicking. `regex_search unimplemented_step` lists what
-/// is left.
-pub(crate) fn unimplemented_step(step: &'static str) -> AppError {
-    tracing::warn!(step, "unimplemented step reached");
-    AppError::unimplemented(step)
 }

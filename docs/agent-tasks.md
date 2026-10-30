@@ -5,7 +5,7 @@ items are in `docs/nanoservices/<name>.md`; this file is the whole-project
 order. Tick items off as they land.
 
 1. Read `AGENTS.md`, `docs/DIRECTIVE.md`, `docs/architecture.md`.
-2. Work through `docs/nanoservices/group.md` for `group`.
+2. ~~Work through `docs/nanoservices/group.md` for `group`.~~ Done 2026-10-30.
 3. Work through `docs/nanoservices/device.md` for `device`.
 4. Work through `docs/nanoservices/relay.md` for `relay`.
 5. Work through `docs/nanoservices/storage.md` for `storage`.

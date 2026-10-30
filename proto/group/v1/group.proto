@@ -2,8 +2,12 @@ syntax = "proto3";
 
 package group.v1;
 
-// GroupService: the API of nanoservice `group`. Fill the
-// message fields; the build regenerates the Rust types and the Connect stubs.
+// GroupService: the API of nanoservice `group`. Every method needs a
+// Kratos session; the caller is the session's identity, never a field.
+// Ids are UUIDs as text; a time is milliseconds since the Unix epoch, UTC,
+// and 0 where it is unset; a role is "admin", "member" or "viewer". A
+// group's name and avatar are ciphertext in the object log, so no message
+// here carries either (docs/01-deappje/02-group.md).
 service GroupService {
   rpc CreateGroup(CreateGroupRequest) returns (CreateGroupResponse);
   rpc DeleteGroup(DeleteGroupRequest) returns (DeleteGroupResponse);
@@ -19,98 +23,163 @@ service GroupService {
   rpc LeaveGroup(LeaveGroupRequest) returns (LeaveGroupResponse);
 }
 
+// A group. deleted_at_ms is set from the moment a deletion was accepted:
+// such a group answers no membership and goes when its purge finishes.
+message Group {
+  string id = 1;
+  // Empty for a top-level group.
+  string parent_group_id = 2;
+  string created_by = 3;
+  int64 created_at_ms = 4;
+  int64 deleted_at_ms = 5;
+}
+
+// One user's membership of one group.
+message Membership {
+  string id = 1;
+  string group_id = 2;
+  string user_id = 3;
+  string role = 4;
+  int64 joined_at_ms = 5;
+}
+
+// An invite. The shared link is /join/<code>#<secret>; the secret never
+// reaches the server.
+message Invite {
+  string id = 1;
+  string group_id = 2;
+  string code = 3;
+  // The role a joiner gets: "member" or "viewer".
+  string role = 4;
+  string created_by = 5;
+  int64 expires_at_ms = 6;
+  // 0 is unbounded.
+  int32 max_uses = 7;
+  int32 uses = 8;
+  bool revoked = 9;
+}
+
 message CreateGroupRequest {
-  // TODO: the request fields.
+  // Set to make a subgroup; the caller must be a member of the parent.
+  string parent_group_id = 1;
 }
 
 message CreateGroupResponse {
-  // TODO: the response fields.
+  Group group = 1;
 }
 
+// The caller must be an admin. Starts the purge of the group and its
+// subgroups; the answer is the group stamped deleted.
 message DeleteGroupRequest {
-  // TODO: the request fields.
+  string group_id = 1;
 }
 
 message DeleteGroupResponse {
-  // TODO: the response fields.
+  Group group = 1;
 }
 
-message DeleteAccountRequest {
-  // TODO: the request fields.
-}
+// The caller deletes their own account.
+message DeleteAccountRequest {}
 
 message DeleteAccountResponse {
-  // TODO: the response fields.
+  // The public id of the purge driving the deletion (upr_...).
+  string purge_id = 1;
 }
 
+// The caller must be a member.
 message GetGroupRequest {
-  // TODO: the request fields.
+  string group_id = 1;
 }
 
 message GetGroupResponse {
-  // TODO: the response fields.
+  Group group = 1;
 }
 
-message ListGroupsRequest {
-  // TODO: the request fields.
-}
+message ListGroupsRequest {}
 
+// Every live group the caller is in, oldest first.
 message ListGroupsResponse {
-  // TODO: the response fields.
+  repeated Group groups = 1;
 }
 
+// The caller must be an admin.
 message CreateInviteRequest {
-  // TODO: the request fields.
+  string group_id = 1;
+  // "member" or "viewer".
+  string role = 2;
+  int64 expires_at_ms = 3;
+  // 0 is unbounded.
+  int32 max_uses = 4;
 }
 
 message CreateInviteResponse {
-  // TODO: the response fields.
+  Invite invite = 1;
 }
 
+// The caller joins the invite's group with the invite's role. A subgroup's
+// invite admits members of the parent only.
 message AcceptInviteRequest {
-  // TODO: the request fields.
+  string code = 1;
 }
 
 message AcceptInviteResponse {
-  // TODO: the response fields.
+  Membership membership = 1;
 }
 
+// The caller must be a member.
 message ListMembersRequest {
-  // TODO: the request fields.
+  string group_id = 1;
 }
 
+// Oldest membership first.
 message ListMembersResponse {
-  // TODO: the response fields.
+  repeated Membership members = 1;
 }
 
+// Subgroups only: the caller is an admin or member of the subgroup and the
+// user a member of the parent; no invite, no acceptance.
 message AddMemberRequest {
-  // TODO: the request fields.
+  string group_id = 1;
+  string user_id = 2;
+  // "member" or "viewer".
+  string role = 3;
 }
 
 message AddMemberResponse {
-  // TODO: the response fields.
+  Membership membership = 1;
 }
 
+// The caller must be an admin. Cascades to the group's subgroups.
 message RemoveMemberRequest {
-  // TODO: the request fields.
+  string group_id = 1;
+  string user_id = 2;
 }
 
+// The membership removed.
 message RemoveMemberResponse {
-  // TODO: the response fields.
+  Membership membership = 1;
 }
 
+// The caller must be an admin. The last admin cannot be demoted while
+// other members remain.
 message SetMemberRoleRequest {
-  // TODO: the request fields.
+  string group_id = 1;
+  string user_id = 2;
+  // "admin", "member" or "viewer".
+  string role = 3;
 }
 
 message SetMemberRoleResponse {
-  // TODO: the response fields.
+  Membership membership = 1;
 }
 
+// Cascades to subgroups. The last admin cannot leave while other members
+// remain; the last member deletes the group instead.
 message LeaveGroupRequest {
-  // TODO: the request fields.
+  string group_id = 1;
 }
 
+// The membership given up.
 message LeaveGroupResponse {
-  // TODO: the response fields.
+  Membership membership = 1;
 }

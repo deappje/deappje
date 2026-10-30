@@ -2,9 +2,47 @@
 //! adds `pub mod <name>;` between the markers and each module's `mount`
 //! registers its service; the agent fills the field mapping inside.
 
+use basable_auth::AuthCtx;
 use basable_connect::ConnectRouter;
+use basable_core::{AppError, Ctx};
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use crate::Api;
+
+/// The caller: the validated session's Kratos identity id, which is the
+/// user id everywhere in this application. The auth layer refused the
+/// request before a handler without one could run, so a missing identity
+/// is a wiring fault, answered as unauthenticated all the same.
+pub(crate) fn caller(ctx: &Ctx) -> Result<Uuid, AppError> {
+    let id = ctx.user_id().ok_or_else(|| AppError::unauthenticated("no session"))?;
+    Uuid::parse_str(id).map_err(|_| AppError::unauthenticated("the session's identity is not a uuid"))
+}
+
+/// A UUID field of a request; `what` names it in the error.
+pub(crate) fn uuid_field(value: &str, what: &str) -> Result<Uuid, AppError> {
+    Uuid::parse_str(value).map_err(|_| AppError::invalid_argument(format!("{what}: not a uuid")))
+}
+
+/// An optional UUID field: empty is none.
+pub(crate) fn optional_uuid_field(value: &str, what: &str) -> Result<Option<Uuid>, AppError> {
+    if value.is_empty() { Ok(None) } else { uuid_field(value, what).map(Some) }
+}
+
+/// A time on the wire: milliseconds since the Unix epoch, UTC.
+pub(crate) fn millis(t: DateTime<Utc>) -> i64 {
+    t.timestamp_millis()
+}
+
+/// An optional time on the wire: 0 is unset.
+pub(crate) fn optional_millis(t: Option<DateTime<Utc>>) -> i64 {
+    t.map_or(0, millis)
+}
+
+/// A time from the wire; `what` names the field in the error.
+pub(crate) fn time_field(ms: i64, what: &str) -> Result<DateTime<Utc>, AppError> {
+    DateTime::<Utc>::from_timestamp_millis(ms).ok_or_else(|| AppError::invalid_argument(format!("{what}: not a time")))
+}
 
 // basable:services-begin
 pub mod group;

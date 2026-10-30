@@ -38,6 +38,14 @@ pub struct Status {
     // Strategy::Declared: `effect: Option<EffectSlot>`.
 }
 
+/// The values of `Status::phase`, in the order a purge passes through them.
+pub mod phase {
+    /// `purging`: the other nanoservices are being emptied of the group.
+    pub const PURGING: &str = "purging";
+    /// `done`: nothing of the group remains; the object is being removed.
+    pub const DONE: &str = "done";
+}
+
 // `Uuid` is the id type of every reference field; the import stays even
 // when this type declares none.
 #[allow(dead_code)]

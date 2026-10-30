@@ -9,6 +9,10 @@
 
 #![allow(unused_imports)]
 
+use std::fmt;
+use std::str::FromStr;
+
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -17,112 +21,224 @@ use uuid::Uuid;
 
 // basable:messages-begin — declare one struct per message in routing.yaml.
 
-/// `CreateGroupRequest` — answered with `Group` (see routing.yaml).
+// --- group ---
+//
+// Every API-facing request of `group` carries `caller`, the Kratos identity
+// id the api crate took from the validated session: the handler decides
+// what that person may do, the boundary never does. Ids are server-minted
+// UUIDs; a group's name and avatar are ciphertext in the object log, so no
+// message here carries either (`docs/01-deappje/02-group.md`).
+
+/// A member's role in a group. `admin` manages members, invites and roles
+/// and can delete the group; `member` reads and writes; `viewer` holds the
+/// keys and reads, and the server refuses its pushes to the log (`relay`)
+/// and its approval of another user's device (`device`). Stored and sent
+/// as its lowercase name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Admin,
+    Member,
+    Viewer,
+}
+
+impl Role {
+    /// The lowercase name, as stored and sent.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Member => "member",
+            Role::Viewer => "viewer",
+        }
+    }
+
+    /// Whether the role may write to the group's object log.
+    pub fn can_write(self) -> bool {
+        !matches!(self, Role::Viewer)
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A role name that is none of the three.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownRole(pub String);
+
+impl fmt::Display for UnknownRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown role {:?} (admin, member or viewer)", self.0)
+    }
+}
+
+impl std::error::Error for UnknownRole {}
+
+impl FromStr for Role {
+    type Err = UnknownRole;
+
+    fn from_str(s: &str) -> Result<Role, UnknownRole> {
+        match s {
+            "admin" => Ok(Role::Admin),
+            "member" => Ok(Role::Member),
+            "viewer" => Ok(Role::Viewer),
+            other => Err(UnknownRole(other.to_owned())),
+        }
+    }
+}
+
+/// `CreateGroupRequest` — answered with `Group`. A `parent_group_id` makes a
+/// subgroup; the caller must be a member of the parent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateGroupRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub parent_group_id: Option<Uuid>,
 }
 
-/// `GetGroupRequest` — answered with `Group` (see routing.yaml).
+/// `GetGroupRequest` — answered with `Group`; the caller must be a member.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetGroupRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
 }
 
-/// `ListGroupsRequest` — answered with `GroupList` (see routing.yaml).
+/// `ListGroupsRequest` — answered with `GroupList`: every live group the
+/// caller is in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListGroupsRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
 }
 
-/// `CreateInviteRequest` — answered with `Invite` (see routing.yaml).
+/// `CreateInviteRequest` — answered with `Invite`; the caller must be an
+/// admin. `role` is what a joiner gets (`member` or `viewer`); `max_uses`
+/// 0 is unbounded.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateInviteRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
+    pub role: Role,
+    pub expires_at: DateTime<Utc>,
+    pub max_uses: i32,
 }
 
-/// `AcceptInviteRequest` — answered with `Membership` (see routing.yaml).
+/// `AcceptInviteRequest` — answered with `Membership`: the caller joins the
+/// invite's group with the invite's role.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcceptInviteRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub code: String,
 }
 
-/// `ListMembersRequest` — answered with `MemberList` (see routing.yaml).
+/// `ListMembersRequest` — answered with `MemberList`; the caller must be a
+/// member.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListMembersRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
 }
 
-/// `AddMemberRequest` — answered with `Membership` (see routing.yaml).
+/// `AddMemberRequest` — answered with `Membership`. Subgroups only: the
+/// caller is an admin or member of the subgroup and `user_id` a member of
+/// the parent; no invite, no acceptance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddMemberRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
+    pub user_id: Uuid,
+    pub role: Role,
 }
 
-/// `RemoveMemberRequest` — answered with `Membership` (see routing.yaml).
+/// `RemoveMemberRequest` — answered with `Membership` (the one removed);
+/// the caller must be an admin. Cascades to the group's subgroups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoveMemberRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
+    pub user_id: Uuid,
 }
 
-/// `SetMemberRoleRequest` — answered with `Membership` (see routing.yaml).
+/// `SetMemberRoleRequest` — answered with `Membership`; the caller must be
+/// an admin. The last admin cannot be demoted while other members remain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetMemberRoleRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
+    pub user_id: Uuid,
+    pub role: Role,
 }
 
-/// `LeaveGroupRequest` — answered with `Membership` (see routing.yaml).
+/// `LeaveGroupRequest` — answered with `Membership` (the one given up).
+/// Cascades to subgroups; the last admin cannot leave while other members
+/// remain; the last member leaving deletes the group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaveGroupRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
 }
 
-/// `DeleteGroupRequest` — answered with `Group` (see routing.yaml).
+/// `DeleteGroupRequest` — answered with `Group` (stamped deleted); the
+/// caller must be an admin. Starts a `group_purge` per group and subgroup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteGroupRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
 }
 
-/// `DeleteAccountRequest` — answered with `AccountDeletion` (see routing.yaml).
+/// `DeleteAccountRequest` — answered with `AccountDeletion`: the caller
+/// deletes their own account, a `user_purge`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteAccountRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
 }
 
-/// `CheckMembershipRequest` — answered with `MembershipCheck` (see routing.yaml).
+/// `CheckMembershipRequest` — answered with `MembershipCheck`: the
+/// authorisation question every other nanoservice asks before it touches
+/// anything in a group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckMembershipRequest {
-    // TODO: the fields.
+    pub user_id: Uuid,
+    pub group_id: Uuid,
 }
 
-/// `MemberRemoved` — a void fan-out event (see routing.yaml).
+/// `MemberRemoved` — a void fan-out event: a user lost a membership (left,
+/// removed, cascaded from a parent, or purged), sent after the commit.
+/// `device` drops the user's wrapped keys for the group and asks the
+/// remaining devices to rotate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberRemoved {
-    // TODO: the fields.
+    pub group_id: Uuid,
+    pub user_id: Uuid,
+    pub removed_at: DateTime<Utc>,
 }
 
-/// `PurgeGroupObjectsRequest` — answered with `PurgeResult` (see routing.yaml).
+/// `PurgeGroupObjectsRequest` — answered with `PurgeResult`: `relay` drops
+/// everything of the group, a batch per call. Idempotent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PurgeGroupObjectsRequest {
-    // TODO: the fields.
+    pub group_id: Uuid,
 }
 
-/// `PurgeGroupBlobsRequest` — answered with `PurgeResult` (see routing.yaml).
+/// `PurgeGroupBlobsRequest` — answered with `PurgeResult`: `storage`
+/// deletes the group's bucket prefix, a batch per call. Idempotent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PurgeGroupBlobsRequest {
-    // TODO: the fields.
+    pub group_id: Uuid,
 }
 
-/// `PurgeGroupKeysRequest` — answered with `PurgeResult` (see routing.yaml).
+/// `PurgeGroupKeysRequest` — answered with `PurgeResult`: `device` drops
+/// the group's wrapped keys and key requests. Idempotent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PurgeGroupKeysRequest {
-    // TODO: the fields.
+    pub group_id: Uuid,
 }
 
-/// `PurgeUserDevicesRequest` — answered with `PurgeResult` (see routing.yaml).
+/// `PurgeUserDevicesRequest` — answered with `PurgeResult`: `device` drops
+/// the user's devices with their keys and requests. Idempotent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PurgeUserDevicesRequest {
-    // TODO: the fields.
+    pub user_id: Uuid,
 }
 
 /// `RegisterDeviceRequest` — answered with `Device` (see routing.yaml).
@@ -269,44 +385,81 @@ pub struct PresignDownloadRequest {
     // TODO: the fields.
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A group as `group` holds it. `deleted_at` is set from the moment a
+/// deletion was accepted: such a group answers no membership and goes
+/// when its purge finishes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Group {
-    // TODO: the fields.
+    pub id: Uuid,
+    pub parent_group_id: Option<Uuid>,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The live groups of one user, with their parent ids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupList {
-    // TODO: the fields.
+    pub groups: Vec<Group>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// An invite. The shared link is `/join/<code>#<secret>`; the secret never
+/// reaches the server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invite {
-    // TODO: the fields.
+    pub id: Uuid,
+    pub group_id: Uuid,
+    pub code: String,
+    pub role: Role,
+    pub created_by: Uuid,
+    pub expires_at: DateTime<Utc>,
+    pub max_uses: i32,
+    pub uses: i32,
+    pub revoked: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One user's membership of one group.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Membership {
-    // TODO: the fields.
+    pub id: Uuid,
+    pub group_id: Uuid,
+    pub user_id: Uuid,
+    pub role: Role,
+    pub joined_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The members of one group, oldest membership first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberList {
-    // TODO: the fields.
+    pub group_id: Uuid,
+    pub members: Vec<Membership>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// An accepted account deletion: the `user_purge` driving it, by public id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountDeletion {
-    // TODO: the fields.
+    pub user_id: Uuid,
+    pub purge_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The answer to `CheckMembershipRequest`: the role when the user is a
+/// member of a live group, nothing otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MembershipCheck {
-    // TODO: the fields.
+    pub role: Option<Role>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl MembershipCheck {
+    pub fn is_member(&self) -> bool {
+        self.role.is_some()
+    }
+}
+
+/// What a purge request leaves behind: zero means the receiver holds
+/// nothing of it any more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PurgeResult {
-    // TODO: the fields.
+    pub remaining: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

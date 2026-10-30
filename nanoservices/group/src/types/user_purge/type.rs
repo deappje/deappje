@@ -36,6 +36,18 @@ pub struct Status {
     // Strategy::Declared: `effect: Option<EffectSlot>`.
 }
 
+/// The values of `Status::phase`, in the order a purge passes through them.
+pub mod phase {
+    /// `leaving`: memberships are being given up, one group per pass.
+    pub const LEAVING: &str = "leaving";
+    /// `devices`: the user's devices are being purged.
+    pub const DEVICES: &str = "devices";
+    /// `identity`: the Kratos identity is being deleted.
+    pub const IDENTITY: &str = "identity";
+    /// `done`: nothing of the user remains; the object is being removed.
+    pub const DONE: &str = "done";
+}
+
 // `Uuid` is the id type of every reference field; the import stays even
 // when this type declares none.
 #[allow(dead_code)]
