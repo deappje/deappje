@@ -1,0 +1,44 @@
+# The client core (docs/01-deappje/01-architecture.md, "The shells"): one
+# Rust crate for every device. The host library and its tests build in the
+# scaffold's `bazel test //...`; its non-host builds (the apps' libraries,
+# the web client's wasm) come with the targets that use them.
+load("@core_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_shared_library", "rust_test")
+load("@rules_rust_wasm_bindgen//:defs.bzl", "rust_wasm_bindgen")
+
+rust_library(
+    name = "core",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "deappje_core",
+    deps = all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "core_test",
+    crate = ":core",
+    deps = all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)
+
+# The web client's core: a cdylib built for wasm32 (rust_wasm_bindgen
+# transitions it) with wasm-bindgen's JavaScript glue beside it. In the
+# scaffold's `bazel test //...` through the frontend; building it is the
+# proof that every dependency the core carries has a wasm build.
+rust_shared_library(
+    name = "core_cdylib",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "deappje_core",
+    deps = all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+rust_wasm_bindgen(
+    name = "core_wasm",
+    target = "web",
+    wasm_file = ":core_cdylib",
+    visibility = ["//visibility:public"],
+)

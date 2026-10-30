@@ -1,0 +1,42 @@
+# The client core: its own Cargo workspace, deliberately apart from the
+# server's. Cargo unifies a crate's features across one workspace, and the
+# server's uuid pulls getrandom, which has no wasm32 backend without a cfg
+# the dependency graph cannot carry; the core takes its randomness from the
+# shell instead (src/shell.rs) and keeps a graph that builds for every
+# target it is bound to. crate_universe pins it as the `core_crates` hub
+# (MODULE.bazel); dependencies are declared here and repinned with
+# CARGO_BAZEL_REPIN=workspace like the server's.
+[package]
+name = "deappje-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "UNLICENSED"
+publish = false
+
+[lib]
+name = "deappje_core"
+path = "src/lib.rs"
+
+[dependencies]
+# Every crate here is pure Rust, builds for wasm32-unknown-unknown and the
+# phone triples, and draws no randomness of its own.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+rand_chacha = { version = "0.3", default-features = false }
+rand_core = "0.6"
+uuid = { version = "1", default-features = false, features = ["v5"] }
+zeroize = { version = "1", features = ["derive"] }
+
+# The oracle the HPKE here is checked against: a reference implementation
+# of the same suite, which the production core cannot use because the
+# device's private key never leaves the shell's key store. Host tests only:
+# its graph turns on rand_core's getrandom, which has no wasm32 build, and
+# the hub resolves features per triple.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+hpke = { version = "0.12", default-features = false, features = ["alloc", "x25519"] }
+
+[workspace]

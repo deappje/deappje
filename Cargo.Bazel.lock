@@ -4,7 +4,7 @@
     "basable-protoc-gen-buffa 0.8.0",
     "connectrpc-codegen 0.9.0"
   ],
-  "checksum": "00ae31b1ddcbb66b0ac05e832e4cd4e55508fa37ad17106a5686048f2d11d46a",
+  "checksum": "9797402081655778a60c3d75f2b2e4ace35853d63c6932d3f6db670db6b85ea4",
   "conditions": {
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"

@@ -12,4 +12,10 @@ order. Tick items off as they land.
 6. ~~Declare every message struct in `crates/messages/src/lib.rs` (the build names the missing ones).~~ Done 2026-10-30.
 7. ~~Fill the proto messages under `proto/` and the field mapping in `api/src/services/`.~~ Done 2026-10-30.
 8. Un-ignore the `#[ignore = "implement first"]` tests as each piece lands; keep `tests/effects_audit.rs` green.
-9. `regex_search unimplemented_step` — only the definitions left (one per crate) means the skeleton is filled.
+9. ~~`regex_search unimplemented_step` — only the definitions left (one per crate) means the skeleton is filled.~~ Done 2026-10-30: none left.
+
+The client core and the apps (`docs/01-deappje/05-deployment.md`, "The apps"), after the server:
+
+10. ~~The toolchain check: the app modules loaded, `//...` green in the CI container.~~ Done 2026-10-30.
+11. `core/`, bottom up (`core/AGENTS.md`): ~~the seams, the generator, the wire codec, the crypto, the envelope, the keyring, trust, the invite secret, the wasm build~~ done 2026-10-30; then the type schemas and the rebase, the local store and the outbox, the sync engine against `relay`'s contract with the multi-device harness, the note CRDT, the Connect and Kratos clients behind a transport seam, the UniFFI exports.
+12. `android/` and `ios/` behind `--//:apps`, with `apps.yaml`.

@@ -18,6 +18,8 @@ members = [
     "nanoservices/storage",
     # basable:members-end
 ]
+# The client core is its own workspace (core/Cargo.toml says why).
+exclude = ["core"]
 
 [workspace.package]
 version = "0.1.0"
