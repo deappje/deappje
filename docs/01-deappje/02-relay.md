@@ -297,6 +297,34 @@ a member" and purges locally. Idempotent.
 ListHistoryRequests, ClaimHistory, PushHistory. The api crate maps the proto entry to the plain Rust struct one to one;
 `value` passes through untouched.
 
+## Implementation record
+
+What the code settled beyond the text above (`nanoservices/relay`, 2026-10-30):
+
+- **One row per object.** `object.id` is the primary key; an edit updates the row with the new
+  seq and `uploaded_at`, so a row's seq is its state and an evicted object edited by a holder
+  comes back as a new row. An id that belongs to another group refuses the batch.
+- **The device id is the caller's word within their membership**, as the plan says; `relay` has
+  no route to verify that a device belongs to the caller, and a device id is a client-minted
+  random UUID. A first ack above 0 without a row is refused (`a device's first ack in a group is
+  0`), so a row is only ever created at 0.
+- **Pull** pages 500 by default and 2000 at most. `GetHeads` leaves out the groups the caller is
+  not in rather than refusing, so a device learns of a removal while offline.
+- **History**: the requester cannot claim its own request; a claim by a device below the floor
+  is refused; a history push is validated whole before anything is locked (oldest first,
+  strictly ascending, inside the range, one object when the request names one, never above the
+  head); `through_seq` is the last entry's seq (`to_seq` on an empty complete). `unfillable`
+  answers with a nil id. Any role may answer history, as designed.
+- **Eviction by age** raises a group's floor to the highest seq taken in the batch and drops the
+  devices below it that have not acked within the window, under the counter lock, batched
+  ten thousand rows per statement; a purge deletes ten thousand rows per call and the counter,
+  devices and requests with the last batch.
+- **Messages.** `PushResult` is an enum (`Accepted { accepted, conflicts, head_seq }` or
+  `BehindFloor { evicted_through_seq }`); `HistoryRequest` carries a `status` (`open`,
+  `claimed`, `taken`, `unfillable`); `ChangeSet`, `AckResult` and `Head` carry `min_acked_seq`
+  as an option, on the wire a value plus `has_min_acked_seq`. The API maps one to one; `value`
+  passes through untouched and an empty value on the wire is none.
+
 ## Tests
 
 - Unit: CAS-on-seq acceptance matrix (no row, match, mismatch, the same three on a tombstone);

@@ -16,8 +16,9 @@ Plain tables (schema `nano_relay`): `object`, `group_head`, `group_device`, `his
 | File | Responsibility |
 |---|---|
 | `src/lib.rs` | The `Relay` struct, its constructor (pools, providers, calls), the schema marker, and its `basable_app::Component` impl: `loops()` lists every worker and ticker it runs (none for a plain executor). |
-| `src/handlers.rs` | `impl RelayHandler<R>`: one `handle_<snake_message>` per handled message. Intent only — `create` / `update_spec` / `mark_deleted` / `nudge`; never a status write. |
-| `src/repository.rs` / `src/model.rs` | Typed sqlx queries over this nanoservice's pool; the row structs. |
+| `src/handlers.rs` | `impl RelayHandler<R>`: one `handle_<snake_message>` per handled message. The rules are pure functions with unit tests: `cas` (compare-and-set on seq), `is_holder`, `ack_allowed`, the batch validations; the constants `MAX_VALUE_BYTES`, `DEFAULT_PAGE`, `MAX_PAGE`, `CLAIM_TAKEOVER`, `WINDOW`. Every write runs under `repository::lock_head`. |
+| `src/repository.rs` / `src/model.rs` | Typed sqlx queries over this nanoservice's pool, each taking its executor; `lock_head` is the counter row under `FOR UPDATE`, created with zeros on first sight. The row structs. |
+| `src/worker.rs` | The two hourly sweeps: `evict_by_ack` and `evict_by_age` (each group's floor moved under its counter lock, stale devices dropped), `tick_expire_history_requests`. |
 | `src/worker.rs` | The ticker workers (`evict_objects` every 1h, `expire_history_requests` every 1h), listed in this nanoservice's `loops()` (`src/lib.rs`), started by the app and joined on shutdown. |
 | `tests/integration.rs` | Integration tests on the testkit (a database per test). |
 | `flows.md` | State machines, sequences, edge cases. |

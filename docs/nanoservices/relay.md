@@ -25,22 +25,27 @@ Design: `docs/01-deappje/02-relay.md`. Code:
 
 ## TODO, in order
 
-- [ ] `handle_push_objects_request` in `src/handlers.rs`.
-- [ ] `handle_pull_changes_request` in `src/handlers.rs`.
-- [ ] `handle_ack_seq_request` in `src/handlers.rs`.
-- [ ] `handle_get_heads_request` in `src/handlers.rs`.
-- [ ] `handle_request_history_request` in `src/handlers.rs`.
-- [ ] `handle_list_history_requests_request` in `src/handlers.rs`.
-- [ ] `handle_claim_history_request` in `src/handlers.rs`.
-- [ ] `handle_push_history_request` in `src/handlers.rs`.
-- [ ] `handle_device_left_group` in `src/handlers.rs`.
-- [ ] `handle_purge_group_objects_request` in `src/handlers.rs`.
-- [ ] Table `object`: the queries in `repository.rs`.
-- [ ] Table `group_head`: the queries in `repository.rs`.
-- [ ] Table `group_device`: the queries in `repository.rs`.
-- [ ] Table `history_request`: the queries in `repository.rs`.
-- [ ] `tick_evict_objects` in `worker.rs`.
-- [ ] `tick_expire_history_requests` in `worker.rs`.
-- [ ] `RelayService` field mapping in `api/src/services/relay.rs` and the messages in `proto/relay/v1/relay.proto`.
-- [ ] The message structs in `crates/messages/src/lib.rs`.
-- [ ] `flows.md` and this file kept true.
+- [x] `handle_push_objects_request` in `src/handlers.rs`.
+- [x] `handle_pull_changes_request` in `src/handlers.rs`.
+- [x] `handle_ack_seq_request` in `src/handlers.rs`.
+- [x] `handle_get_heads_request` in `src/handlers.rs`.
+- [x] `handle_request_history_request` in `src/handlers.rs`.
+- [x] `handle_list_history_requests_request` in `src/handlers.rs`.
+- [x] `handle_claim_history_request` in `src/handlers.rs`.
+- [x] `handle_push_history_request` in `src/handlers.rs`.
+- [x] `handle_device_left_group` in `src/handlers.rs`.
+- [x] `handle_purge_group_objects_request` in `src/handlers.rs`.
+- [x] Table `object`: the queries in `repository.rs`.
+- [x] Table `group_head`: the queries in `repository.rs`.
+- [x] Table `group_device`: the queries in `repository.rs`.
+- [x] Table `history_request`: the queries in `repository.rs`.
+- [x] `tick_evict_objects` in `worker.rs`.
+- [x] `tick_expire_history_requests` in `worker.rs`.
+- [x] `RelayService` field mapping in `api/src/services/relay.rs` and the messages in `proto/relay/v1/relay.proto`.
+- [x] The message structs in `crates/messages/src/lib.rs`.
+- [x] `flows.md` and this file kept true.
+
+Landed 2026-10-30 (`nanoservices/relay`, the proto and the api mapping, the
+messages). Decisions beyond the plan's text are recorded in
+`docs/01-deappje/02-relay.md`, "Implementation record", and the flows in
+`nanoservices/relay/flows.md`.

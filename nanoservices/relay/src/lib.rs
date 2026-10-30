@@ -4,16 +4,11 @@
 //! What this nanoservice owns is what it is: 0 processing-object
 //! type(s), 4 plain table(s), 0 external call(s).
 
-// A rendered skeleton has stubs nothing calls yet; the allow goes once the
-// bodies are filled.
-#![allow(dead_code)]
-
-use basable_core::AppError;
 use basable_db::{NanoPool, Nanoservice, Stateful};
 
 pub mod handlers;
 pub mod model;
-pub mod repository;
+mod repository;
 pub mod worker;
 
 /// The schema marker: this nanoservice owns `nano_relay` and gets a
@@ -35,9 +30,12 @@ pub struct Relay {
 impl Relay {
     /// Builds the component. Called once from `app/src/main.rs`.
     pub fn new(_app: &basable_app::App, pool: NanoPool<Schema>) -> Self {
-        Self {
-            pool,
-        }
+        Self::with_pool(pool)
+    }
+
+    /// The component over a pool: what the tests build.
+    pub fn with_pool(pool: NanoPool<Schema>) -> Self {
+        Self { pool }
     }
 }
 
@@ -56,12 +54,4 @@ where
             .ticker(basable_app::Ticker::new("evict_objects", std::time::Duration::from_secs(3600), move |ctx| Box::pin(self.tick_evict_objects(ctx, sender))))
             .ticker(basable_app::Ticker::new("expire_history_requests", std::time::Duration::from_secs(3600), move |ctx| Box::pin(self.tick_expire_history_requests(ctx, sender))))
     }
-}
-
-/// The error a step not filled in yet answers with, so the skeleton deploys
-/// green instead of panicking. `regex_search unimplemented_step` lists what
-/// is left.
-pub(crate) fn unimplemented_step(step: &'static str) -> AppError {
-    tracing::warn!(step, "unimplemented step reached");
-    AppError::unimplemented(step)
 }

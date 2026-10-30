@@ -2,8 +2,11 @@ syntax = "proto3";
 
 package relay.v1;
 
-// RelayService: the API of nanoservice `relay`. Fill the
-// message fields; the build regenerates the Rust types and the Connect stubs.
+// RelayService: the API of nanoservice `relay`, the group log. Every method
+// needs a Kratos session; the caller is the session's identity, and every
+// request names the calling device. Ids are UUIDs as text; a value is the
+// object's envelope (plaintext header, ciphertext), which the server never
+// parses; a seq numbers a group's writes (docs/01-deappje/02-relay.md).
 service RelayService {
   rpc PushObjects(PushObjectsRequest) returns (PushObjectsResponse);
   rpc PullChanges(PullChangesRequest) returns (PullChangesResponse);
@@ -15,66 +18,173 @@ service RelayService {
   rpc PushHistory(PushHistoryRequest) returns (PushHistoryResponse);
 }
 
+// A row of the log as the server holds it. A tombstone is deleted with no
+// value; its seq is its deletion mark.
+message Entry {
+  string id = 1;
+  bytes value = 2;
+  int64 seq = 3;
+  bool deleted = 4;
+}
+
+// One object of a push: base_seq is the seq of the row the device edited
+// from, 0 for a new object; a delete is deleted with no value.
+message PushEntry {
+  string id = 1;
+  bytes value = 2;
+  int64 base_seq = 3;
+  bool deleted = 4;
+}
+
+// One batch, one transaction, from a device that holds the group; the
+// caller must be an admin or member. A value over 1 MiB refuses the batch.
 message PushObjectsRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
+  repeated PushEntry objects = 3;
 }
 
+message Accepted {
+  string id = 1;
+  int64 seq = 2;
+}
+
+// A refused object with the row as the server holds it, for the rebase.
+message Conflict {
+  string id = 1;
+  Entry current = 2;
+}
+
+// Per object accepted or in conflict, with the head after; or the whole
+// batch refused (behind_floor) because the device's ack is below the
+// eviction floor: it starts over.
 message PushObjectsResponse {
-  // TODO: the response fields.
+  repeated Accepted accepted = 1;
+  repeated Conflict conflicts = 2;
+  int64 head_seq = 3;
+  bool behind_floor = 4;
+  int64 evicted_through_seq = 5;
 }
 
+// The rows after since_seq, oldest first, at most limit (0: the default
+// page of 500, 2000 at most).
 message PullChangesRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
+  int64 since_seq = 3;
+  int32 limit = 4;
 }
 
+// A page with where the group stands: its head, the eviction floor, the
+// lowest ack among its devices (has_min_acked_seq false: no device has a
+// row), and whether another page follows.
 message PullChangesResponse {
-  // TODO: the response fields.
+  repeated Entry entries = 1;
+  int64 head_seq = 2;
+  int64 evicted_through_seq = 3;
+  int64 min_acked_seq = 4;
+  bool has_min_acked_seq = 5;
+  bool more = 6;
 }
 
+// The device holds every row of the group through seq. Monotone, except 0,
+// a device's first act in a group and its way to start over.
 message AckSeqRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
+  int64 seq = 3;
 }
 
 message AckSeqResponse {
-  // TODO: the response fields.
+  int64 evicted_through_seq = 1;
+  int64 min_acked_seq = 2;
+  bool has_min_acked_seq = 3;
 }
 
 message GetHeadsRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  repeated string group_ids = 2;
 }
 
+message Head {
+  string group_id = 1;
+  int64 head_seq = 2;
+  int64 evicted_through_seq = 3;
+  int64 min_acked_seq = 4;
+  bool has_min_acked_seq = 5;
+}
+
+// The groups the caller is a member of, among those asked; a group left
+// out is one the caller is no longer in.
 message GetHeadsResponse {
-  // TODO: the response fields.
+  repeated Head heads = 1;
 }
 
+// A history request as stored, with its status for the caller: "open",
+// "claimed" (by the calling device), "taken" (by another) or "unfillable"
+// (nobody holds anything older than the window; nothing was stored, the
+// id is empty).
+message HistoryRequest {
+  string id = 1;
+  string group_id = 2;
+  string requester_device = 3;
+  int64 from_seq = 4;
+  int64 to_seq = 5;
+  string object_id = 6;
+  string claimed_by = 7;
+  int64 claimed_at_ms = 8;
+  int64 created_at_ms = 9;
+  string status = 10;
+}
+
+// Rows in [from_seq, to_seq], or one object, from a holder.
 message RequestHistoryRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
+  int64 from_seq = 3;
+  int64 to_seq = 4;
+  string object_id = 5;
 }
 
 message RequestHistoryResponse {
-  // TODO: the response fields.
+  HistoryRequest request = 1;
 }
 
+// The group's requests a holder may claim: unclaimed, or claimed more than
+// five minutes ago.
 message ListHistoryRequestsRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
 }
 
 message ListHistoryRequestsResponse {
-  // TODO: the response fields.
+  repeated HistoryRequest requests = 1;
 }
 
+// The calling device, a holder, takes the request; the first wins.
 message ClaimHistoryRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string request_id = 2;
 }
 
 message ClaimHistoryResponse {
-  // TODO: the response fields.
+  HistoryRequest request = 1;
 }
 
+// The claimer pushes the rows it holds in the range, oldest first, as they
+// were in the log, a few thousand per call; complete on the last.
 message PushHistoryRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string request_id = 2;
+  repeated Entry entries = 3;
+  bool complete = 4;
 }
 
+// Rows re-inserted at their original seqs, rows skipped because an id
+// already had a row, and the last seq of the call.
 message PushHistoryResponse {
-  // TODO: the response fields.
+  int64 inserted = 1;
+  int64 skipped = 2;
+  int64 through_seq = 3;
+  bool complete = 4;
 }
