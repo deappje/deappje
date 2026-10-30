@@ -26,7 +26,10 @@ from the server's.
    (`src/keyring.rs`); an invite secret leaves it only as a link fragment or
    a tag (`src/invite.rs`).
 4. **A changed key under a known device id is refused and surfaced**
-   (`src/trust.rs`), never adopted silently.
+   (`src/trust.rs`), never adopted silently. A wrap is opened only under
+   the pinned key of the device that made it, which the server hands over
+   with the wrap (`wrapped_by_public_key`, since 2026-10-30): a device
+   that holds nothing yet cannot list the holders to learn it.
 
 ## Files
 
@@ -44,11 +47,13 @@ from the server's.
 | `src/schema.rs` | `ObjectType` (numbers, `Strategy`, `ParentRule`, `may_write`), `FieldKind`/`ElementKey`/`FieldSpec`/`Schema` for the rebase, `FieldValue`/`Scalar`/`Element`/`Message`/`Object` (typed fields over the wire codec, proto3 defaults absent, `Option` for presence), the `message!` and `wire_enum!` macros, `Meta` (fields 1-4: parent, author, authored_at, edited_at), `Document<T>` (seal/open/validate). |
 | `src/types.rs` | Every object type as a `message!` body with `impl Object` (number, invariants): `FileRef`, `Geo`, `Birthday`, the enums; `ObjectType::schema()` and `validate_value()` dispatch by number. Own fields start at 10; all at schema version 1. |
 | `src/rebase.rs` | `diff` (base → local, per singular field and per element by key), `apply` (onto current, unknown fields pass through), `rebase` (by strategy: singleton and append-only go whole). The conformance cases of `03-testing.md` are its tests. |
-| `src/relay.rs` | The relay's contract as values (`Entry`, `PushEntry`, `PushResult`, `ChangeSet`, `Head`, `HistoryRequest`, `Code`, `RelayError`) and the `Relay` seam (async; Connect for the shells, the model for tests). |
+| `src/api.rs` | `Code` (the Connect answer codes) and `ApiError`: what every seam to the server answers with; the engines act on the code. |
+| `src/relay.rs` | The relay's contract as values (`Entry`, `PushEntry`, `PushResult`, `ChangeSet`, `Head`, `HistoryRequest`) and the `Relay` seam (async; Connect for the shells, the model for tests). |
+| `src/keys.rs` | The key exchange over the `Devices` seam (`device`'s contract): `KeyExchange::register`, `create_group_key` (generation 1 wrapped for the minting device), `request_keys` (with the invite's tag), `pending_requests` (fingerprint + whether the invite tag verifies), `approve` (one wrap per generation held, the requester pinned), `receive` (every wrap opened under the pinned wrapper's key: `Received`, `Unopenable`, `Pin` events), `rotate` (next generation for every holder; a lost race adopts). |
 | `src/store.rs` | The local store: per group the rows (envelopes with the type and parent read out of the ones the device can open), the cursor, the `Phase` (New, CatchingUp, Holder), the outbox of `Pending { Op::Create / Edit / Delete }` with the sealed bytes and the base plaintext an edit was made from; written through to `Storage` and read back whole at `open`. |
 | `src/sync.rs` | The engine `Syncer`: `create`/`edit`/`delete` (the cascade over the children held) and `read`; `sync_group` by phase (join: ack 0, the window, a history request; catch up: page and ack as far as `HistoryReady` says, complete = the whole range; holder: pull, ack, drop tombstones every device passed, then push the outbox with conflicts rebased up to three times, a tombstone dropping the edit, an invalid result parked for the user); a device below the floor or refused an ack starts over and keeps its outbox for the replay; `serve_history` for holders; `history_ready` for the wake-up. Its tests (`src/sync/tests.rs`) are the conformance scenarios and the randomised multi-device harness (four devices, outages, eviction, two absences longer than the window), forty seeds. |
 | `src/notes.rs` | `NoteDoc` over `yrs` (53-bit client id from the generator, byte offsets): `apply` a child's update, `set_text` (only the changed span is deleted and inserted), `session_update` (the delta since the session began), `end_session`; `Syncer::open_note` (every live `note_update` child applied, any order) and `save_note_session` (one child per session). |
-| `src/harness/` | `RelayModel`: `relay`'s handlers and sweeps rule for rule in memory with a movable clock, membership and the wake-ups `device` would push; `block_on` for futures that never wait. Public so the shells' tests can drive it. |
+| `src/harness/` | `RelayModel` (`relay`'s handlers and sweeps rule for rule in memory with a movable clock, membership and the wake-ups `device` would push) and `DevicesModel` (`device`'s key handlers: registration, requests, fulfilment, publishing with the one-publisher rule, a hostile `swap_public_key` for the pin tests); `block_on` for futures that never wait. Public so the shells' tests can drive them. |
 
 ## Builds
 
@@ -81,6 +86,6 @@ matches. A breaking change is a new type number, never a repurposed field.
 
 ## Still to come
 
-The key exchange over `device`'s contract (wrapped keys, key requests,
-rotation), the Connect and Kratos clients behind a transport seam, the
-UniFFI exports.
+The Connect and Kratos clients behind a transport seam (the `Relay` and
+`Devices` seams over HTTP, plus the group and storage services), the
+blob encryption and upload, the `Core` facade and its UniFFI exports.

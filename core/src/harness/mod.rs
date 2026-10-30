@@ -1,15 +1,18 @@
-//! The conformance harness (`docs/01-deappje/03-testing.md`): an in-memory
-//! model of `relay`'s contract (`02-relay.md`), with its eviction and
-//! wake-ups under a simulated clock, that the sync engine's tests and the
-//! shells' end-to-end tests drive several devices against. Public because
-//! the shells' tests take it through the bindings.
+//! The conformance harness (`docs/01-deappje/03-testing.md`): in-memory
+//! models of `relay`'s contract (`02-relay.md`, with its eviction and
+//! wake-ups under a simulated clock) and of `device`'s (`02-device.md`,
+//! the key exchange), that the engine's tests and the shells' end-to-end
+//! tests drive several devices against. Public because the shells' tests
+//! take it through the bindings.
 
+mod devices_model;
 mod relay_model;
 
 use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
+pub use devices_model::{DeviceWakeup, DevicesModel};
 pub use relay_model::{CLAIM_TAKEOVER_MS, DEFAULT_PAGE, MAX_PAGE, MAX_VALUE_BYTES, RelayModel, Role, WINDOW_MS, Wakeup};
 
 /// Runs a future that never waits (the model answers at once): the tests'

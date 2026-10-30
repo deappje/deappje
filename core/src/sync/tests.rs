@@ -353,7 +353,7 @@ fn an_outage_leaves_the_store_consistent_and_the_next_sync_finishes() {
     b.sync(&w.model, w.group);
     a.post(w.group, "two");
     w.model.set_outage(true);
-    assert!(matches!(a.try_sync(&w.model, w.group), Err(SyncError::Relay(RelayError { code: crate::relay::Code::Unavailable, .. }))));
+    assert!(matches!(a.try_sync(&w.model, w.group), Err(SyncError::Relay(ApiError { code: crate::api::Code::Unavailable, .. }))));
     assert_eq!(a.outbox_len(w.group), 1);
     w.model.set_outage(false);
     a.sync(&w.model, w.group);

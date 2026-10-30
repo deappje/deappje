@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use uuid::Uuid;
 
-use crate::relay::{AckResult, ChangeSet, Code, Conflict, Entry, Head, HistoryRequest, HistoryStatus, PushEntry, PushHistoryResult, PushResult, Relay, RelayError};
+use crate::api::{ApiError, Code};
+use crate::relay::{AckResult, ChangeSet, Conflict, Entry, Head, HistoryRequest, HistoryStatus, PushEntry, PushHistoryResult, PushResult, Relay};
 use crate::rng::CoreRng;
 
 /// A value is at most this long.
@@ -118,21 +119,21 @@ pub struct RelayModel {
     rng: RefCell<CoreRng>,
 }
 
-fn err(code: Code, message: impl Into<String>) -> RelayError {
-    RelayError::new(code, message)
+fn err(code: Code, message: impl Into<String>) -> ApiError {
+    ApiError::new(code, message)
 }
 
 impl Inner {
-    fn user_of(&self, device_id: Uuid) -> Result<Uuid, RelayError> {
+    fn user_of(&self, device_id: Uuid) -> Result<Uuid, ApiError> {
         self.device_user.get(&device_id).copied().ok_or_else(|| err(Code::PermissionDenied, "unknown device"))
     }
 
-    fn role(&self, device_id: Uuid, group_id: Uuid) -> Result<Option<Role>, RelayError> {
+    fn role(&self, device_id: Uuid, group_id: Uuid) -> Result<Option<Role>, ApiError> {
         let user = self.user_of(device_id)?;
         Ok(self.members.get(&(group_id, user)).copied())
     }
 
-    fn require_member(&self, device_id: Uuid, group_id: Uuid) -> Result<Role, RelayError> {
+    fn require_member(&self, device_id: Uuid, group_id: Uuid) -> Result<Role, ApiError> {
         self.role(device_id, group_id)?.ok_or_else(|| err(Code::PermissionDenied, "not a member of this group"))
     }
 
@@ -287,7 +288,7 @@ impl RelayModel {
         inner.requests.retain(|_, r| r.created_at >= cutoff);
     }
 
-    fn call(&self) -> Result<std::cell::RefMut<'_, Inner>, RelayError> {
+    fn call(&self) -> Result<std::cell::RefMut<'_, Inner>, ApiError> {
         let mut inner = self.inner.borrow_mut();
         inner.calls += 1;
         if inner.outage {
@@ -298,7 +299,7 @@ impl RelayModel {
 }
 
 impl Relay for RelayModel {
-    async fn push_objects(&self, device_id: Uuid, group_id: Uuid, objects: Vec<PushEntry>) -> Result<PushResult, RelayError> {
+    async fn push_objects(&self, device_id: Uuid, group_id: Uuid, objects: Vec<PushEntry>) -> Result<PushResult, ApiError> {
         let mut inner = self.call()?;
         if objects.is_empty() {
             return Err(err(Code::InvalidArgument, "objects: empty batch"));
@@ -362,7 +363,7 @@ impl Relay for RelayModel {
         Ok(PushResult::Accepted { accepted, conflicts, head_seq })
     }
 
-    async fn pull_changes(&self, device_id: Uuid, group_id: Uuid, since_seq: i64, limit: i32) -> Result<ChangeSet, RelayError> {
+    async fn pull_changes(&self, device_id: Uuid, group_id: Uuid, since_seq: i64, limit: i32) -> Result<ChangeSet, ApiError> {
         let inner = self.call()?;
         inner.require_member(device_id, group_id)?;
         if since_seq < 0 || limit < 0 {
@@ -384,7 +385,7 @@ impl Relay for RelayModel {
         Ok(ChangeSet { entries: rows, head_seq: head.head_seq, evicted_through_seq: head.evicted_through_seq, min_acked_seq: inner.min_acked(group_id), more })
     }
 
-    async fn ack_seq(&self, device_id: Uuid, group_id: Uuid, seq: i64) -> Result<AckResult, RelayError> {
+    async fn ack_seq(&self, device_id: Uuid, group_id: Uuid, seq: i64) -> Result<AckResult, ApiError> {
         let mut inner = self.call()?;
         inner.require_member(device_id, group_id)?;
         let head = inner.head(group_id);
@@ -406,7 +407,7 @@ impl Relay for RelayModel {
         Ok(AckResult { evicted_through_seq: head.evicted_through_seq, min_acked_seq: inner.min_acked(group_id) })
     }
 
-    async fn get_heads(&self, device_id: Uuid, group_ids: Vec<Uuid>) -> Result<Vec<Head>, RelayError> {
+    async fn get_heads(&self, device_id: Uuid, group_ids: Vec<Uuid>) -> Result<Vec<Head>, ApiError> {
         let inner = self.call()?;
         let mut heads = Vec::new();
         for group_id in group_ids {
@@ -419,7 +420,7 @@ impl Relay for RelayModel {
         Ok(heads)
     }
 
-    async fn request_history(&self, device_id: Uuid, group_id: Uuid, from_seq: i64, to_seq: i64, object_id: Option<Uuid>) -> Result<HistoryRequest, RelayError> {
+    async fn request_history(&self, device_id: Uuid, group_id: Uuid, from_seq: i64, to_seq: i64, object_id: Option<Uuid>) -> Result<HistoryRequest, ApiError> {
         let mut inner = self.call()?;
         inner.require_member(device_id, group_id)?;
         if from_seq < 1 || to_seq < from_seq {
@@ -440,7 +441,7 @@ impl Relay for RelayModel {
         Ok(msg)
     }
 
-    async fn list_history_requests(&self, device_id: Uuid, group_id: Uuid) -> Result<Vec<HistoryRequest>, RelayError> {
+    async fn list_history_requests(&self, device_id: Uuid, group_id: Uuid) -> Result<Vec<HistoryRequest>, ApiError> {
         let inner = self.call()?;
         inner.require_member(device_id, group_id)?;
         let abandoned_before = inner.now_ms - CLAIM_TAKEOVER_MS;
@@ -452,7 +453,7 @@ impl Relay for RelayModel {
             .collect())
     }
 
-    async fn claim_history(&self, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, RelayError> {
+    async fn claim_history(&self, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, ApiError> {
         let mut inner = self.call()?;
         let request = inner.requests.get(&request_id).cloned().ok_or_else(|| err(Code::NotFound, "history request not found"))?;
         inner.require_member(device_id, request.group_id)?;
@@ -476,7 +477,7 @@ impl Relay for RelayModel {
         }
     }
 
-    async fn push_history(&self, device_id: Uuid, request_id: Uuid, entries: Vec<Entry>, complete: bool) -> Result<PushHistoryResult, RelayError> {
+    async fn push_history(&self, device_id: Uuid, request_id: Uuid, entries: Vec<Entry>, complete: bool) -> Result<PushHistoryResult, ApiError> {
         let mut inner = self.call()?;
         let request = inner.requests.get(&request_id).cloned().ok_or_else(|| err(Code::NotFound, "history request not found (completed or expired)"))?;
         inner.require_member(device_id, request.group_id)?;

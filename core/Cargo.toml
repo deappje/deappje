@@ -37,6 +37,12 @@ zeroize = { version = "1", features = ["derive"] }
 # every Doc a client id of its own generator's.
 yrs = "0.28"
 
+# The wasm build's wasm-bindgen is pinned to the version of the CLI that
+# rules_rust_wasm_bindgen 0.74 runs: the bindgen format must match exactly,
+# and yrs's getrandom would otherwise pull the newest. Raise both together.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.121"
+
 # The oracle the HPKE here is checked against: a reference implementation
 # of the same suite, which the production core cannot use because the
 # device's private key never leaves the shell's key store. Host tests only:

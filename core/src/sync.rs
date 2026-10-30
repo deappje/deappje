@@ -20,7 +20,8 @@ use crate::crypto::CryptoError;
 use crate::envelope::{Envelope, EnvelopeError, Header};
 use crate::keyring::Keyring;
 use crate::rebase;
-use crate::relay::{Conflict, Entry, HistoryStatus, PushEntry, PushResult, Relay, RelayError};
+use crate::api::ApiError;
+use crate::relay::{Conflict, Entry, HistoryStatus, PushEntry, PushResult, Relay};
 use crate::rng::CoreRng;
 use crate::schema::{Message as _, Meta, ObjectType};
 use crate::store::{Op, Pending, Phase, Row, Store};
@@ -94,7 +95,7 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncError {
     /// The relay refused or could not be reached.
-    Relay(RelayError),
+    Relay(ApiError),
     /// A row the engine had to open (a conflict's current row) is sealed
     /// under a key the device does not hold.
     NoKey {
@@ -134,8 +135,8 @@ impl fmt::Display for SyncError {
 
 impl std::error::Error for SyncError {}
 
-impl From<RelayError> for SyncError {
-    fn from(e: RelayError) -> Self {
+impl From<ApiError> for SyncError {
+    fn from(e: ApiError) -> Self {
         SyncError::Relay(e)
     }
 }
@@ -337,7 +338,7 @@ impl Syncer<'_> {
     async fn ack<R: Relay>(&mut self, relay: &R, group_id: Uuid, seq: i64) -> Result<bool, SyncError> {
         match relay.ack_seq(self.device_id, group_id, seq).await {
             Ok(_) => Ok(true),
-            Err(e) if e.code == crate::relay::Code::FailedPrecondition => Ok(false),
+            Err(e) if e.code == crate::api::Code::FailedPrecondition => Ok(false),
             Err(e) => Err(e.into()),
         }
     }
@@ -662,7 +663,7 @@ impl Syncer<'_> {
                 Ok(c) => c,
                 // Gone meanwhile, or the server does not count this device as
                 // a holder (its next pull finds out): not this device's.
-                Err(e) if matches!(e.code, crate::relay::Code::NotFound | crate::relay::Code::PermissionDenied | crate::relay::Code::InvalidArgument) => continue,
+                Err(e) if matches!(e.code, crate::api::Code::NotFound | crate::api::Code::PermissionDenied | crate::api::Code::InvalidArgument) => continue,
                 Err(e) => return Err(e.into()),
             };
             if claimed.status != HistoryStatus::Claimed {
@@ -688,7 +689,7 @@ impl Syncer<'_> {
                     Ok(_) => {}
                     // Completed by another holder, expired, or the claim was
                     // taken over: the rest is not this device's to push.
-                    Err(e) if matches!(e.code, crate::relay::Code::NotFound | crate::relay::Code::PermissionDenied) => {
+                    Err(e) if matches!(e.code, crate::api::Code::NotFound | crate::api::Code::PermissionDenied) => {
                         served = false;
                         break;
                     }

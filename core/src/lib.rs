@@ -13,7 +13,8 @@
 //! Layers, bottom up: [`wire`] (protobuf wire format), [`crypto`] (HPKE,
 //! AEAD, hashes), [`ids`], [`envelope`], [`keyring`], [`trust`], [`invite`],
 //! [`schema`] (typed fields, documents), [`types`] (the object types),
-//! [`rebase`] (the conflict rebase), [`relay`] (the relay's contract),
+//! [`rebase`] (the conflict rebase), [`api`] (the answer codes), [`relay`]
+//! (the relay's contract), [`keys`] (the key exchange over `device`'s),
 //! [`store`] (the local store and the outbox), [`sync`] (the engine),
 //! [`notes`] (the note CRDT), [`harness`] (the in-memory relay model the
 //! tests drive).
@@ -21,12 +22,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod api;
 pub mod crypto;
 pub mod envelope;
 pub mod harness;
 pub mod ids;
 pub mod invite;
 pub mod keyring;
+pub mod keys;
 pub mod notes;
 pub mod rebase;
 pub mod relay;

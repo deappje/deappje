@@ -2,12 +2,13 @@
 //! `proto/relay/v1/relay.proto`): the messages as plain values and the
 //! [`Relay`] seam the sync engine calls, implemented over Connect by the
 //! transport and over the in-memory model by the harness
-//! (`crate::harness`). Errors carry the server's code, so the engine can
-//! tell a refusal it must act on from an outage it waits out.
-
-use std::fmt;
+//! (`crate::harness`). Errors carry the server's code (`crate::api`), so
+//! the engine can tell a refusal it must act on from an outage it waits
+//! out.
 
 use uuid::Uuid;
+
+use crate::api::ApiError;
 
 /// A row of the log as the server holds it. A tombstone is `deleted` with
 /// no value; its seq is its deletion mark.
@@ -160,67 +161,25 @@ pub struct PushHistoryResult {
     pub complete: bool,
 }
 
-/// The server's answer code, as Connect carries it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Code {
-    /// The request is malformed.
-    InvalidArgument,
-    /// The state does not allow it (an ack backwards, above the head).
-    FailedPrecondition,
-    /// Not a member, not a holder, not the claimer.
-    PermissionDenied,
-    /// A request that is gone.
-    NotFound,
-    /// The server failed.
-    Internal,
-    /// The server could not be reached, or the session is gone: nothing
-    /// was decided.
-    Unavailable,
-}
-
-/// A refusal or a failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelayError {
-    /// The code.
-    pub code: Code,
-    /// The server's message.
-    pub message: String,
-}
-
-impl RelayError {
-    /// A refusal with the code.
-    pub fn new(code: Code, message: impl Into<String>) -> RelayError {
-        RelayError { code, message: message.into() }
-    }
-}
-
-impl fmt::Display for RelayError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "relay: {:?}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for RelayError {}
-
 /// The relay as the sync engine calls it. Every call names the calling
 /// device; the caller's user is the session's.
 #[allow(async_fn_in_trait)] // the core's own seam: the engine and the two implementations are in step
 pub trait Relay {
     /// One batch, one transaction.
-    async fn push_objects(&self, device_id: Uuid, group_id: Uuid, objects: Vec<PushEntry>) -> Result<PushResult, RelayError>;
+    async fn push_objects(&self, device_id: Uuid, group_id: Uuid, objects: Vec<PushEntry>) -> Result<PushResult, ApiError>;
     /// The rows after `since_seq`, at most `limit` (0 for the default page).
-    async fn pull_changes(&self, device_id: Uuid, group_id: Uuid, since_seq: i64, limit: i32) -> Result<ChangeSet, RelayError>;
+    async fn pull_changes(&self, device_id: Uuid, group_id: Uuid, since_seq: i64, limit: i32) -> Result<ChangeSet, ApiError>;
     /// The device holds the group through `seq`.
-    async fn ack_seq(&self, device_id: Uuid, group_id: Uuid, seq: i64) -> Result<AckResult, RelayError>;
+    async fn ack_seq(&self, device_id: Uuid, group_id: Uuid, seq: i64) -> Result<AckResult, ApiError>;
     /// Where the groups stand; a group left out is one the caller is no
     /// longer in.
-    async fn get_heads(&self, device_id: Uuid, group_ids: Vec<Uuid>) -> Result<Vec<Head>, RelayError>;
+    async fn get_heads(&self, device_id: Uuid, group_ids: Vec<Uuid>) -> Result<Vec<Head>, ApiError>;
     /// Rows in the range, or one object, from a holder.
-    async fn request_history(&self, device_id: Uuid, group_id: Uuid, from_seq: i64, to_seq: i64, object_id: Option<Uuid>) -> Result<HistoryRequest, RelayError>;
+    async fn request_history(&self, device_id: Uuid, group_id: Uuid, from_seq: i64, to_seq: i64, object_id: Option<Uuid>) -> Result<HistoryRequest, ApiError>;
     /// The group's requests a holder may claim.
-    async fn list_history_requests(&self, device_id: Uuid, group_id: Uuid) -> Result<Vec<HistoryRequest>, RelayError>;
+    async fn list_history_requests(&self, device_id: Uuid, group_id: Uuid) -> Result<Vec<HistoryRequest>, ApiError>;
     /// Takes a request; the first wins.
-    async fn claim_history(&self, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, RelayError>;
+    async fn claim_history(&self, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, ApiError>;
     /// The claimer's rows, oldest first; `complete` on the last call.
-    async fn push_history(&self, device_id: Uuid, request_id: Uuid, entries: Vec<Entry>, complete: bool) -> Result<PushHistoryResult, RelayError>;
+    async fn push_history(&self, device_id: Uuid, request_id: Uuid, entries: Vec<Entry>, complete: bool) -> Result<PushHistoryResult, ApiError>;
 }

@@ -1,5 +1,5 @@
 {
-  "checksum": "3e0c4e0016978b1e55fb1e2012a7a2b7fba9fbbc3d37bb2f727c1c5c351fd404",
+  "checksum": "3b345935986df36a7a4a41d356e4d70de2b2e4e4b5ae32af70ccabfa07224f1a",
   "conditions": {
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"
@@ -73,6 +73,9 @@
       "x86_64-apple-darwin",
       "x86_64-linux-android",
       "x86_64-unknown-linux-gnu"
+    ],
+    "cfg(target_arch = \"wasm32\")": [
+      "wasm32-unknown-unknown"
     ],
     "cfg(target_arch = \"x86_64\")": [
       "x86_64-apple-darwin",
@@ -1206,48 +1209,58 @@
     },
     "deappje-core 0.1.0": {
       "common_attrs": {
-        "deps": [
-          {
-            "id": "chacha20poly1305 0.10.1",
-            "target": "chacha20poly1305"
-          },
-          {
-            "id": "hkdf 0.12.4",
-            "target": "hkdf"
-          },
-          {
-            "id": "hmac 0.12.1",
-            "target": "hmac"
-          },
-          {
-            "id": "rand_chacha 0.3.1",
-            "target": "rand_chacha"
-          },
-          {
-            "id": "rand_core 0.6.4",
-            "target": "rand_core"
-          },
-          {
-            "id": "sha2 0.10.9",
-            "target": "sha2"
-          },
-          {
-            "id": "uuid 1.29.0",
-            "target": "uuid"
-          },
-          {
-            "id": "x25519-dalek 2.0.1",
-            "target": "x25519_dalek"
-          },
-          {
-            "id": "yrs 0.28.0",
-            "target": "yrs"
-          },
-          {
-            "id": "zeroize 1.9.1",
-            "target": "zeroize"
+        "deps": {
+          "common": [
+            {
+              "id": "chacha20poly1305 0.10.1",
+              "target": "chacha20poly1305"
+            },
+            {
+              "id": "hkdf 0.12.4",
+              "target": "hkdf"
+            },
+            {
+              "id": "hmac 0.12.1",
+              "target": "hmac"
+            },
+            {
+              "id": "rand_chacha 0.3.1",
+              "target": "rand_chacha"
+            },
+            {
+              "id": "rand_core 0.6.4",
+              "target": "rand_core"
+            },
+            {
+              "id": "sha2 0.10.9",
+              "target": "sha2"
+            },
+            {
+              "id": "uuid 1.29.0",
+              "target": "uuid"
+            },
+            {
+              "id": "x25519-dalek 2.0.1",
+              "target": "x25519_dalek"
+            },
+            {
+              "id": "yrs 0.28.0",
+              "target": "yrs"
+            },
+            {
+              "id": "zeroize 1.9.1",
+              "target": "zeroize"
+            }
+          ],
+          "selects": {
+            "cfg(target_arch = \"wasm32\")": [
+              {
+                "id": "wasm-bindgen 0.2.121",
+                "target": "wasm_bindgen"
+              }
+            ]
           }
-        ],
+        },
         "deps_dev": {
           "common": [],
           "selects": {
@@ -1655,7 +1668,7 @@
               "target": "cfg_if"
             },
             {
-              "id": "wasm-bindgen 0.2.130",
+              "id": "wasm-bindgen 0.2.121",
               "target": "wasm_bindgen"
             }
           ],
@@ -2040,7 +2053,7 @@
       ],
       "version": "1.0.18"
     },
-    "js-sys 0.3.107": {
+    "js-sys 0.3.98": {
       "common_attrs": {
         "deps": [
           {
@@ -2048,7 +2061,11 @@
             "target": "cfg_if"
           },
           {
-            "id": "wasm-bindgen 0.2.130",
+            "id": "once_cell 1.21.4",
+            "target": "once_cell"
+          },
+          {
+            "id": "wasm-bindgen 0.2.121",
             "target": "wasm_bindgen"
           }
         ],
@@ -2065,8 +2082,8 @@
       "package_url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys",
       "repository": {
         "Http": {
-          "sha256": "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a",
-          "url": "https://static.crates.io/crates/js-sys/0.3.107/download"
+          "sha256": "67df7112613f8bfd9150013a0314e196f4800d3201ae742489d999db2f979f08",
+          "url": "https://static.crates.io/crates/js-sys/0.3.98/download"
         }
       },
       "targets": [
@@ -2077,7 +2094,7 @@
           }
         }
       ],
-      "version": "0.3.107"
+      "version": "0.3.98"
     },
     "libc 0.2.191": {
       "build_script_attrs": {},
@@ -3396,7 +3413,8 @@
           "parsing",
           "printing",
           "proc-macro",
-          "visit"
+          "visit",
+          "visit-mut"
         ],
         "deps": [
           {
@@ -3445,12 +3463,10 @@
           "clone-impls",
           "default",
           "derive",
-          "extra-traits",
           "full",
           "parsing",
           "printing",
           "proc-macro",
-          "visit",
           "visit-mut"
         ],
         "deps": [
@@ -3781,11 +3797,11 @@
       ],
       "version": "0.11.1+wasi-snapshot-preview1"
     },
-    "wasm-bindgen 0.2.130": {
+    "wasm-bindgen 0.2.121": {
       "build_script_attrs": {
         "link_deps": [
           {
-            "id": "wasm-bindgen-shared 0.2.130",
+            "id": "wasm-bindgen-shared 0.2.121",
             "target": "wasm_bindgen_shared"
           }
         ],
@@ -3798,13 +3814,21 @@
         ]
       },
       "common_attrs": {
+        "crate_features": [
+          "default",
+          "std"
+        ],
         "deps": [
           {
             "id": "cfg-if 1.0.5",
             "target": "cfg_if"
           },
           {
-            "id": "wasm-bindgen-shared 0.2.130",
+            "id": "once_cell 1.21.4",
+            "target": "once_cell"
+          },
+          {
+            "id": "wasm-bindgen-shared 0.2.121",
             "target": "wasm_bindgen_shared"
           }
         ],
@@ -3814,7 +3838,7 @@
         ],
         "proc_macro_deps": [
           {
-            "id": "wasm-bindgen-macro 0.2.130",
+            "id": "wasm-bindgen-macro 0.2.121",
             "target": "wasm_bindgen_macro"
           }
         ]
@@ -3830,8 +3854,8 @@
       "package_url": "https://github.com/wasm-bindgen/wasm-bindgen",
       "repository": {
         "Http": {
-          "sha256": "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c",
-          "url": "https://static.crates.io/crates/wasm-bindgen/0.2.130/download"
+          "sha256": "49ace1d07c165b0864824eee619580c4689389afa9dc9ed3a4c75040d82e6790",
+          "url": "https://static.crates.io/crates/wasm-bindgen/0.2.121/download"
         }
       },
       "targets": [
@@ -3848,9 +3872,9 @@
           }
         }
       ],
-      "version": "0.2.130"
+      "version": "0.2.121"
     },
-    "wasm-bindgen-macro 0.2.130": {
+    "wasm-bindgen-macro 0.2.121": {
       "common_attrs": {
         "deps": [
           {
@@ -3858,7 +3882,7 @@
             "target": "quote"
           },
           {
-            "id": "wasm-bindgen-macro-support 0.2.130",
+            "id": "wasm-bindgen-macro-support 0.2.121",
             "target": "wasm_bindgen_macro_support"
           }
         ],
@@ -3875,8 +3899,8 @@
       "package_url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro",
       "repository": {
         "Http": {
-          "sha256": "6e931a02a39abdbf66966fc35902b5ed58344750a70885bed4ebb3d8eaf28ed9",
-          "url": "https://static.crates.io/crates/wasm-bindgen-macro/0.2.130/download"
+          "sha256": "8e68e6f4afd367a562002c05637acb8578ff2dea1943df76afb9e83d177c8578",
+          "url": "https://static.crates.io/crates/wasm-bindgen-macro/0.2.121/download"
         }
       },
       "targets": [
@@ -3887,9 +3911,9 @@
           }
         }
       ],
-      "version": "0.2.130"
+      "version": "0.2.121"
     },
-    "wasm-bindgen-macro-support 0.2.130": {
+    "wasm-bindgen-macro-support 0.2.121": {
       "common_attrs": {
         "deps": [
           {
@@ -3905,11 +3929,11 @@
             "target": "quote"
           },
           {
-            "id": "syn 3.0.9",
+            "id": "syn 2.0.119",
             "target": "syn"
           },
           {
-            "id": "wasm-bindgen-shared 0.2.130",
+            "id": "wasm-bindgen-shared 0.2.121",
             "target": "wasm_bindgen_shared"
           }
         ],
@@ -3923,11 +3947,11 @@
         "MIT"
       ],
       "name": "wasm-bindgen-macro-support",
-      "package_url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/main/crates/macro-support",
+      "package_url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support",
       "repository": {
         "Http": {
-          "sha256": "2ca4b54280e455bd831e33a6b8e734baf432fe63fbc35c42ac14ce67a043a53a",
-          "url": "https://static.crates.io/crates/wasm-bindgen-macro-support/0.2.130/download"
+          "sha256": "d95a9ec35c64b2a7cb35d3fead40c4238d0940c86d107136999567a4703259f2",
+          "url": "https://static.crates.io/crates/wasm-bindgen-macro-support/0.2.121/download"
         }
       },
       "targets": [
@@ -3938,9 +3962,9 @@
           }
         }
       ],
-      "version": "0.2.130"
+      "version": "0.2.121"
     },
-    "wasm-bindgen-shared 0.2.130": {
+    "wasm-bindgen-shared 0.2.121": {
       "build_script_attrs": {
         "links": "wasm_bindgen"
       },
@@ -3967,8 +3991,8 @@
       "package_url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared",
       "repository": {
         "Http": {
-          "sha256": "3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e",
-          "url": "https://static.crates.io/crates/wasm-bindgen-shared/0.2.130/download"
+          "sha256": "c4e0100b01e9f0d03189a92b96772a1fb998639d981193d7dbab487302513441",
+          "url": "https://static.crates.io/crates/wasm-bindgen-shared/0.2.121/download"
         }
       },
       "targets": [
@@ -3985,7 +4009,7 @@
           }
         }
       ],
-      "version": "0.2.130"
+      "version": "0.2.121"
     },
     "windows-link 0.2.1": {
       "common_attrs": {
@@ -4365,6 +4389,7 @@
     "rand_core 0.6.4",
     "sha2 0.10.9",
     "uuid 1.29.0",
+    "wasm-bindgen 0.2.121",
     "x25519-dalek 2.0.1",
     "yrs 0.28.0",
     "zeroize 1.9.1"
