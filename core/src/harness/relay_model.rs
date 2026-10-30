@@ -4,7 +4,7 @@
 //! fills (the real relay asks `group`); the wake-ups `device` would push
 //! are queued per device for the test to deliver.
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 use std::collections::{BTreeMap, VecDeque};
 
 use uuid::Uuid;
@@ -115,8 +115,8 @@ struct Inner {
 
 /// The model.
 pub struct RelayModel {
-    inner: RefCell<Inner>,
-    rng: RefCell<CoreRng>,
+    inner: Mutex<Inner>,
+    rng: Mutex<CoreRng>,
 }
 
 fn err(code: Code, message: impl Into<String>) -> ApiError {
@@ -181,23 +181,23 @@ impl Inner {
 impl RelayModel {
     /// A model at time 0 with no groups.
     pub fn new(seed: [u8; 32]) -> RelayModel {
-        RelayModel { inner: RefCell::new(Inner::default()), rng: RefCell::new(CoreRng::from_seed(seed)) }
+        RelayModel { inner: Mutex::new(Inner::default()), rng: Mutex::new(CoreRng::from_seed(seed)) }
     }
 
     /// Registers a device as a user's.
     pub fn register_device(&self, device_id: Uuid, user_id: Uuid) {
-        self.inner.borrow_mut().device_user.insert(device_id, user_id);
+        self.inner.lock().expect("no poison").device_user.insert(device_id, user_id);
     }
 
     /// Makes a user a member of a group with a role.
     pub fn add_member(&self, group_id: Uuid, user_id: Uuid, role: Role) {
-        self.inner.borrow_mut().members.insert((group_id, user_id), role);
+        self.inner.lock().expect("no poison").members.insert((group_id, user_id), role);
     }
 
     /// Removes a user from a group; its devices' rows go with it, as
     /// `DeviceLeftGroup` does.
     pub fn remove_member(&self, group_id: Uuid, user_id: Uuid) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock().expect("no poison");
         inner.members.remove(&(group_id, user_id));
         let devices: Vec<Uuid> = inner.device_user.iter().filter(|(_, u)| **u == user_id).map(|(d, _)| *d).collect();
         for d in devices {
@@ -207,32 +207,32 @@ impl RelayModel {
 
     /// The clock.
     pub fn now_ms(&self) -> i64 {
-        self.inner.borrow().now_ms
+        self.inner.lock().expect("no poison").now_ms
     }
 
     /// Moves the clock forward.
     pub fn advance(&self, ms: i64) {
-        self.inner.borrow_mut().now_ms += ms;
+        self.inner.lock().expect("no poison").now_ms += ms;
     }
 
     /// Whether calls fail with `Unavailable` (the network is down).
     pub fn set_outage(&self, outage: bool) {
-        self.inner.borrow_mut().outage = outage;
+        self.inner.lock().expect("no poison").outage = outage;
     }
 
     /// How many calls the model has answered or refused.
     pub fn calls(&self) -> u64 {
-        self.inner.borrow().calls
+        self.inner.lock().expect("no poison").calls
     }
 
     /// The wake-ups queued for a device, oldest first, taken.
     pub fn take_wakeups(&self, device_id: Uuid) -> Vec<Wakeup> {
-        self.inner.borrow_mut().wakeups.remove(&device_id).map(Vec::from).unwrap_or_default()
+        self.inner.lock().expect("no poison").wakeups.remove(&device_id).map(Vec::from).unwrap_or_default()
     }
 
     /// The group's rows as the server holds them, seq ascending.
     pub fn log(&self, group_id: Uuid) -> Vec<Entry> {
-        let inner = self.inner.borrow();
+        let inner = self.inner.lock().expect("no poison");
         let mut rows: Vec<Entry> = inner.objects.iter().filter(|(_, o)| o.group_id == group_id).map(|(id, o)| Entry { id: *id, value: o.value.clone(), seq: o.seq, deleted: o.deleted }).collect();
         rows.sort_by_key(|e| e.seq);
         rows
@@ -240,23 +240,23 @@ impl RelayModel {
 
     /// Where the group stands.
     pub fn head(&self, group_id: Uuid) -> (i64, i64) {
-        let h = self.inner.borrow().head(group_id);
+        let h = self.inner.lock().expect("no poison").head(group_id);
         (h.head_seq, h.evicted_through_seq)
     }
 
     /// A device's ack in a group, if it has a row.
     pub fn ack(&self, group_id: Uuid, device_id: Uuid) -> Option<i64> {
-        self.inner.borrow().ack_of(group_id, device_id)
+        self.inner.lock().expect("no poison").ack_of(group_id, device_id)
     }
 
     /// The open history requests of a group.
     pub fn open_requests(&self, group_id: Uuid) -> usize {
-        self.inner.borrow().requests.values().filter(|r| r.group_id == group_id).count()
+        self.inner.lock().expect("no poison").requests.values().filter(|r| r.group_id == group_id).count()
     }
 
     /// `evict_objects`: by ack, then by age.
     pub fn evict(&self) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock().expect("no poison");
         let groups: Vec<Uuid> = inner.heads.keys().copied().collect();
         for group_id in groups {
             if let Some(min) = inner.min_acked(group_id) {
@@ -283,13 +283,13 @@ impl RelayModel {
 
     /// `expire_history_requests`.
     pub fn expire_requests(&self) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock().expect("no poison");
         let cutoff = inner.now_ms - WINDOW_MS;
         inner.requests.retain(|_, r| r.created_at >= cutoff);
     }
 
-    fn call(&self) -> Result<std::cell::RefMut<'_, Inner>, ApiError> {
-        let mut inner = self.inner.borrow_mut();
+    fn call(&self) -> Result<std::sync::MutexGuard<'_, Inner>, ApiError> {
+        let mut inner = self.inner.lock().expect("no poison");
         inner.calls += 1;
         if inner.outage {
             return Err(err(Code::Unavailable, "the network is down"));
@@ -432,7 +432,7 @@ impl Relay for RelayModel {
         if holders.is_empty() {
             return Ok(inner.request_msg(Uuid::nil(), &row, HistoryStatus::Unfillable));
         }
-        let id = crate::ids::random(&mut self.rng.borrow_mut());
+        let id = crate::ids::random(&mut self.rng.lock().expect("no poison"));
         let msg = inner.request_msg(id, &row, HistoryStatus::Open);
         inner.requests.insert(id, row);
         for d in holders {

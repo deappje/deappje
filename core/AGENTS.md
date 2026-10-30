@@ -57,7 +57,8 @@ from the server's.
 | `src/transport.rs` | The `Transport` seam: one HTTP request, bytes in and out (`fetch`, `URLSession`, `OkHttp`; a recorder in tests). |
 | `src/connect.rs` | `Connect<T>`: unary POSTs to `/api/<package>.<Service>/<Method>` as `application/proto` with `connect-protocol-version: 1` and the session in `x-session-token`; the protocol's JSON error mapped to `Code` (the status when there is none); `Relay` and `Devices` implemented over it; the group and storage services as methods (`Group`, `Membership`, `Invite`, `Presigned`). |
 | `src/kratos.rs` | The native sign-in over Kratos's API flows under `/.ory/`: `start_login` (a flow with a session token exchange code, the `basable` OpenID method, the browser URL from the 422), `finish_login` (the exchange for the session token), `whoami`, `logout`. |
-| `src/harness/` | `RelayModel` (`relay`'s handlers and sweeps rule for rule in memory with a movable clock, membership and the wake-ups `device` would push) and `DevicesModel` (`device`'s key handlers: registration, requests, fulfilment, publishing with the one-publisher rule, a hostile `swap_public_key` for the pin tests); `block_on` for futures that never wait. Public so the shells' tests can drive them. |
+| `src/facade.rs` | `Core`, the one object a shell holds, over the seams as `Arc<dyn ...>`: the device id minted and kept in the secrets, `restore_session`/`start_login`/`finish_login`/`logout`, `register_device`, `set_push_token`, groups (`create_group` with the first key, `create_invite` whose secret becomes an `invite_secret` object, `join` with the invite's tag, `pending_key_requests`/`approve_key_request`, `rotate_keys`, members), `sync` (keys received, every held group pulled and pushed, history served, keys asked for where held none) with a `SyncReport`, objects as `ObjectView` with an `ObjectBody` enum (one variant per type; singletons get their derived id), notes (`read_note`, `save_note` = one session), files (`upload_file`/`download_file`: XChaCha20 under a key of the file's own, nonce ‖ ciphertext in the bucket, AAD group ‖ object ‖ slot). One `async_lock::Mutex` around the state. `CoreError` is the bindings' error. |
+| `src/harness/` | `RelayModel` (`relay`'s handlers and sweeps rule for rule in memory with a movable clock, membership and the wake-ups `device` would push), `DevicesModel` (`device`'s key handlers: registration, requests, fulfilment, publishing with the one-publisher rule, a hostile `swap_public_key` for the pin tests) and `ModelServer` (the whole server behind the `Transport` seam: Connect over both models and a group model, the session from the token header, Kratos's whoami, a bucket for the presigned URLs); `block_on` for futures that never wait. Public so the shells' tests can drive them. |
 
 ## Builds
 
@@ -65,9 +66,32 @@ from the server's.
   the scaffold's `bazel test //...`.
 - `//core:core_wasm`: the cdylib for wasm32 with wasm-bindgen's glue, for
   the web client; it builds in CI so a dependency without a wasm build
-  fails there.
-- The Android and iOS libraries and the UniFFI bindings come with the apps
-  (`docs/01-deappje/05-deployment.md`, "The apps").
+  fails there. `wasm-bindgen` is pinned to the version of the CLI that
+  `rules_rust_wasm_bindgen` runs (the bindgen format must match exactly).
+- `//core:bindings_kotlin` and `//core:bindings_swift`: the UniFFI
+  bindings, generated from a host build of the library (`:core_host`) by
+  `//core/tools/bindgen:uniffi-bindgen`, a binary of this repository over
+  `uniffi_bindgen` without cargo metadata (its own workspace and hub,
+  `bindgen_crates`). Generated on every host build, so an export the
+  generator cannot bind fails before any app build. The Android and iOS
+  libraries themselves come with the apps (`docs/01-deappje/05-deployment.md`).
+
+## The bindings
+
+- Every seam (`Random`, `Clock`, `Secrets`, `DeviceKey`, `Storage`,
+  `Transport`) is a UniFFI foreign trait: Swift and Kotlin implement it,
+  the core holds an `Arc<dyn ...>`. The `MaybeSendSync` supertrait is
+  `Send + Sync` off the browser and nothing on it, so the same traits serve
+  wasm. `Transport::send` is async and boxed through `async-trait`.
+- Every `message!` struct and `wire_enum!` is a record or enum of the
+  bindings (`derive(uniffi::Record)` / `uniffi::Enum` behind
+  `cfg(not(wasm32))`), and a wire enum's variants are declared in wire
+  order from 0 (checked at compile time), since the derive takes no
+  discriminant from a macro. Ids cross as text (`uniffi::custom_type!` on
+  `Uuid`). Async exports must be `Send`: no `RefCell` in anything a `Core`
+  method holds across an await.
+- `uniffi`'s macros read `Cargo.toml` at compile time: it is `compile_data`
+  of every core target.
 
 ## Adding a field or a type
 
@@ -90,6 +114,6 @@ matches. A breaking change is a new type number, never a repurposed field.
 
 ## Still to come
 
-The blob encryption and upload through the presigned URLs, the `Core`
-facade that holds the pieces together for a shell, and its UniFFI and
-wasm-bindgen exports.
+The wasm-bindgen exports of `Core` for the web client (the facade
+compiles for wasm; the JavaScript glue is the frontend's step), the
+timeline projection, the calendar and balance derivations, export.

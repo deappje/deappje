@@ -55,7 +55,9 @@ impl NoteDoc {
         NoteDoc { doc, text, session_start }
     }
 
-    /// Applies one update (a `note_update` child), whenever it arrives.
+    /// Applies one update (a `note_update` child), whenever it arrives. One
+    /// arriving mid-session folds into the session's delta, which is
+    /// harmless: applying an update twice changes nothing.
     pub fn apply(&mut self, update: &[u8]) -> Result<(), UpdateError> {
         let update = Update::decode_v1(update).map_err(|e| UpdateError(e.to_string()))?;
         self.doc.transact_mut().apply_update(update).map_err(|e| UpdateError(e.to_string()))
@@ -124,6 +126,8 @@ impl Syncer<'_> {
                 let _ = doc.apply(&update.body.update);
             }
         }
+        // The session begins at what the children say, not at nothing.
+        doc.end_session();
         Ok(doc)
     }
 

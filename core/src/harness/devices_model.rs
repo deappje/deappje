@@ -2,7 +2,7 @@
 //! rule for rule over maps. Membership is a table the test fills; the
 //! wake-ups the real one pushes are queued per device.
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 use std::collections::{BTreeMap, VecDeque};
 
 use uuid::Uuid;
@@ -77,8 +77,8 @@ struct Inner {
 
 /// The model.
 pub struct DevicesModel {
-    inner: RefCell<Inner>,
-    rng: RefCell<CoreRng>,
+    inner: Mutex<Inner>,
+    rng: Mutex<CoreRng>,
 }
 
 fn err(code: Code, message: impl Into<String>) -> ApiError {
@@ -158,23 +158,23 @@ impl Inner {
 impl DevicesModel {
     /// A model with nothing in it.
     pub fn new(seed: [u8; 32]) -> DevicesModel {
-        DevicesModel { inner: RefCell::new(Inner::default()), rng: RefCell::new(CoreRng::from_seed(seed)) }
+        DevicesModel { inner: Mutex::new(Inner::default()), rng: Mutex::new(CoreRng::from_seed(seed)) }
     }
 
     /// The session behind a device: who the server takes the caller to be.
     pub fn session(&self, device_id: Uuid, user_id: Uuid) {
-        self.inner.borrow_mut().sessions.insert(device_id, user_id);
+        self.inner.lock().expect("no poison").sessions.insert(device_id, user_id);
     }
 
     /// Makes a user a member of a group with a role.
     pub fn add_member(&self, group_id: Uuid, user_id: Uuid, role: Role) {
-        self.inner.borrow_mut().members.insert((group_id, user_id), role);
+        self.inner.lock().expect("no poison").members.insert((group_id, user_id), role);
     }
 
     /// `MemberRemoved`: the user's devices lose their keys and requests
     /// for the group; the remaining holders are told to rotate.
     pub fn remove_member(&self, group_id: Uuid, user_id: Uuid) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock().expect("no poison");
         inner.members.remove(&(group_id, user_id));
         let gone: Vec<Uuid> = inner.devices.iter().filter(|(_, d)| d.user_id == user_id).map(|(id, _)| *id).collect();
         inner.keys.retain(|k| !(k.group_id == group_id && gone.contains(&k.device_id)));
@@ -186,7 +186,7 @@ impl DevicesModel {
 
     /// `RemoveDevice`: the device, its keys and its requests go.
     pub fn remove_device(&self, device_id: Uuid) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock().expect("no poison");
         inner.devices.remove(&device_id);
         inner.keys.retain(|k| k.device_id != device_id);
         inner.requests.retain(|_, r| r.device_id != device_id);
@@ -194,33 +194,33 @@ impl DevicesModel {
 
     /// A test's hostile server: reports another public key for a device.
     pub fn swap_public_key(&self, device_id: Uuid, public_key: [u8; 32]) {
-        if let Some(d) = self.inner.borrow_mut().devices.get_mut(&device_id) {
+        if let Some(d) = self.inner.lock().expect("no poison").devices.get_mut(&device_id) {
             d.public_key = public_key.to_vec();
         }
     }
 
     /// Whether calls fail with `Unavailable`.
     pub fn set_outage(&self, outage: bool) {
-        self.inner.borrow_mut().outage = outage;
+        self.inner.lock().expect("no poison").outage = outage;
     }
 
     /// The wake-ups queued for a device, taken.
     pub fn take_wakeups(&self, device_id: Uuid) -> Vec<DeviceWakeup> {
-        self.inner.borrow_mut().wakeups.remove(&device_id).map(Vec::from).unwrap_or_default()
+        self.inner.lock().expect("no poison").wakeups.remove(&device_id).map(Vec::from).unwrap_or_default()
     }
 
     /// The devices holding a key of the group, as the server counts them.
     pub fn holders(&self, group_id: Uuid) -> Vec<Uuid> {
-        self.inner.borrow().holder_devices(group_id)
+        self.inner.lock().expect("no poison").holder_devices(group_id)
     }
 
     /// The open requests of a group.
     pub fn open_requests(&self, group_id: Uuid) -> usize {
-        self.inner.borrow().requests.values().filter(|r| r.group_id == group_id).count()
+        self.inner.lock().expect("no poison").requests.values().filter(|r| r.group_id == group_id).count()
     }
 
-    fn call(&self) -> Result<std::cell::RefMut<'_, Inner>, ApiError> {
-        let inner = self.inner.borrow_mut();
+    fn call(&self) -> Result<std::sync::MutexGuard<'_, Inner>, ApiError> {
+        let inner = self.inner.lock().expect("no poison");
         if inner.outage {
             return Err(err(Code::Unavailable, "the network is down"));
         }
@@ -266,7 +266,7 @@ impl Devices for DevicesModel {
             let (id, r) = (*id, r.clone());
             return inner.request_msg(id, &r);
         }
-        let id = crate::ids::random(&mut self.rng.borrow_mut());
+        let id = crate::ids::random(&mut self.rng.lock().expect("no poison"));
         let row = RequestRow { group_id, device_id, invite_id, invite_tag: invite_tag.map(|t| t.to_vec()).unwrap_or_default(), created_at_ms: inner.now_ms };
         let msg = inner.request_msg(id, &row)?;
         inner.requests.insert(id, row);
@@ -319,7 +319,7 @@ impl Devices for DevicesModel {
             return Err(err(Code::FailedPrecondition, "the requesting device's user is no longer a member"));
         }
         for (key_id, wrapped) in keys {
-            let id = crate::ids::random(&mut self.rng.borrow_mut());
+            let id = crate::ids::random(&mut self.rng.lock().expect("no poison"));
             inner.insert_key(request.group_id, key_id, request.device_id, wrapped, device_id, id);
         }
         inner.requests.remove(&request_id);
@@ -360,7 +360,7 @@ impl Devices for DevicesModel {
             if inner.role(d.user_id, group_id).is_none() {
                 continue;
             }
-            let id = crate::ids::random(&mut self.rng.borrow_mut());
+            let id = crate::ids::random(&mut self.rng.lock().expect("no poison"));
             inner.insert_key(group_id, key_id, w.device_id, w.wrapped.clone(), device_id, id);
         }
         let landed: Vec<WrappedKey> = inner.keys.iter().filter(|k| k.group_id == group_id && k.key_id == key_id && targets.contains(&k.device_id)).map(|k| inner.key_msg(k)).collect();

@@ -947,3 +947,149 @@ impl Core {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness::{ModelServer, block_on};
+    use crate::shell::{FixedClock, MemorySecrets, MemoryStorage, SeededRandom, SoftwareDeviceKey};
+
+    /// A phone: a core over the in-memory server, signed in as `user`
+    /// through a kept session token, its device registered.
+    fn phone(server: &Arc<ModelServer>, n: u8, user: Uuid) -> Arc<Core> {
+        let token = format!("tok-{n}");
+        server.session(&token, user);
+        let secrets = Arc::new(MemorySecrets::new());
+        secrets.set_secret(SECRET_SESSION_TOKEN.to_owned(), token);
+        let mut rng = CoreRng::from_seed([n; 32]);
+        let key = Arc::new(SoftwareDeviceKey::generate(&mut rng));
+        let transport: Arc<dyn Transport> = server.clone();
+        let core = Core::new(transport, Arc::new(MemoryStorage::new()), secrets, key, Arc::new(SeededRandom::new([n; 32])), Arc::new(FixedClock::at(1_000 + i64::from(n))), "https://app.example".to_owned());
+        let identity = block_on(core.restore_session()).unwrap().expect("the kept token signs in");
+        assert_eq!(identity.id, user.to_string());
+        block_on(core.register_device(if n.is_multiple_of(2) { "ios".to_owned() } else { "android".to_owned() })).unwrap();
+        core
+    }
+
+    #[test]
+    fn two_phones_share_a_group_through_the_whole_facade() {
+        let server = Arc::new(ModelServer::new("https://app.example", [1; 32]));
+        let (ua, ub) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let a = phone(&server, 1, ua);
+        let b = phone(&server, 2, ub);
+        assert_eq!(block_on(a.user_id()), Some(ua));
+
+        // A makes the group, its profile and an invite link; B joins.
+        let g = block_on(a.create_group(None)).unwrap();
+        let profile = block_on(a.create_object(g, None, ObjectBody::GroupProfile(GroupProfile { name: "Us".into(), ..Default::default() }))).unwrap();
+        assert_eq!(profile, a.group_profile_id(g));
+        let report = block_on(a.sync()).unwrap();
+        assert!(report.changed.contains(&g), "{report:?}");
+        assert!(report.failed.is_empty(), "{report:?}");
+        let link = block_on(a.create_invite(g, "member".into(), 0, 0)).unwrap();
+        assert!(link.starts_with("/join/"), "{link}");
+        block_on(a.sync()).unwrap();
+        let joined = block_on(b.join(link)).unwrap();
+        assert_eq!(joined.group_id, g);
+        assert!(!block_on(b.list_groups()).unwrap()[0].holds_keys);
+
+        // A sees the request with the invite vouching for it, approves.
+        let pending = block_on(a.pending_key_requests()).unwrap();
+        assert_eq!(pending.len(), 1, "{pending:?}");
+        assert_eq!(pending[0].invite_verified, Some(true));
+        assert_eq!(pending[0].fingerprint, block_on(b.fingerprint()));
+        assert_eq!(pending[0].user_id, ub);
+        block_on(a.approve_key_request(pending[0].request_id)).unwrap();
+        let report = block_on(b.sync()).unwrap();
+        assert_eq!(report.keys_received, vec![g], "{report:?}");
+        assert!(report.changed.contains(&g));
+        assert!(block_on(b.list_groups()).unwrap()[0].holds_keys);
+        let objects = block_on(b.list_objects(g));
+        assert!(objects.iter().any(|o| matches!(&o.body, ObjectBody::GroupProfile(p) if p.name == "Us")), "{objects:?}");
+
+        // B posts; A sees it; A edits it; B sees the edit.
+        let post = block_on(b.create_object(g, None, ObjectBody::Post(Post { text: "hello".into() }))).unwrap();
+        assert!(block_on(b.read_object(g, post)).unwrap().pending);
+        block_on(b.sync()).unwrap();
+        block_on(a.sync()).unwrap();
+        let seen = block_on(a.read_object(g, post)).unwrap();
+        assert_eq!((seen.author, seen.pending, seen.seq > 0), (ub, false, true));
+        block_on(a.edit_object(g, post, ObjectBody::Post(Post { text: "hello!".into() }))).unwrap();
+        block_on(a.sync()).unwrap();
+        block_on(b.sync()).unwrap();
+        assert!(matches!(block_on(b.read_object(g, post)).unwrap().body, ObjectBody::Post(Post { ref text }) if text == "hello!"));
+        assert!(matches!(block_on(a.create_object(g, None, ObjectBody::Comment(Comment { text: "x".into() }))), Err(CoreError::Invalid { .. })), "a comment needs a parent");
+
+        // Notes.
+        let note = block_on(a.create_object(g, None, ObjectBody::Note(Note { title: "List".into() }))).unwrap();
+        assert!(block_on(a.save_note(g, note, "milk\n".into())).unwrap());
+        assert!(!block_on(a.save_note(g, note, "milk\n".into())).unwrap(), "nothing new");
+        block_on(a.sync()).unwrap();
+        block_on(b.sync()).unwrap();
+        assert_eq!(block_on(b.read_note(g, note)).unwrap(), "milk\n");
+
+        // Files: a photo under the post, its bytes in the bucket.
+        let photo = block_on(b.create_object(g, Some(post), ObjectBody::Photo(Photo { width: 1, height: 1, ..Default::default() }))).unwrap();
+        let file = block_on(b.upload_file(g, photo, "full".into(), vec![7; 1000])).unwrap();
+        assert!(server.bucket_has(&blob_key(g, photo, "full")));
+        assert_eq!(file.size, 1000 + 24 + 16);
+        block_on(b.edit_object(g, photo, ObjectBody::Photo(Photo { width: 1, height: 1, full: Some(file.clone()), ..Default::default() }))).unwrap();
+        block_on(b.sync()).unwrap();
+        block_on(a.sync()).unwrap();
+        let ObjectBody::Photo(p) = block_on(a.read_object(g, photo)).unwrap().body else { panic!("a photo") };
+        assert_eq!(block_on(a.download_file(g, photo, p.full.unwrap())).unwrap(), vec![7; 1000]);
+
+        // Deleting the post takes the photo with it.
+        block_on(b.delete_object(g, post)).unwrap();
+        block_on(b.sync()).unwrap();
+        block_on(a.sync()).unwrap();
+        assert!(block_on(a.read_object(g, post)).is_none());
+        assert!(block_on(a.read_object(g, photo)).is_none());
+
+        // A's second phone: a member without keys asks, A approves as its
+        // own, and it catches up on everything.
+        let a2 = phone(&server, 3, ua);
+        let report = block_on(a2.sync()).unwrap();
+        assert!(report.keys_received.is_empty() && report.failed.is_empty(), "{report:?}");
+        let pending = block_on(a.pending_key_requests()).unwrap();
+        assert_eq!(pending.len(), 1, "{pending:?}");
+        assert_eq!(pending[0].invite_verified, None, "no invite: the fingerprint decides");
+        block_on(a.approve_key_request(pending[0].request_id)).unwrap();
+        let report = block_on(a2.sync()).unwrap();
+        assert_eq!(report.keys_received, vec![g]);
+        assert_eq!(block_on(a2.read_note(g, note)).unwrap(), "milk\n");
+
+        // B is removed; A rotates; what A writes after is not B's to read.
+        block_on(a.remove_member(g, ub)).unwrap();
+        block_on(a.rotate_keys(g)).unwrap();
+        let after = block_on(a.create_object(g, None, ObjectBody::Post(Post { text: "after".into() }))).unwrap();
+        block_on(a.sync()).unwrap();
+        let report = block_on(b.sync()).unwrap();
+        assert!(report.changed.is_empty(), "B is in no group now: {report:?}");
+        assert!(block_on(b.read_object(g, after)).is_none());
+        let report = block_on(a2.sync()).unwrap();
+        assert_eq!(report.keys_received, vec![g], "the rotation reached A's other phone: {report:?}");
+        assert!(block_on(a2.read_object(g, after)).is_some());
+
+        // A reopened core over the same storage and secrets holds the same.
+        let storage = Arc::new(MemoryStorage::new());
+        let secrets = Arc::new(MemorySecrets::new());
+        secrets.set_secret(SECRET_SESSION_TOKEN.to_owned(), "tok-9".to_owned());
+        server.session("tok-9", ua);
+        let mut rng = CoreRng::from_seed([9; 32]);
+        let key = Arc::new(SoftwareDeviceKey::generate(&mut rng));
+        let transport: Arc<dyn Transport> = server.clone();
+        let fresh = Core::new(transport.clone(), storage.clone(), secrets.clone(), key.clone(), Arc::new(SeededRandom::new([9; 32])), Arc::new(FixedClock::at(5_000)), "https://app.example".to_owned());
+        block_on(fresh.restore_session()).unwrap();
+        block_on(fresh.register_device("web".to_owned())).unwrap();
+        block_on(fresh.sync()).unwrap();
+        let pending = block_on(a.pending_key_requests()).unwrap();
+        block_on(a.approve_key_request(pending[0].request_id)).unwrap();
+        block_on(fresh.sync()).unwrap();
+        let device_id = block_on(fresh.device_id());
+        drop(fresh);
+        let again = Core::new(transport, storage, secrets, key, Arc::new(SeededRandom::new([9; 32])), Arc::new(FixedClock::at(6_000)), "https://app.example".to_owned());
+        assert_eq!(block_on(again.device_id()), device_id, "the device id is kept");
+        assert!(block_on(again.list_objects(g)).iter().any(|o| o.id == after), "the store and the keys are kept");
+    }
+}

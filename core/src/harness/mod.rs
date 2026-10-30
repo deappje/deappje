@@ -7,12 +7,14 @@
 
 mod devices_model;
 mod relay_model;
+mod server;
 
 use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
 pub use devices_model::{DeviceWakeup, DevicesModel};
+pub use server::ModelServer;
 pub use relay_model::{CLAIM_TAKEOVER_MS, DEFAULT_PAGE, MAX_PAGE, MAX_VALUE_BYTES, RelayModel, Role, WINDOW_MS, Wakeup};
 
 /// Runs a future that never waits (the model answers at once): the tests'
