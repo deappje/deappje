@@ -5,9 +5,17 @@
       "@type": "storage.v1.SlotConfiguration",
       "header": {
         "namespace": "#{NamespaceConfiguration:default}",
-        "name": "example"
+        "name": "full"
       },
-      "max_size_bytes": 0
+      "max_size_bytes": 26214400
+    },
+    {
+      "@type": "storage.v1.SlotConfiguration",
+      "header": {
+        "namespace": "#{NamespaceConfiguration:default}",
+        "name": "file"
+      },
+      "max_size_bytes": 26214400
     }
   ]
 }

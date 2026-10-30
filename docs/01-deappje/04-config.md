@@ -9,7 +9,7 @@ or lives on the client.
 |---|---|---|
 | max_size_bytes | int64 | refused above this at `PresignUploadRequest` |
 
-Seed, `config/base/storage/slot.json`, namespace `default`:
+Seed, `config/base/slot.json` (the scaffold's layout), namespace `default`:
 
 | name | max_size_bytes |
 |---|---|
@@ -26,8 +26,9 @@ live inside the object's value, capped by the client at 64 KiB (`06-object-types
 |---|---|---|
 | max_bytes_per_168h | int64 | `PresignUploadRequest` refuses when the group's uploads of the last 168 hours plus this one would exceed it |
 
-Seed, `config/base/storage/storage_quota.json`, namespace `default`: one entry, `default`,
-`21474836480` (20 GiB).
+Seed, `config/base/storage_quota.dev.prod.json`, namespace `default`: one entry, `default`,
+`21474836480` (20 GiB); `storage_quota.test.json` gives the tests a 4 MiB one. The app applies
+the directory at boot (`app/src/main.rs`, `CONFIG_ENV` picks the files).
 
 ## Not config
 

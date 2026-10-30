@@ -4,21 +4,16 @@
 //! What this nanoservice owns is what it is: 0 processing-object
 //! type(s), 1 plain table(s), 1 external call(s).
 
-// A rendered skeleton has stubs nothing calls yet; the allow goes once the
-// bodies are filled.
-#![allow(dead_code)]
-
-use basable_core::AppError;
 use basable_db::{NanoPool, Nanoservice, Stateful};
 
-pub mod handlers;
-pub mod effects;
-pub mod provider;
-pub mod simulator;
-pub mod model;
-pub mod repository;
-pub mod worker;
 pub mod config;
+pub mod effects;
+pub mod handlers;
+pub mod model;
+pub mod provider;
+mod repository;
+pub mod simulator;
+pub mod worker;
 
 /// The schema marker: this nanoservice owns `nano_storage` and gets a
 /// pool bound to it (`SET ROLE nano_storage`). A cross-schema query
@@ -35,16 +30,22 @@ impl Stateful for Schema {}
 pub struct Storage {
     pub(crate) pool: NanoPool<Schema>,
     pub(crate) calls: effects::Calls,
+    /// The catalogs (`slot`, `storage_quota`), read per request.
+    pub(crate) config: basable_config::Repository,
 }
 
 impl Storage {
-    /// Builds the component. Called once from `app/src/main.rs`.
-    pub fn new(_app: &basable_app::App, pool: NanoPool<Schema>) -> Self {
-        Self {
-            pool,
-            // Production wires the real provider; tests wire the simulator.
-            calls: effects::Calls::from_env(),
-        }
+    /// Builds the component. Called once from `app/src/main.rs`, with the
+    /// config repository main built over the registered types.
+    pub fn new(_app: &basable_app::App, pool: NanoPool<Schema>, config: basable_config::Repository) -> Self {
+        // Production wires the real provider; tests wire the simulator.
+        Self::with_calls(pool, effects::Calls::from_env(), config)
+    }
+
+    /// The component over an explicit adapter set: what the tests build,
+    /// with `effects::Calls::new(simulator)`.
+    pub fn with_calls(pool: NanoPool<Schema>, calls: effects::Calls, config: basable_config::Repository) -> Self {
+        Self { pool, calls, config }
     }
 }
 
@@ -62,12 +63,4 @@ where
         basable_app::Loops::new()
             .ticker(basable_app::Ticker::new("expire_usage", std::time::Duration::from_secs(3600), move |ctx| Box::pin(self.tick_expire_usage(ctx, sender))))
     }
-}
-
-/// The error a step not filled in yet answers with, so the skeleton deploys
-/// green instead of panicking. `regex_search unimplemented_step` lists what
-/// is left.
-pub(crate) fn unimplemented_step(step: &'static str) -> AppError {
-    tracing::warn!(step, "unimplemented step reached");
-    AppError::unimplemented(step)
 }

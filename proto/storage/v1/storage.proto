@@ -2,25 +2,39 @@ syntax = "proto3";
 
 package storage.v1;
 
-// StorageService: the API of nanoservice `storage`. Fill the
-// message fields; the build regenerates the Rust types and the Connect stubs.
+// StorageService: the API of nanoservice `storage`. Every method needs a
+// Kratos session; the caller is the session's identity. A file lives in
+// the environment's private bucket under g/<group_id>/o/<object_id>/<slot>;
+// the answer is a presigned URL the client uses as it is
+// (docs/01-deappje/02-storage.md).
 service StorageService {
   rpc PresignUpload(PresignUploadRequest) returns (PresignUploadResponse);
   rpc PresignDownload(PresignDownloadRequest) returns (PresignDownloadResponse);
 }
 
+// A presigned PUT for key under the caller's group, of exactly size bytes
+// (the slot's cap and the group's quota apply; the PUT is signed for that
+// Content-Length).
 message PresignUploadRequest {
-  // TODO: the request fields.
+  string group_id = 1;
+  string key = 2;
+  int64 size = 3;
 }
 
 message PresignUploadResponse {
-  // TODO: the response fields.
+  string key = 1;
+  string url = 2;
+  int64 expires_at_ms = 3;
 }
 
+// A presigned GET for key under the caller's group.
 message PresignDownloadRequest {
-  // TODO: the request fields.
+  string group_id = 1;
+  string key = 2;
 }
 
 message PresignDownloadResponse {
-  // TODO: the response fields.
+  string key = 1;
+  string url = 2;
+  int64 expires_at_ms = 3;
 }

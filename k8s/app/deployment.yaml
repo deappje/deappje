@@ -35,9 +35,17 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          # The environment's buckets (nanoservices/storage): the platform
+          # writes the object-storage Secret, and the app reads it whole.
+          envFrom:
+            - secretRef:
+                name: object-storage
           env:
             - name: PORT
               value: "8080"
+            # The config seed the image carries (config/BUILD.bazel).
+            - name: CONFIG_SEED_DIR
+              value: /config/base
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -51,6 +59,44 @@ spec:
             # purge deletes the identity through it (nanoservices/group).
             - name: KRATOS_ADMIN_URL
               value: http://kratos-admin:4434
+            # The push services (nanoservices/device). Optional on purpose:
+            # a deploy does not wait for them, and until they are added
+            # the app logs and skips every wake-up (clients poll heads on
+            # foreground). APNS_KEY_P8 is the .p8 push key's PEM text from
+            # the Apple Developer account (Keys), with its key id and the
+            # team id, and the app's bundle id as the topic;
+            # FCM_SERVICE_ACCOUNT_JSON is a Firebase service account's JSON
+            # with the Messaging role. docs/01-deappje/05-deployment.md.
+            - name: APNS_KEY_P8
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: APNS_KEY_P8
+                  optional: true
+            - name: APNS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: APNS_KEY_ID
+                  optional: true
+            - name: APNS_TEAM_ID
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: APNS_TEAM_ID
+                  optional: true
+            - name: APNS_BUNDLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: APNS_BUNDLE_ID
+                  optional: true
+            - name: FCM_SERVICE_ACCOUNT_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: FCM_SERVICE_ACCOUNT_JSON
+                  optional: true
             - name: RUST_LOG
               value: info
             # A user-supplied secret (a provider's API key, a webhook's

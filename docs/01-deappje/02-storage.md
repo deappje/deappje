@@ -83,6 +83,36 @@ downloader's hash check still applies.
 
 `StorageService`: PresignUpload, PresignDownload.
 
+## Implementation record
+
+What the code settled beyond the text above (`nanoservices/storage`, 2026-10-30):
+
+- **The config framework is wired by hand.** The scaffold renders the binders (`config.rs`) and
+  the seed, but nothing loaded them: `app/src/main.rs` now registers `storage::config` on a
+  `ConfigTypesBuilder`, applies `config/base` with `load_seed` at boot (`CONFIG_SEED_DIR`,
+  `/config/base` in the image through a layer `config/BUILD.bazel` adds; `CONFIG_ENV`, `prod`
+  by default) and hands `storage` a `basable_config::Repository` over the framework pool.
+- **The seed.** `config/base/slot.json` (`full`, `file`, 25 MiB) and
+  `storage_quota.dev.prod.json` (`default`, 20 GiB), beside `storage_quota.test.json`
+  (`default`, 4 MiB) so the integration tests reach the quota in a few declared uploads. The
+  scaffold's layout, not the `config/base/storage/` the text named.
+- **Signature Version 4 by hand** over `ring` (already in the graph), no AWS SDK: signed
+  path-style requests at `AWS_ENDPOINT_URL_S3` for `DeleteObject` and `ListObjectsV2` (the keys
+  read out of the XML by hand; the application's keys carry no special characters), and
+  virtual-hosted presigned URLs whose origin is replaced by `S3_PRIVATE_URL`, as the platform
+  contract describes. A presigned PUT signs `content-length`, so the declared size is the size
+  that lands. `AWS_ACCESS_KEY_ID` and friends come from the `object-storage` Secret through
+  `envFrom` in `k8s/app/deployment.yaml`.
+- **The quota is exact under concurrency**: the hour row's lock (`INSERT ... ON CONFLICT DO
+  UPDATE`) serializes a group's presigns within the hour, and an upload over the cap is rolled
+  back out of the counter. The cap is a closed bound: exactly at it is accepted.
+- **Key shape is one rule** (`parse_key`): `g/<group>/o/<object>/<slot>`, the object id in
+  canonical form, the slot lowercase letters, digits, `-` and `_`; nothing else reaches the
+  bucket, so no segment is ever empty, `.` or `..` (the gateway normalises those and a signed
+  path would no longer match).
+- **Deletes**: a tombstone lists the object's prefix and deletes each key; a purge lists a
+  thousand keys of the group, deletes each, and answers what a fresh listing still shows.
+
 ## Tests
 
 - Unit: key parsing (prefix, slot; `..` and empty segments refused); quota at the boundary over

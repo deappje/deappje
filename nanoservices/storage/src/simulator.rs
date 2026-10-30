@@ -1,9 +1,9 @@
-//! The in-memory simulator of object_storage: idempotent by
-//! key, counts what landed, injects faults. Drives the effect audit and the
-//! integration tests; the receiver's store the audit's `landed_count`
-//! observes.
+//! The in-memory simulator of the bucket: `put`, `get`, `list`, `delete`,
+//! idempotent by key, with ack loss and refusal on delete. Drives the
+//! effect audit and the integration tests; the receiver's store the
+//! audit's `landed_count` observes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard};
 
 use basable_core::{BoxError, Ctx};
@@ -19,6 +19,8 @@ pub struct Simulator {
 
 #[derive(Default)]
 struct Inner {
+    /// The bucket: key to bytes.
+    objects: BTreeMap<String, Vec<u8>>,
     /// The distinct keys that landed, per operation.
     landed: HashMap<&'static str, HashSet<String>>,
     /// Per-operation fault: the next N calls fail this way.
@@ -37,6 +39,21 @@ pub enum Fault {
 impl Simulator {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// What a presigned PUT does: the bytes land under the key.
+    pub fn put(&self, key: &str, bytes: Vec<u8>) {
+        self.lock().objects.insert(key.to_owned(), bytes);
+    }
+
+    /// What a presigned GET does.
+    pub fn get(&self, key: &str) -> Option<Vec<u8>> {
+        self.lock().objects.get(key).cloned()
+    }
+
+    /// Every key, in order.
+    pub fn keys(&self) -> Vec<String> {
+        self.lock().objects.keys().cloned().collect()
     }
 
     /// How many distinct keys landed for an operation.
@@ -72,6 +89,7 @@ impl Simulator {
             return Err(definitive(format!("{op}: refused")));
         }
         inner.landed.entry(op).or_default().insert(key.to_owned());
+        inner.objects.remove(key);
         if let Some(Fault::AckLoss) = fault {
             return Err(TransportError::wrap(format!("{op}: connection reset after the write")));
         }
@@ -82,8 +100,18 @@ impl Simulator {
 impl Provider for Simulator {
     async fn delete_object(&self, _ctx: Ctx, args: DeleteObjectArgs) -> Result<DeleteObjectResult, BoxError> {
         self.apply("delete_object", &args.key)?;
-        Ok(DeleteObjectResult {
-            provider_id: args.key.clone(),
-        })
+        Ok(DeleteObjectResult { key: args.key })
+    }
+
+    async fn list_keys(&self, _ctx: Ctx, prefix: String, limit: usize) -> Result<Vec<String>, BoxError> {
+        Ok(self.lock().objects.keys().filter(|k| k.starts_with(&prefix)).take(limit).cloned().collect())
+    }
+
+    fn presign(&self, args: PresignArgs) -> Result<String, BoxError> {
+        let method = match args.method {
+            PresignMethod::Put { size } => format!("put&size={size}"),
+            PresignMethod::Get => "get".to_owned(),
+        };
+        Ok(format!("sim://bucket/{}?{method}&expires={}", args.key, args.expires.as_secs()))
     }
 }

@@ -17,7 +17,7 @@ audit!(delete_object, || async {
     Harness::new(
         calls.delete_object.clone(),
         || DeleteObjectArgs {
-            key: "delete_object-1".into(),
+            key: "g/group/o/object/full".into(),
         },
         move || {
             let sim = landed.clone();

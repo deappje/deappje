@@ -17,9 +17,11 @@ mod config;
 mod migrations;
 
 use std::fmt;
+use std::path::Path;
 use std::process::ExitCode;
 
 use basable_app::{App, Validator};
+use basable_config::{ConfigTypesBuilder, Repository as ConfigRepository, load_seed};
 use messenger::AppMessenger;
 
 // basable:nanoservice-use-begin
@@ -50,12 +52,23 @@ async fn run() -> Result<(), BootError> {
         .await
         .map_err(BootError::Database)?;
 
+    // The declarative catalogs: every type's binder registered, the seed
+    // applied in one transaction (a dangling reference fails before any
+    // write), and the repository the nanoservices read them through.
+    let mut types = ConfigTypesBuilder::new();
+    storage::config::register(&mut types);
+    let types = types.build().map_err(BootError::ConfigTypes)?.shared();
+    load_seed(app.framework_pool(), types.clone(), Path::new(&cfg.config_seed_dir), cfg.config_env)
+        .await
+        .map_err(BootError::Seed)?;
+    let config = ConfigRepository::new(app.framework_pool().clone(), types);
+
     let api = api::Api::new();
     // basable:nanoservice-build-begin
     let group = Group::new(&app, app.pool::<group::Schema>().await.map_err(BootError::Database)?).await;
     let device = Device::new(&app, app.pool::<device::Schema>().await.map_err(BootError::Database)?);
     let relay = Relay::new(&app, app.pool::<relay::Schema>().await.map_err(BootError::Database)?);
-    let storage = Storage::new(&app, app.pool::<storage::Schema>().await.map_err(BootError::Database)?);
+    let storage = Storage::new(&app, app.pool::<storage::Schema>().await.map_err(BootError::Database)?, config);
     // basable:nanoservice-build-end
 
     // The router is passed by shared reference into every handler and
@@ -92,6 +105,10 @@ enum BootError {
     Config(config::ConfigError),
     /// A pool did not answer or a migration is missing: exit 3.
     Database(basable_app::Error),
+    /// Two config types collide on an id, a name or a prefix: exit 2.
+    ConfigTypes(basable_config::RegistryError),
+    /// The config seed could not be applied: exit 3.
+    Seed(basable_config::ConfigError),
     /// The server or a worker failed after boot: exit 1.
     Serve(basable_app::Error),
 }
@@ -99,8 +116,8 @@ enum BootError {
 impl BootError {
     fn exit_code(&self) -> ExitCode {
         match self {
-            BootError::Config(_) => ExitCode::from(2),
-            BootError::Database(_) => ExitCode::from(3),
+            BootError::Config(_) | BootError::ConfigTypes(_) => ExitCode::from(2),
+            BootError::Database(_) | BootError::Seed(_) => ExitCode::from(3),
             BootError::Serve(_) => ExitCode::FAILURE,
         }
     }
@@ -111,6 +128,8 @@ impl fmt::Display for BootError {
         match self {
             BootError::Config(e) => write!(f, "invalid configuration: {e}"),
             BootError::Database(e) => write!(f, "database not ready: {e}"),
+            BootError::ConfigTypes(e) => write!(f, "config types: {e}"),
+            BootError::Seed(e) => write!(f, "config seed not applied: {e}"),
             BootError::Serve(e) => write!(f, "server failed: {e}"),
         }
     }
@@ -121,6 +140,8 @@ impl std::error::Error for BootError {
         match self {
             BootError::Config(e) => Some(e),
             BootError::Database(e) | BootError::Serve(e) => Some(e),
+            BootError::ConfigTypes(e) => Some(e),
+            BootError::Seed(e) => Some(e),
         }
     }
 }

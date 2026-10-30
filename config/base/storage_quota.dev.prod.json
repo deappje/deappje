@@ -1,0 +1,13 @@
+{
+  "configSetName": "storage_quota",
+  "items": [
+    {
+      "@type": "storage.v1.StorageQuotaConfiguration",
+      "header": {
+        "namespace": "#{NamespaceConfiguration:default}",
+        "name": "default"
+      },
+      "max_bytes_per_168h": 21474836480
+    }
+  ]
+}

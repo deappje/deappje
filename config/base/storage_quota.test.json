@@ -5,9 +5,9 @@
       "@type": "storage.v1.StorageQuotaConfiguration",
       "header": {
         "namespace": "#{NamespaceConfiguration:default}",
-        "name": "example"
+        "name": "default"
       },
-      "max_bytes_per_168h": 0
+      "max_bytes_per_168h": 4194304
     }
   ]
 }
