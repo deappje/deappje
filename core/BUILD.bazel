@@ -36,6 +36,8 @@ rust_shared_library(
     aliases = aliases(),
     compile_data = ["Cargo.toml"],
     crate_name = "deappje_core",
+    # Only for wasm32: on the host it would write the same dylib as :core_host.
+    target_compatible_with = ["@platforms//cpu:wasm32"],
     deps = all_crate_deps(normal = True),
     proc_macro_deps = all_crate_deps(proc_macro = True),
 )
