@@ -3,9 +3,9 @@ import { useEffect, useState } from "react";
 // The sign-in pages Kratos sends the browser to (selfservice.flows.*.ui_url
 // in k8s/kratos/configmap.yaml): /auth/login, /auth/register,
 // /auth/settings and /auth/error. Each draws its Kratos flow from the flow's
-// own UI nodes, so every method Kratos offers appears with no code here:
-// the email code and "Sign in with Basable" (single sign-on
-// with every app on Basable). A form posts straight to Kratos, which
+// own UI nodes, so every method Kratos offers appears with no code here,
+// which today is one: "Sign in with Basable" (single sign-on with every
+// app on Basable). A form posts straight to Kratos, which
 // answers with the next step of the same flow or with where to go next.
 // The bucket answers /auth/... with index.html, so this app renders them.
 
@@ -46,13 +46,12 @@ function Notices({ messages }: { messages?: UiText[] }) {
   );
 }
 
-// One node of the flow: hidden (the CSRF token, the flow's state), a field
-// (the email, the code) or a submit button (a method, or a provider such as
-// Basable). Passkey nodes need WebAuthn's script and are left out here.
+// One node of the flow: hidden (the CSRF token, the flow's state), a field,
+// or a submit button (a method, or a provider such as Basable).
 function Node({ node }: { node: UiNode }) {
   const a = node.attributes;
   if (node.type === "text") return <p>{a.text?.text}</p>;
-  if (node.type !== "input" || node.group === "passkey" || node.group === "webauthn") return null;
+  if (node.type !== "input") return null;
   const label = node.meta?.label?.text ?? a.name;
   if (a.type === "hidden") return <input type="hidden" name={a.name} value={a.value ?? ""} />;
   if (a.type === "submit" || a.type === "button") {

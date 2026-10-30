@@ -1,19 +1,17 @@
-# Kratos: passwordless email code + passkeys + Sign in with
-# Basable, the identity schema, the self-service flows.
-# TENANT_DOMAIN_PLACEHOLDER is replaced by the platform with the environment's
-# hostname at deploy. The courier SMTP connection below is a localhost
-# placeholder: k8s/kratos/deployment.yaml overrides it with the app-secrets key
-# SMTP_CONNECTION_URI when the user has added one (docs/operations.md); until
-# then sign-in codes are visible in the Kratos logs only.
+# Kratos: Sign in with Basable as the one sign-in method, the identity
+# schema, the self-service flows. TENANT_DOMAIN_PLACEHOLDER is replaced by
+# the platform with the environment's hostname at deploy.
 #
 # Sign in with Basable: the platform's OpenID provider, single sign-on with
-# every app on Basable. The `oidc` method is enabled here and its one
-# provider is configured in k8s/kratos/deployment.yaml, from the
+# every app on Basable. The `oidc` method is the only one enabled here and
+# its one provider is configured in k8s/kratos/deployment.yaml, from the
 # `basable-login` Secret the platform writes into every environment's
-# cluster (issuer, client id, client secret): no setup, and no SMTP needed
-# for it. The person keeps a LOCAL identity in this Kratos; the mapper below
-# copies their verified email into its traits, and email codes or a passkey
-# work on the same identity afterwards.
+# cluster (issuer, client id, client secret): no setup. The person keeps a
+# LOCAL identity in this Kratos (user ids, sessions and the account purge
+# are its); the mapper below copies their verified email into its traits.
+# Email codes, passkeys and the courier went in the plan's round 17
+# (docs/01-deappje/00-scope.md): nothing here sends mail, so the courier
+# block below is Kratos's required placeholder and no secret feeds it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -39,9 +37,6 @@ data:
           ui_url: https://TENANT_DOMAIN_PLACEHOLDER/auth/register
           enable_legacy_one_step: true
           after:
-            code:
-              hooks:
-                - hook: session
             oidc:
               hooks:
                 - hook: session
@@ -62,15 +57,10 @@ data:
         password:
           enabled: false
         code:
-          passwordless_enabled: true
+          enabled: false
+          passwordless_enabled: false
         passkey:
-          enabled: true
-          config:
-            rp:
-              display_name: deappje
-              id: TENANT_DOMAIN_PLACEHOLDER
-              origins:
-                - https://TENANT_DOMAIN_PLACEHOLDER
+          enabled: false
         oidc:
           # The provider list is SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS in
           # k8s/kratos/deployment.yaml (its secret comes from a Secret). To
@@ -85,6 +75,8 @@ data:
       lifespan: 24h
       cookie:
         same_site: Lax
+    # Nothing sends mail (no code, no recovery, no verification); Kratos's
+    # configuration wants a courier all the same, so this is a dead end.
     courier:
       smtp:
         connection_uri: smtp://localhost:1025/?disable_starttls=true
@@ -106,13 +98,7 @@ data:
             "email": {
               "type": "string",
               "format": "email",
-              "title": "E-mail",
-              "ory.sh/kratos": {
-                "credentials": {
-                  "code": { "identifier": true, "via": "email" },
-                  "passkey": { "display_name": true }
-                }
-              }
+              "title": "E-mail"
             }
           },
           "required": ["email"],
@@ -123,9 +109,9 @@ data:
   # Sign in with Basable's claims onto the identity's traits: the platform's
   # id token carries the person's email only when the platform saw it proven
   # (email_verified true), and a sign-in without one is refused here, since
-  # the email is what this app's code sign-in finds the person by. The sub
-  # is the person's id for THIS project; Kratos keys the OIDC credential by
-  # it.
+  # the email is the one trait the identity has and what members know each
+  # other by. The sub is the person's id for THIS project; Kratos keys the
+  # OIDC credential by it.
   oidc.basable.jsonnet: |
     local claims = std.extVar('claims');
     if !std.objectHas(claims, 'email') || !std.objectHas(claims, 'email_verified') || claims.email_verified != true then

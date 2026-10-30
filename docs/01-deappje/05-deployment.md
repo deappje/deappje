@@ -102,11 +102,12 @@ no Android SDK and no Xcode, never sees an app target.
    scaffold's default is the same; noted so nobody adds one.
 4. **Sign in with Basable is the only method.** The scaffold's Kratos ConfigMap enables email
    code, passkeys and Basable together, with an optional `SMTP_CONNECTION_URI` for the courier.
-   The implementing session turns `code` and `passkey` off, removes the courier reference, and
-   keeps the `oidc` method with the Basable provider, the `oidc.basable.jsonnet` mapper (verified
-   email or refused) and the two callback paths under `/.ory/` the platform registers. The
-   `kratos` database, the admin API for `delete_identity` and the session check in the api crate
-   are unchanged.
+   Done 2026-10-30: `code` and `passkey` are off, the courier's secret reference and the
+   schema's credential hints are gone (the courier block stays as the placeholder Kratos's
+   configuration requires), and the `oidc` method with the Basable provider, the
+   `oidc.basable.jsonnet` mapper (verified email or refused) and the two callback paths under
+   `/.ory/` the platform registers are what is left. The `kratos` database, the admin API for
+   `delete_identity` and the session check in the api crate are unchanged.
 
 ## The apps (`core/`, `ios/`, `android/`)
 

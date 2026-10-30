@@ -104,7 +104,7 @@ Presigns uploads and downloads under the caller's group prefix, deletes an objec
 - `app/`: the binary, `replicas: 2`, every nanoservice in every replica.
 - `frontend/react/`: the React app (Vite, built by rules_js into `dist/`), uploaded by the workflow as the `static` artifact and served at `/` from the environment's public bucket (no image, no pod), calling the API through Connect clients generated from `proto/` (`frontend/react/README.md`).
 - `k8s/postgres/`: one CNPG cluster, 1 instance(s), a schema and a role per stateful nanoservice (`nano_group`, `nano_device`, `nano_relay`, `nano_storage`).
-- `k8s/kratos/`: Ory Kratos identity (passwordless email code + passkeys + Sign in with Basable, from the platform's `basable-login` Secret), its own database. The sign-in pages Kratos sends the browser to (`/auth/login`, `/auth/register`, `/auth/settings`, `/auth/error`) are drawn by the frontend from the flow's own nodes (`frontend/react/src/Auth.tsx`).
+- `k8s/kratos/`: Ory Kratos identity with one sign-in method, Sign in with Basable (the `oidc` method, its provider from the platform's `basable-login` Secret; no email codes, no passkeys, no mail), its own database. The sign-in pages Kratos sends the browser to (`/auth/login`, `/auth/register`, `/auth/settings`, `/auth/error`) are drawn by the frontend from the flow's own nodes (`frontend/react/src/Auth.tsx`).
 - `k8s/httproute.yaml`: `/api/` → app, `/.ory/` → Kratos; `/` is the platform's own route to the bucket, never claimed here.
 
 See `docs/platform-contract.md` for the rules the platform enforces on this

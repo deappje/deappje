@@ -88,16 +88,6 @@ spec:
                   key: BASABLE_LOGIN_CLIENT_SECRET
             - name: SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS
               value: '[{"id":"basable","provider":"generic","label":"Basable","issuer_url":"$(BASABLE_LOGIN_ISSUER)","client_id":"$(BASABLE_LOGIN_CLIENT_ID)","client_secret":"$(BASABLE_LOGIN_CLIENT_SECRET)","scope":["openid","email"],"pkce":"force","mapper_url":"file:///etc/kratos/oidc.basable.jsonnet"}]'
-            # The courier's SMTP connection (courier.smtp.connection_uri), a
-            # user-supplied secret: OPTIONAL, so the first deploy does not
-            # wait for it; absent, the ConfigMap's localhost placeholder
-            # applies and sign-in codes are in the logs (docs/operations.md).
-            - name: COURIER_SMTP_CONNECTION_URI
-              valueFrom:
-                secretKeyRef:
-                  name: app-secrets
-                  key: SMTP_CONNECTION_URI
-                  optional: true
           volumeMounts:
             - name: config
               mountPath: /etc/kratos
