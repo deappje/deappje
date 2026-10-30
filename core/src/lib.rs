@@ -28,6 +28,7 @@ pub mod api;
 pub mod connect;
 pub mod crypto;
 pub mod envelope;
+pub mod facade;
 pub mod harness;
 pub mod ids;
 pub mod invite;
@@ -47,3 +48,23 @@ pub mod transport;
 pub mod trust;
 pub mod types;
 pub mod wire;
+
+#[cfg(not(target_arch = "wasm32"))]
+uniffi::setup_scaffolding!();
+
+// An id crosses the bindings as its text.
+#[cfg(not(target_arch = "wasm32"))]
+uniffi::custom_type!(Uuid, String, {
+    remote,
+    lower: |id| id.to_string(),
+    try_lift: |s| Ok(Uuid::parse_str(&s)?),
+});
+
+#[cfg(not(target_arch = "wasm32"))]
+use uuid::Uuid;
+
+/// The core's version, for a shell to show.
+#[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
+pub fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_owned()
+}

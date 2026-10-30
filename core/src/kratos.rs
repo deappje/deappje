@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use crate::transport::{Request, Transport, TransportError};
+use crate::transport::{Header, Request, Transport, TransportError};
 
 /// The OpenID provider the login offers: Basable (`k8s/kratos/configmap.yaml`).
 pub const PROVIDER: &str = "basable";
@@ -19,6 +19,7 @@ pub const PROVIDER: &str = "basable";
 /// A login started: what the browser must open, and what the exchange
 /// needs afterwards.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
 pub struct LoginStart {
     /// The flow's id.
     pub flow_id: String,
@@ -30,6 +31,7 @@ pub struct LoginStart {
 
 /// The signed-in identity, as `whoami` has it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
 pub struct Identity {
     /// Kratos's identity id.
     pub id: String,
@@ -118,7 +120,7 @@ impl<'a, T: Transport> Kratos<'a, T> {
         Kratos { transport, base: format!("{}/.ory", base_url.trim_end_matches('/')) }
     }
 
-    async fn send(&self, method: &str, url: String, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<(u16, Vec<u8>), KratosError> {
+    async fn send(&self, method: &str, url: String, headers: Vec<Header>, body: Vec<u8>) -> Result<(u16, Vec<u8>), KratosError> {
         let r = self.transport.send(Request { method: method.to_owned(), url, headers, body }).await?;
         Ok((r.status, r.body))
     }
@@ -127,14 +129,14 @@ impl<'a, T: Transport> Kratos<'a, T> {
     /// link), with the Basable provider: the browser URL to open.
     pub async fn start_login(&self, return_to: &str) -> Result<LoginStart, KratosError> {
         let url = format!("{}/self-service/login/api?return_session_token_exchange_code=true&return_to={}", self.base, urlencode(return_to));
-        let (status, body) = self.send("GET", url, vec![("accept".to_owned(), "application/json".to_owned())], Vec::new()).await?;
+        let (status, body) = self.send("GET", url, vec![Header::new("accept", "application/json")], Vec::new()).await?;
         if status != 200 {
             return Err(unexpected(status, &body));
         }
         let flow: Flow = serde_json::from_slice(&body).map_err(|_| unexpected(status, &body))?;
         let submit = format!("{}/self-service/login?flow={}", self.base, urlencode(&flow.id));
         let form = serde_json::json!({ "method": "oidc", "provider": PROVIDER }).to_string().into_bytes();
-        let headers = vec![("content-type".to_owned(), "application/json".to_owned()), ("accept".to_owned(), "application/json".to_owned())];
+        let headers = vec![Header::new("content-type", "application/json"), Header::new("accept", "application/json")];
         let (status, body) = self.send("POST", submit, headers, form).await?;
         // A native OpenID login answers 422 with where the browser must go.
         if status != 422 {
@@ -151,7 +153,7 @@ impl<'a, T: Transport> Kratos<'a, T> {
     /// parameter of the return URL): the session token.
     pub async fn finish_login(&self, start: &LoginStart, return_code: &str) -> Result<String, KratosError> {
         let url = format!("{}/sessions/token-exchange?init_code={}&return_to_code={}", self.base, urlencode(&start.exchange_code), urlencode(return_code));
-        let (status, body) = self.send("GET", url, vec![("accept".to_owned(), "application/json".to_owned())], Vec::new()).await?;
+        let (status, body) = self.send("GET", url, vec![Header::new("accept", "application/json")], Vec::new()).await?;
         if status != 200 {
             return Err(unexpected(status, &body));
         }
@@ -162,7 +164,7 @@ impl<'a, T: Transport> Kratos<'a, T> {
     /// Who the token signs in as.
     pub async fn whoami(&self, session_token: &str) -> Result<Identity, KratosError> {
         let url = format!("{}/sessions/whoami", self.base);
-        let headers = vec![("accept".to_owned(), "application/json".to_owned()), (crate::connect::SESSION_TOKEN_HEADER.to_owned(), session_token.to_owned())];
+        let headers = vec![Header::new("accept", "application/json"), Header::new(crate::connect::SESSION_TOKEN_HEADER, session_token)];
         let (status, body) = self.send("GET", url, headers, Vec::new()).await?;
         match status {
             200 => {
@@ -179,7 +181,7 @@ impl<'a, T: Transport> Kratos<'a, T> {
     pub async fn logout(&self, session_token: &str) -> Result<(), KratosError> {
         let url = format!("{}/self-service/logout/api", self.base);
         let body = serde_json::json!({ "session_token": session_token }).to_string().into_bytes();
-        let headers = vec![("content-type".to_owned(), "application/json".to_owned()), ("accept".to_owned(), "application/json".to_owned())];
+        let headers = vec![Header::new("content-type", "application/json"), Header::new("accept", "application/json")];
         let (status, body) = self.send("DELETE", url, headers, body).await?;
         match status {
             204 | 200 => Ok(()),
@@ -221,12 +223,12 @@ mod tests {
         assert_eq!(block_on(k.finish_login(&start, "ret-123")).unwrap(), "ory_st_secret");
         assert_eq!(block_on(k.whoami("ory_st_secret")).unwrap(), Identity { id: "ident-1".into(), email: Some("a@example.com".into()) });
         assert_eq!(block_on(k.whoami("ory_st_secret")).unwrap_err(), KratosError::Unauthenticated);
-        let sent = t.sent.borrow();
+        let sent = t.sent();
         assert_eq!(sent[0].url, "https://app.example/.ory/self-service/login/api?return_session_token_exchange_code=true&return_to=deappje%3A%2F%2Flogin");
         assert_eq!(sent[1].url, "https://app.example/.ory/self-service/login?flow=flow-1");
         assert_eq!(serde_json::from_slice::<serde_json::Value>(&sent[1].body).unwrap()["provider"], "basable");
         assert_eq!(sent[2].url, "https://app.example/.ory/sessions/token-exchange?init_code=init-xyz&return_to_code=ret-123");
-        assert!(sent[3].headers.contains(&("x-session-token".to_owned(), "ory_st_secret".to_owned())));
+        assert!(sent[3].has_header("x-session-token", "ory_st_secret"));
     }
 
     #[test]

@@ -24,6 +24,7 @@ fn currency(code: &str) -> Result<(), Invalid> {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A reference to a file in the environment's bucket, inside the
     /// owning object's value: the bucket key is derived from the object id
     /// and the slot, and the server never sees this.
@@ -56,6 +57,7 @@ impl FileRef {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A position on the map.
     Geo {
         /// Latitude, degrees.
@@ -74,6 +76,7 @@ impl Geo {
 // ---- Group (1, 2, 3) ----
 
 wire_enum! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Enum))]
     /// How a subgroup renders.
     pub enum GroupKind {
         /// A full group: albums, todos, expenses.
@@ -85,6 +88,7 @@ wire_enum! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// The group's profile; one per group, `ids::group_profile`.
     GroupProfile {
         10 => name: String,
@@ -114,6 +118,7 @@ impl Object for GroupProfile {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A birthday; the year may be unknown.
     Birthday {
         1 => month: u32,
@@ -129,6 +134,7 @@ impl Birthday {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A member's profile in a group; one per member, `ids::member_profile`.
     MemberProfile {
         10 => display_name: String,
@@ -149,6 +155,7 @@ impl Object for MemberProfile {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// An invite's secret, so any holder can verify a key request that came
     /// through the invite (`02-device.md`).
     InviteSecret {
@@ -170,6 +177,7 @@ impl Object for InviteSecret {
 // ---- Timeline (10-14) ----
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A timeline entry; photos and comments are children.
     Post {
         10 => text: String,
@@ -181,6 +189,7 @@ impl Object for Post {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// The one photo type everywhere, under a post, an album or a message.
     Photo {
         10 => width: u32,
@@ -208,6 +217,7 @@ impl Object for Photo {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// An album; its photos are children.
     Album {
         10 => title: String,
@@ -224,6 +234,7 @@ impl Object for Album {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A comment under anything.
     Comment {
         10 => text: String,
@@ -239,6 +250,7 @@ impl Object for Comment {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A user's reaction on a target; one per user, `ids::reaction`.
     Reaction {
         10 => emoji: String,
@@ -256,6 +268,7 @@ impl Object for Reaction {
 // ---- Todos (20, 21) ----
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A todo list; its items are children.
     TodoList {
         10 => title: String,
@@ -271,6 +284,7 @@ impl Object for TodoList {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// An item of a todo list.
     TodoItem {
         10 => text: String,
@@ -294,6 +308,7 @@ impl Object for TodoItem {
 // ---- Notes (30, 31) ----
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A note's title; the body is the combination of its `note_update`
     /// children.
     Note {
@@ -306,6 +321,7 @@ impl Object for Note {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// One `yrs` update of a note: what one editing session on one device
     /// produced. Never edited.
     NoteUpdate {
@@ -327,6 +343,7 @@ impl Object for NoteUpdate {
 // ---- Expenses (40-43) ----
 
 wire_enum! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Enum))]
     /// How an expense is split among its participants.
     pub enum Split {
         /// One share each.
@@ -340,6 +357,7 @@ wire_enum! {
 }
 
 wire_enum! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Enum))]
     /// What an expense is.
     pub enum ExpenseKind {
         /// An ordinary expense.
@@ -352,6 +370,7 @@ wire_enum! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A participant of an expense: who, and the weight or the exact amount
     /// in minor units when the split needs one.
     Participant, key 1 {
@@ -361,6 +380,7 @@ message! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// An expense in a pool; shares and balances are derived.
     Expense {
         /// In minor units of the currency.
@@ -418,6 +438,7 @@ impl Object for Expense {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A payment made outside the app; money never moves here. Undo is a
     /// delete.
     Settlement {
@@ -444,6 +465,7 @@ impl Object for Settlement {
 }
 
 wire_enum! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Enum))]
     /// Where a ticket share stands.
     pub enum ShareStatus {
         /// With its holder.
@@ -457,6 +479,7 @@ wire_enum! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// The ticket file for one participant of an expense. A transfer is a
     /// holder change plus the matching participant change on the expense.
     TicketShare {
@@ -482,6 +505,7 @@ impl Object for TicketShare {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A pool of expenses settled independently; the group's general pool
     /// is `ids::general_pool`.
     ExpensePool {
@@ -497,6 +521,7 @@ impl Object for ExpensePool {
 // ---- Calendar (50) ----
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A calendar event. A birthday for someone not in the app is a yearly
     /// all-day event.
     Event {
@@ -527,6 +552,7 @@ impl Object for Event {
 // ---- Polls (60, 61) ----
 
 wire_enum! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Enum))]
     /// What a poll asks.
     pub enum PollKind {
         /// A choice among options.
@@ -538,6 +564,7 @@ wire_enum! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// An option of a poll.
     PollOption, key 1 {
         1 => id: Uuid,
@@ -551,6 +578,7 @@ message! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A poll; votes are children, so an option change never fights a vote.
     Poll {
         10 => question: String,
@@ -591,6 +619,7 @@ impl Object for Poll {
 }
 
 wire_enum! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Enum))]
     /// An answer on one option.
     pub enum AnswerKind {
         #[default]
@@ -601,6 +630,7 @@ wire_enum! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// The answer on one option.
     Answer, key 1 {
         1 => option_id: Uuid,
@@ -609,6 +639,7 @@ message! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A user's answers on a poll; one per user, `ids::vote`.
     Vote {
         10 => answers: Vec<Answer>,
@@ -628,6 +659,7 @@ impl Object for Vote {
 // ---- Chat (70) ----
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A chat message; a reply in a thread has the thread's first message
     /// as its parent. An edit is a new seq, deletion a tombstone.
     Message {
@@ -644,6 +676,7 @@ impl Object for Message {
 // ---- Venues (80) ----
 
 wire_enum! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Enum))]
     /// What kind of place a venue is.
     pub enum VenueCategory {
         #[default]
@@ -656,6 +689,7 @@ wire_enum! {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// A venue recommendation; comments and reactions are children.
     Venue {
         10 => name: String,

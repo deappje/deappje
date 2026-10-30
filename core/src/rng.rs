@@ -15,8 +15,8 @@ pub struct CoreRng {
 impl CoreRng {
     /// Seeded from the shell's entropy.
     pub fn from_shell(random: &dyn Random) -> CoreRng {
-        let mut seed = [0u8; 32];
-        random.fill(&mut seed);
+        let bytes = random.random_bytes();
+        let seed: [u8; 32] = bytes.try_into().expect("the shell gives 32 random bytes");
         CoreRng::from_seed(seed)
     }
 

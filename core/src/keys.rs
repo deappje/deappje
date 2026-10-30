@@ -16,7 +16,7 @@ use crate::crypto::CryptoError;
 use crate::invite::InviteSecret;
 use crate::keyring::{GroupKey, Keyring, WrapIds, unwrap, wrap};
 use crate::rng::CoreRng;
-use crate::shell::DeviceKey;
+use crate::shell::{DeviceKey, DeviceKeyExt as _};
 use crate::trust::{PinMismatch, Pins, fingerprint};
 
 /// A device as another member sees it: what wrapping for it needs.
@@ -257,10 +257,18 @@ impl KeyExchange<'_> {
     /// needs to decide; `secret_of` finds the invite secret the device
     /// holds for an invite (the group's `invite_secret` objects).
     pub async fn pending_requests<D: Devices>(&self, devices: &D, secret_of: impl Fn(Uuid) -> Option<InviteSecret>) -> Result<Vec<PendingRequest>, KeyError> {
-        let requests = devices.list_key_requests(self.device_id).await?;
+        pending_requests_for(self.device_id, devices, secret_of).await
+    }
+}
+
+/// [`KeyExchange::pending_requests`] without the exchange: nothing of the
+/// device's state is needed to list.
+pub async fn pending_requests_for<D: Devices>(device_id: Uuid, devices: &D, secret_of: impl Fn(Uuid) -> Option<InviteSecret>) -> Result<Vec<PendingRequest>, KeyError> {
+    {
+        let requests = devices.list_key_requests(device_id).await?;
         Ok(requests
             .into_iter()
-            .filter(|r| r.device.id != self.device_id)
+            .filter(|r| r.device.id != device_id)
             .map(|request| {
                 let pk: Option<[u8; 32]> = request.device.public_key.as_slice().try_into().ok();
                 let fingerprint = pk.map(|pk| fingerprint(&pk)).unwrap_or_default();
@@ -272,7 +280,9 @@ impl KeyExchange<'_> {
             })
             .collect())
     }
+}
 
+impl KeyExchange<'_> {
     /// Hands the requesting device every key this device holds for the
     /// group, pinning the requester's key: the person approved it, by the
     /// fingerprint or the invite.

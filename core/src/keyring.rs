@@ -12,7 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::crypto::{CryptoError, hpke};
 use crate::rng::CoreRng;
-use crate::shell::DeviceKey;
+use crate::shell::{DeviceKey, DeviceKeyExt as _};
 
 /// A group key: 32 random bytes for one `(group_id, key_id)`.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]

@@ -5,7 +5,7 @@
 //! and [`Devices`] seams are implemented here over a [`Transport`], and
 //! the group and storage services as plain methods.
 
-use std::cell::RefCell;
+use std::sync::RwLock;
 
 use uuid::Uuid;
 
@@ -14,13 +14,14 @@ use crate::keys::{DeviceInfo, Devices, KeyRequest, WrapFor, WrappedKey};
 use crate::proto;
 use crate::relay::{Accepted, AckResult, ChangeSet, Conflict, Entry, Head, HistoryRequest, HistoryStatus, PushEntry, PushHistoryResult, PushResult, Relay};
 use crate::schema::Message;
-use crate::transport::{Request, Transport};
+use crate::transport::{Header, Request, Transport};
 
 /// The header a native app's session travels in.
 pub const SESSION_TOKEN_HEADER: &str = "x-session-token";
 
 /// A group as the server has it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
 pub struct Group {
     /// The group.
     pub id: Uuid,
@@ -36,6 +37,7 @@ pub struct Group {
 
 /// One user's membership of one group.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
 pub struct Membership {
     /// The row.
     pub id: Uuid,
@@ -51,6 +53,7 @@ pub struct Membership {
 
 /// An invite; the shared link is `/join/<code>#<secret>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
 pub struct Invite {
     /// The row.
     pub id: Uuid,
@@ -86,7 +89,7 @@ pub struct Connect<T: Transport> {
     transport: T,
     /// The origin, without a trailing slash: `https://<host>`.
     base_url: String,
-    session_token: RefCell<Option<String>>,
+    session_token: RwLock<Option<String>>,
 }
 
 fn uuid(s: &str) -> Result<Uuid, ApiError> {
@@ -136,12 +139,12 @@ fn code_of(name: &str, status: u16) -> Code {
 impl<T: Transport> Connect<T> {
     /// A client for the origin.
     pub fn new(transport: T, base_url: &str) -> Connect<T> {
-        Connect { transport, base_url: base_url.trim_end_matches('/').to_owned(), session_token: RefCell::new(None) }
+        Connect { transport, base_url: base_url.trim_end_matches('/').to_owned(), session_token: RwLock::new(None) }
     }
 
     /// The session token to send, or none (a browser sends its cookie).
     pub fn set_session_token(&self, token: Option<String>) {
-        *self.session_token.borrow_mut() = token;
+        *self.session_token.write().expect("no poison") = token;
     }
 
     /// The origin.
@@ -156,10 +159,10 @@ impl<T: Transport> Connect<T> {
     }
 
     /// The headers every call carries.
-    pub fn headers(&self, content_type: &str) -> Vec<(String, String)> {
-        let mut h = vec![("content-type".to_owned(), content_type.to_owned()), ("connect-protocol-version".to_owned(), "1".to_owned())];
-        if let Some(token) = self.session_token.borrow().as_ref() {
-            h.push((SESSION_TOKEN_HEADER.to_owned(), token.clone()));
+    pub fn headers(&self, content_type: &str) -> Vec<Header> {
+        let mut h = vec![Header::new("content-type", content_type), Header::new("connect-protocol-version", "1")];
+        if let Some(token) = self.session_token.read().expect("no poison").as_ref() {
+            h.push(Header::new(SESSION_TOKEN_HEADER, token.clone()));
         }
         h
     }
@@ -218,10 +221,11 @@ impl<T: Transport> Connect<T> {
         invite_of(present(r.invite, "invite")?)
     }
 
-    /// Joins the invite's group.
-    pub async fn accept_invite(&self, code: &str) -> Result<Membership, ApiError> {
+    /// Joins the invite's group: the membership, and the invite it came
+    /// through (its id goes on the key request).
+    pub async fn accept_invite(&self, code: &str) -> Result<(Membership, Invite), ApiError> {
         let r: proto::AcceptInviteResponse = self.unary("group.v1.GroupService", "AcceptInvite", &proto::AcceptInviteRequest { code: code.to_owned() }).await?;
-        membership_of(present(r.membership, "membership")?)
+        Ok((membership_of(present(r.membership, "membership")?)?, invite_of(present(r.invite, "invite")?)?))
     }
 
     /// The group's members, oldest first.
@@ -455,8 +459,6 @@ impl<T: Transport> Devices for Connect<T> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::cell::RefCell;
-
     use super::*;
     use crate::harness::block_on;
     use crate::transport::{Response, TransportError};
@@ -464,24 +466,34 @@ pub(crate) mod tests {
     /// A transport that records what it was sent and answers from a queue.
     #[derive(Default)]
     pub(crate) struct FakeTransport {
-        pub sent: RefCell<Vec<Request>>,
-        pub answers: RefCell<std::collections::VecDeque<Result<Response, TransportError>>>,
+        pub sent: std::sync::Mutex<Vec<Request>>,
+        pub answers: std::sync::Mutex<std::collections::VecDeque<Result<Response, TransportError>>>,
     }
 
     impl FakeTransport {
         pub(crate) fn answer(&self, status: u16, content_type: &str, body: Vec<u8>) {
-            self.answers.borrow_mut().push_back(Ok(Response { status, headers: vec![("content-type".to_owned(), content_type.to_owned())], body }));
+            self.answers.lock().unwrap().push_back(Ok(Response { status, headers: vec![Header::new("content-type", content_type)], body }));
+        }
+
+        pub(crate) fn fail(&self, message: &str) {
+            self.answers.lock().unwrap().push_back(Err(TransportError::Network(message.into())));
         }
 
         pub(crate) fn proto<M: Message>(&self, m: &M) {
             self.answer(200, "application/proto", m.encode());
         }
+
+        pub(crate) fn sent(&self) -> Vec<Request> {
+            self.sent.lock().unwrap().clone()
+        }
     }
 
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+    #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Transport for FakeTransport {
         async fn send(&self, request: Request) -> Result<Response, TransportError> {
-            self.sent.borrow_mut().push(request);
-            self.answers.borrow_mut().pop_front().unwrap_or_else(|| Err(TransportError("no answer queued".into())))
+            self.sent.lock().unwrap().push(request);
+            self.answers.lock().unwrap().pop_front().unwrap_or_else(|| Err(TransportError::Network("no answer queued".into())))
         }
     }
 
@@ -494,11 +506,11 @@ pub(crate) mod tests {
         let (d, g) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let r = block_on(c.ack_seq(d, g, 7)).unwrap();
         assert_eq!(r, AckResult { evicted_through_seq: 4, min_acked_seq: Some(2) });
-        let sent = c.transport().sent.borrow();
+        let sent = c.transport().sent();
         assert_eq!(sent[0].method, "POST");
         assert_eq!(sent[0].url, "https://app.example/api/relay.v1.RelayService/AckSeq");
-        assert!(sent[0].headers.contains(&("content-type".to_owned(), "application/proto".to_owned())));
-        assert!(sent[0].headers.contains(&("x-session-token".to_owned(), "tok".to_owned())));
+        assert!(sent[0].has_header("content-type", "application/proto"));
+        assert!(sent[0].has_header("x-session-token", "tok"));
         assert_eq!(proto::AckSeqRequest::decode(&sent[0].body).unwrap(), proto::AckSeqRequest { device_id: d.to_string(), group_id: g.to_string(), seq: 7 });
     }
 
@@ -508,7 +520,7 @@ pub(crate) mod tests {
         t.answer(403, "application/json", br#"{"code":"permission_denied","message":"not a member of this group"}"#.to_vec());
         t.answer(412, "application/json", br#"{"code":"failed_precondition","message":"ack above the head"}"#.to_vec());
         t.answer(502, "text/html", b"<html>bad gateway</html>".to_vec());
-        t.answers.borrow_mut().push_back(Err(TransportError("offline".into())));
+        t.fail("offline");
         let c = Connect::new(t, "https://app.example");
         let (d, g) = (Uuid::from_u128(1), Uuid::from_u128(2));
         assert_eq!(block_on(c.ack_seq(d, g, 1)).unwrap_err(), ApiError::new(Code::PermissionDenied, "not a member of this group"));
@@ -538,7 +550,7 @@ pub(crate) mod tests {
         assert_eq!(page, ChangeSet { entries: vec![Entry { id: o, value: Some(vec![1, 2]), seq: 3, deleted: false }], head_seq: 3, evicted_through_seq: 1, min_acked_seq: None, more: true });
         let req = block_on(c.request_history(d, g, 1, 5, None)).unwrap();
         assert_eq!((req.id, req.status, req.object_id), (Uuid::nil(), HistoryStatus::Unfillable, None));
-        let sent = c.transport().sent.borrow();
+        let sent = c.transport().sent();
         let first = proto::PushObjectsRequest::decode(&sent[0].body).unwrap();
         assert_eq!(first.objects[0], proto::PushEntry { id: o.to_string(), value: vec![7], base_seq: 0, deleted: false });
     }
@@ -559,7 +571,7 @@ pub(crate) mod tests {
         let keys = block_on(c.get_wrapped_keys(d, Some(g))).unwrap();
         assert_eq!(keys[0], WrappedKey { id: i, group_id: g, key_id: 2, device_id: d, wrapped: vec![1], wrapped_by_device: d, wrapped_by_public_key: vec![9; 32] });
         assert_eq!(block_on(c.get_group(g)).unwrap_err().code, Code::Internal, "an answer without its group");
-        let sent = c.transport().sent.borrow();
+        let sent = c.transport().sent();
         assert_eq!(sent[1].url, "https://app.example/api/group.v1.GroupService/CreateInvite");
         assert_eq!(proto::GetWrappedKeysRequest::decode(&sent[2].body).unwrap().group_id, g.to_string());
     }

@@ -1,0 +1,23 @@
+# The UniFFI binding generator as a binary of this repository, over the
+# uniffi_bindgen library without its cargo-metadata feature: a Bazel
+# sandbox has no cargo, and the core's one crate needs no discovery. Its
+# own workspace, with its own hub in MODULE.bazel, so the generator's graph
+# stays out of the core's. The version is the core's uniffi version: the
+# generator and the library it reads must match.
+[package]
+name = "deappje-uniffi-bindgen"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "UNLICENSED"
+publish = false
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+uniffi_bindgen = { version = "0.32", default-features = false }
+camino = "1"
+
+[workspace]

@@ -1,0 +1,15 @@
+# The binding generator (Cargo.toml says why it is apart).
+load("@bindgen_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+# The crate name differs from the target's: a crate called uniffi_bindgen
+# would shadow the library of that name it links.
+rust_binary(
+    name = "uniffi-bindgen",
+    srcs = ["src/main.rs"],
+    aliases = aliases(),
+    crate_name = "deappje_uniffi_bindgen",
+    deps = all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//core:__subpackages__"],
+)

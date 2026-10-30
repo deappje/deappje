@@ -494,6 +494,7 @@ message! {
 message! {
     AcceptInviteResponse {
         1 => membership: Option<Membership>,
+        2 => invite: Option<Invite>,
     }
 }
 

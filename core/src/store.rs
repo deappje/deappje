@@ -253,10 +253,10 @@ impl Store {
     /// relay and the outbox, and a corrupt row is re-fetched.
     pub fn open(storage: Box<dyn Storage>) -> Store {
         let mut groups: BTreeMap<Uuid, Group> = BTreeMap::new();
-        for key in storage.keys("g/") {
+        for key in storage.keys("g/".to_owned()) {
             let parts: Vec<&str> = key.split('/').collect();
             let Some(group_id) = parts.get(1).and_then(|s| s.parse::<Uuid>().ok()) else { continue };
-            let Some(bytes) = storage.get(&key) else { continue };
+            let Some(bytes) = storage.get(key.clone()) else { continue };
             let group = groups.entry(group_id).or_insert_with(Group::new);
             match (parts.get(2).copied(), parts.get(3).and_then(|s| s.parse::<Uuid>().ok())) {
                 (Some("s"), None) => {
@@ -301,7 +301,7 @@ impl Store {
     pub fn ensure(&mut self, group_id: Uuid) -> &Group {
         let storage = &self.storage;
         self.groups.entry(group_id).or_insert_with(|| {
-            storage.put(&state_key(group_id), &state_record(&Group::new()).encode());
+            storage.put(state_key(group_id), state_record(&Group::new()).encode());
             Group::new()
         })
     }
@@ -312,7 +312,7 @@ impl Store {
 
     fn save_state(&mut self, group_id: Uuid) {
         let record = state_record(self.group_mut(group_id)).encode();
-        self.storage.put(&state_key(group_id), &record);
+        self.storage.put(state_key(group_id), record);
     }
 
     /// Sets the cursor and what the server last said about the group.
@@ -339,13 +339,13 @@ impl Store {
     pub fn put_row(&mut self, group_id: Uuid, id: Uuid, row: Row) {
         let record = row_record(&row).encode();
         self.group_mut(group_id).rows.insert(id, row);
-        self.storage.put(&row_key(group_id, id), &record);
+        self.storage.put(row_key(group_id, id), record);
     }
 
     /// Removes a row (a tombstone every device has applied).
     pub fn remove_row(&mut self, group_id: Uuid, id: Uuid) {
         self.group_mut(group_id).rows.remove(&id);
-        self.storage.delete(&row_key(group_id, id));
+        self.storage.delete(row_key(group_id, id));
     }
 
     /// A pending write of the group.
@@ -357,13 +357,13 @@ impl Store {
     pub fn put_pending(&mut self, group_id: Uuid, id: Uuid, pending: Pending) {
         let record = pending_record(&pending).encode();
         self.group_mut(group_id).outbox.insert(id, pending);
-        self.storage.put(&pending_key(group_id, id), &record);
+        self.storage.put(pending_key(group_id, id), record);
     }
 
     /// Removes a pending write (accepted, or dropped).
     pub fn remove_pending(&mut self, group_id: Uuid, id: Uuid) {
         self.group_mut(group_id).outbox.remove(&id);
-        self.storage.delete(&pending_key(group_id, id));
+        self.storage.delete(pending_key(group_id, id));
     }
 
     /// Throws the group's rows away and starts again as a new device; the
@@ -383,12 +383,12 @@ impl Store {
     pub fn forget_group(&mut self, group_id: Uuid) {
         if let Some(g) = self.groups.remove(&group_id) {
             for id in g.rows.keys() {
-                self.storage.delete(&row_key(group_id, *id));
+                self.storage.delete(row_key(group_id, *id));
             }
             for id in g.outbox.keys() {
-                self.storage.delete(&pending_key(group_id, *id));
+                self.storage.delete(pending_key(group_id, *id));
             }
-            self.storage.delete(&state_key(group_id));
+            self.storage.delete(state_key(group_id));
         }
     }
 }
@@ -397,29 +397,29 @@ impl Store {
 mod tests {
     use super::*;
     use crate::shell::MemoryStorage;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     /// Storage shared between two opens of the store.
-    struct Shared(Rc<MemoryStorage>);
+    struct Shared(Arc<MemoryStorage>);
 
     impl Storage for Shared {
-        fn get(&self, key: &str) -> Option<Vec<u8>> {
+        fn get(&self, key: String) -> Option<Vec<u8>> {
             self.0.get(key)
         }
-        fn put(&self, key: &str, value: &[u8]) {
+        fn put(&self, key: String, value: Vec<u8>) {
             self.0.put(key, value)
         }
-        fn delete(&self, key: &str) {
+        fn delete(&self, key: String) {
             self.0.delete(key)
         }
-        fn keys(&self, prefix: &str) -> Vec<String> {
+        fn keys(&self, prefix: String) -> Vec<String> {
             self.0.keys(prefix)
         }
     }
 
     #[test]
     fn everything_written_is_read_back_at_open() {
-        let storage = Rc::new(MemoryStorage::new());
+        let storage = Arc::new(MemoryStorage::new());
         let (g, a, b, req) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3), Uuid::from_u128(4));
         let mut store = Store::open(Box::new(Shared(storage.clone())));
         store.ensure(g);

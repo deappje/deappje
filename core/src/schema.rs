@@ -535,7 +535,7 @@ impl<E: Element> FieldValue for Vec<E> {
 macro_rules! message {
     ($(#[$m:meta])* $name:ident $(, key $key:literal)? { $( $(#[$fm:meta])* $num:literal => $field:ident : $ty:ty ),* $(,)? }) => {
         $(#[$m])*
-        #[derive(Debug, Clone, PartialEq, Default)]
+        #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
         #[allow(missing_docs)] // a field without its own line is what the plan's table names it
         pub struct $name {
             $( $(#[$fm])* pub $field: $ty, )*
@@ -583,17 +583,24 @@ macro_rules! message {
 /// Declares an enum carried as a varint. The `#[default]` variant is what
 /// an absent field and a value this client does not know both read as: a
 /// newer writer's variant is shown as the default rather than refused,
-/// and this client never writes to a newer schema.
+/// and this client never writes to a newer schema. The variants are
+/// declared in wire order from 0 (the bindings' derive takes no
+/// discriminant from a macro); the numbers written are checked at compile
+/// time.
 #[macro_export]
 macro_rules! wire_enum {
     ($(#[$m:meta])* pub enum $name:ident { $( $(#[$vm:meta])* $variant:ident = $num:literal ),* $(,)? }) => {
         $(#[$m])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
         #[repr(u32)]
         #[allow(missing_docs)] // a variant without its own line is its name
         pub enum $name {
-            $( $(#[$vm])* $variant = $num, )*
+            $( $(#[$vm])* $variant, )*
         }
+
+        const _: () = {
+            $( assert!($name::$variant as u64 == $num, "a wire enum's variants are declared in wire order"); )*
+        };
 
         impl $name {
             /// The variant of a number, or the default for one this client
@@ -656,6 +663,7 @@ pub trait Object: Message {
 }
 
 message! {
+    #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
     /// The common fields of every object: numbers 1 to 9.
     Meta {
         /// The parent object, inside the ciphertext: the server sees no

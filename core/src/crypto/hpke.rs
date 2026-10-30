@@ -2,7 +2,7 @@
 //! and ChaCha20-Poly1305: the key wrap (`docs/01-deappje/02-device.md`).
 //! Written here rather than taken from a crate because the device's static
 //! private key never reaches the core: both Diffie-Hellman steps that use
-//! it go through [`DeviceKey::dh`], and only the ephemeral key is the
+//! it go through [`crate::shell::DeviceKeyExt::dh`], and only the ephemeral key is the
 //! core's. The tests check it against the `hpke` crate in both directions.
 //!
 //! Single-shot only (one message per encapsulation, sequence number 0),
@@ -15,7 +15,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use super::CryptoError;
 use super::aead::{chacha_open, chacha_seal};
 use crate::rng::CoreRng;
-use crate::shell::DeviceKey;
+use crate::shell::{DeviceKey, DeviceKeyExt as _};
 
 const KEM_ID: u16 = 0x0020;
 const KDF_ID: u16 = 0x0001;

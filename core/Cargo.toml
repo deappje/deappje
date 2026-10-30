@@ -28,17 +28,31 @@ hmac = "0.12"
 sha2 = "0.10"
 rand_chacha = { version = "0.3", default-features = false }
 rand_core = "0.6"
-uuid = { version = "1", default-features = false, features = ["v5"] }
+uuid = { version = "1", default-features = false, features = ["v5", "serde"] }
 zeroize = { version = "1", features = ["derive"] }
-# Kratos's and Connect's JSON (the login flows, the protocol's errors).
+# Kratos's and Connect's JSON (the login flows, the protocol's errors), and
+# the object types as the web client receives them.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The facade's one lock, held across the server calls of a sync; its guard
+# crosses threads on the phones (the bindings' futures must), and the
+# browser has none.
+async-lock = "3"
+# The transport seam's async method is boxed through async-trait on every
+# target (uniffi's generated callback code expects it off the browser).
+async-trait = "0.1"
 # The note CRDT (01-architecture.md, "Notes are the exception"): a note's
 # body is the combination of its note_update children, each one yrs update.
 # Its fastrand takes the browser's entropy through getrandom's js feature on
 # wasm32, which is the one place that crate is allowed in: the core gives
 # every Doc a client id of its own generator's.
 yrs = "0.28"
+
+# The phones' bindings (05-deployment.md, "The apps"): proc-macro exports
+# the generator reads from the host library; never in the wasm build, which
+# speaks wasm-bindgen instead.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uniffi = "0.32"
 
 # The wasm build's wasm-bindgen is pinned to the version of the CLI that
 # rules_rust_wasm_bindgen 0.74 runs: the bindgen format must match exactly,
@@ -55,3 +69,5 @@ wasm-bindgen = "=0.2.121"
 hpke = { version = "0.12", default-features = false, features = ["alloc", "x25519"] }
 
 [workspace]
+# The binding generator is its own workspace: core/tools/bindgen/Cargo.toml.
+exclude = ["tools/bindgen"]

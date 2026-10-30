@@ -141,6 +141,24 @@ impl From<ApiError> for SyncError {
     }
 }
 
+/// The plaintext the user sees of an object: the pending write if there
+/// is one, else the row opened under its key.
+pub fn read_plain(store: &Store, keyring: &Keyring, group_id: Uuid, id: Uuid) -> Result<Option<Vec<u8>>, SyncError> {
+    match store.pending(group_id, id).map(|p| &p.op) {
+        Some(Op::Create { plain, .. } | Op::Edit { plain, .. }) => return Ok(Some(plain.clone())),
+        Some(Op::Delete { .. }) => return Ok(None),
+        None => {}
+    }
+    match store.row(group_id, id) {
+        Some(Row { deleted: false, value: Some(value), .. }) => {
+            let envelope = Envelope::decode(value).map_err(SyncError::Envelope)?;
+            let key = keyring.get(group_id, envelope.header.key_id).ok_or(SyncError::NoKey { group_id, key_id: envelope.header.key_id })?;
+            Ok(Some(envelope.open(key, group_id, id).map_err(SyncError::Crypto)?))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// The engine, over the device's store and keyring.
 pub struct Syncer<'a> {
     /// This device.
@@ -183,15 +201,7 @@ impl Syncer<'_> {
     /// The plaintext the user sees: the pending write if there is one,
     /// else the row.
     pub fn read(&self, group_id: Uuid, id: Uuid) -> Result<Option<Vec<u8>>, SyncError> {
-        match self.store.pending(group_id, id).map(|p| &p.op) {
-            Some(Op::Create { plain, .. } | Op::Edit { plain, .. }) => return Ok(Some(plain.clone())),
-            Some(Op::Delete { .. }) => return Ok(None),
-            None => {}
-        }
-        match self.store.row(group_id, id) {
-            Some(Row { deleted: false, value: Some(value), .. }) => self.open(group_id, id, value).map(|(_, plain)| Some(plain)),
-            _ => Ok(None),
-        }
+        read_plain(self.store, self.keyring, group_id, id)
     }
 
     /// A new object: in the store at once, pushed at the next sync.

@@ -6,10 +6,13 @@ load("@core_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_shared_library", "rust_test")
 load("@rules_rust_wasm_bindgen//:defs.bzl", "rust_wasm_bindgen")
 
+# Cargo.toml travels as compile data: uniffi's macros read the crate's
+# name from it at compile time.
 rust_library(
     name = "core",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(),
+    compile_data = ["Cargo.toml"],
     crate_name = "deappje_core",
     deps = all_crate_deps(normal = True),
     proc_macro_deps = all_crate_deps(proc_macro = True),
@@ -31,6 +34,7 @@ rust_shared_library(
     name = "core_cdylib",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(),
+    compile_data = ["Cargo.toml"],
     crate_name = "deappje_core",
     deps = all_crate_deps(normal = True),
     proc_macro_deps = all_crate_deps(proc_macro = True),
@@ -40,5 +44,41 @@ rust_wasm_bindgen(
     name = "core_wasm",
     target = "web",
     wasm_file = ":core_cdylib",
+    visibility = ["//visibility:public"],
+)
+
+# The phones' bindings (docs/01-deappje/05-deployment.md, "The apps"): the
+# generator reads the exported interface out of a host build of the
+# library and writes Swift and Kotlin. Generated on every host build, so
+# an export the generator cannot bind fails here, before any app build.
+rust_shared_library(
+    name = "core_host",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    compile_data = ["Cargo.toml"],
+    crate_name = "deappje_core",
+    deps = all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+genrule(
+    name = "bindings_kotlin",
+    srcs = [":core_host"],
+    outs = ["bindings/kotlin/uniffi/deappje_core/deappje_core.kt"],
+    cmd = "$(location //core/tools/bindgen:uniffi-bindgen) generate --library $(location :core_host) --language kotlin --no-format --out-dir $(RULEDIR)/bindings/kotlin",
+    tools = ["//core/tools/bindgen:uniffi-bindgen"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "bindings_swift",
+    srcs = [":core_host"],
+    outs = [
+        "bindings/swift/deappje_core.swift",
+        "bindings/swift/deappje_coreFFI.h",
+        "bindings/swift/deappje_coreFFI.modulemap",
+    ],
+    cmd = "$(location //core/tools/bindgen:uniffi-bindgen) generate --library $(location :core_host) --language swift --no-format --out-dir $(RULEDIR)/bindings/swift",
+    tools = ["//core/tools/bindgen:uniffi-bindgen"],
     visibility = ["//visibility:public"],
 )
