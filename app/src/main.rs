@@ -52,23 +52,28 @@ async fn run() -> Result<(), BootError> {
         .await
         .map_err(BootError::Database)?;
 
-    // The declarative catalogs: every type's binder registered, the seed
+    // The declarative catalogs (config/base): every nanoservice owning
+    // config types registers its binders between the markers, the seed is
     // applied in one transaction (a dangling reference fails before any
-    // write), and the repository the nanoservices read them through.
-    let mut types = ConfigTypesBuilder::new();
-    storage::config::register(&mut types);
-    let types = types.build().map_err(BootError::ConfigTypes)?.shared();
-    load_seed(app.framework_pool(), types.clone(), Path::new(&cfg.config_seed_dir), cfg.config_env)
+    // write; the files are picked by CONFIG_ENV), and `config` is the
+    // repository those nanoservices read the catalogs through, handed to
+    // their constructors below.
+    let mut config_types = ConfigTypesBuilder::new();
+    // basable:config-register-begin
+    storage::config::register(&mut config_types);
+    // basable:config-register-end
+    let config_types = config_types.build().map_err(BootError::ConfigTypes)?.shared();
+    load_seed(app.framework_pool(), config_types.clone(), Path::new(&cfg.config_seed_dir), cfg.config_env)
         .await
         .map_err(BootError::Seed)?;
-    let config = ConfigRepository::new(app.framework_pool().clone(), types);
+    let config = ConfigRepository::new(app.framework_pool().clone(), config_types);
 
     let api = api::Api::new();
     // basable:nanoservice-build-begin
     let group = Group::new(&app, app.pool::<group::Schema>().await.map_err(BootError::Database)?).await;
     let device = Device::new(&app, app.pool::<device::Schema>().await.map_err(BootError::Database)?);
     let relay = Relay::new(&app, app.pool::<relay::Schema>().await.map_err(BootError::Database)?);
-    let storage = Storage::new(&app, app.pool::<storage::Schema>().await.map_err(BootError::Database)?, config);
+    let storage = Storage::new(&app, app.pool::<storage::Schema>().await.map_err(BootError::Database)?, config.clone());
     // basable:nanoservice-build-end
 
     // The router is passed by shared reference into every handler and
