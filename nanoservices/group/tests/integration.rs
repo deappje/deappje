@@ -464,19 +464,24 @@ async fn group_purge_waits_for_the_subgroup_then_empties_every_receiver() {
     assert_eq!(fx.membership_rows(g.id).await + fx.membership_rows(s.id).await, 0);
     assert_eq!(code_of(&fx.delete_group(a, g.id).await.unwrap_err()), Code::PermissionDenied, "the admin's row went with the rest");
 
-    // The parent's pass waits for the subgroup's purge and sends nothing.
-    let (obj, done) = fx.drive_group_purge().await.expect("the parent's purge is due");
-    assert_eq!(obj.spec.group_id, g.id);
-    assert_eq!(outcome_name(&done), "converged");
-    assert_eq!(status(&done).map(|s| s.subgroups_remaining), Some(1));
-    assert_eq!(fx.router.sent("objects", g.id), 0);
-
-    // The subgroup's pass: three receivers, all empty, so the row goes and
-    // the object marks itself; its next pass removes it.
+    // Both purges are due; the order they are claimed in is the store's.
+    // The parent's pass waits for the subgroup's purge and sends nothing;
+    // the subgroup's asks its three receivers, one of which still holds a
+    // batch (the parent never asks, so the queued answer is the subgroup's).
     fx.router.queue("blobs", [Ok(2), Ok(0)]);
-    let (obj, done) = fx.drive_group_purge().await.expect("the subgroup's purge is due");
-    assert_eq!(obj.spec.group_id, s.id);
-    assert_eq!(status(&done).map(|s| (s.objects_remaining, s.blobs_remaining, s.keys_remaining)), Some((Some(0), Some(2), Some(0))));
+    let (first, first_done) = fx.drive_group_purge().await.expect("a purge is due");
+    let (second, second_done) = fx.drive_group_purge().await.expect("the other purge is due");
+    let (parent_done, sub_done) = if first.spec.group_id == g.id {
+        assert_eq!(second.spec.group_id, s.id);
+        (first_done, second_done)
+    } else {
+        assert_eq!((first.spec.group_id, second.spec.group_id), (s.id, g.id));
+        (second_done, first_done)
+    };
+    assert_eq!(outcome_name(&parent_done), "converged");
+    assert_eq!(status(&parent_done).map(|s| s.subgroups_remaining), Some(1));
+    assert_eq!(fx.router.sent("objects", g.id), 0);
+    assert_eq!(status(&sub_done).map(|s| (s.objects_remaining, s.blobs_remaining, s.keys_remaining)), Some((Some(0), Some(2), Some(0))));
     assert!(fx.group_row_exists(s.id).await, "a receiver still holds something");
     fx.nudge_group_purge(s.id).await;
     let (_, done) = fx.drive_group_purge().await.unwrap();
