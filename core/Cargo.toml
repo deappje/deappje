@@ -30,6 +30,9 @@ rand_chacha = { version = "0.3", default-features = false }
 rand_core = "0.6"
 uuid = { version = "1", default-features = false, features = ["v5"] }
 zeroize = { version = "1", features = ["derive"] }
+# Kratos's and Connect's JSON (the login flows, the protocol's errors).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # The note CRDT (01-architecture.md, "Notes are the exception"): a note's
 # body is the combination of its note_update children, each one yrs update.
 # Its fastrand takes the browser's entropy through getrandom's js feature on

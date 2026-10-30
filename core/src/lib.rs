@@ -16,13 +16,16 @@
 //! [`rebase`] (the conflict rebase), [`api`] (the answer codes), [`relay`]
 //! (the relay's contract), [`keys`] (the key exchange over `device`'s),
 //! [`store`] (the local store and the outbox), [`sync`] (the engine),
-//! [`notes`] (the note CRDT), [`harness`] (the in-memory relay model the
-//! tests drive).
+//! [`notes`] (the note CRDT), [`proto`] (the API's messages), [`transport`]
+//! (HTTP as the shell does it), [`connect`] (the server over Connect),
+//! [`kratos`] (signing in), [`harness`] (the in-memory models the tests
+//! drive).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod api;
+pub mod connect;
 pub mod crypto;
 pub mod envelope;
 pub mod harness;
@@ -30,7 +33,9 @@ pub mod ids;
 pub mod invite;
 pub mod keyring;
 pub mod keys;
+pub mod kratos;
 pub mod notes;
+pub mod proto;
 pub mod rebase;
 pub mod relay;
 pub mod rng;
@@ -38,6 +43,7 @@ pub mod schema;
 pub mod shell;
 pub mod store;
 pub mod sync;
+pub mod transport;
 pub mod trust;
 pub mod types;
 pub mod wire;

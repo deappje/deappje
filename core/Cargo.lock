@@ -215,6 +215,8 @@ dependencies = [
  "hpke",
  "rand_chacha",
  "rand_core",
+ "serde",
+ "serde_json",
  "sha2",
  "uuid",
  "wasm-bindgen",

@@ -53,6 +53,10 @@ from the server's.
 | `src/store.rs` | The local store: per group the rows (envelopes with the type and parent read out of the ones the device can open), the cursor, the `Phase` (New, CatchingUp, Holder), the outbox of `Pending { Op::Create / Edit / Delete }` with the sealed bytes and the base plaintext an edit was made from; written through to `Storage` and read back whole at `open`. |
 | `src/sync.rs` | The engine `Syncer`: `create`/`edit`/`delete` (the cascade over the children held) and `read`; `sync_group` by phase (join: ack 0, the window, a history request; catch up: page and ack as far as `HistoryReady` says, complete = the whole range; holder: pull, ack, drop tombstones every device passed, then push the outbox with conflicts rebased up to three times, a tombstone dropping the edit, an invalid result parked for the user); a device below the floor or refused an ack starts over and keeps its outbox for the replay; `serve_history` for holders; `history_ready` for the wake-up. Its tests (`src/sync/tests.rs`) are the conformance scenarios and the randomised multi-device harness (four devices, outages, eviction, two absences longer than the window), forty seeds. |
 | `src/notes.rs` | `NoteDoc` over `yrs` (53-bit client id from the generator, byte offsets): `apply` a child's update, `set_text` (only the changed span is deleted and inserted), `session_update` (the delta since the session began), `end_session`; `Syncer::open_note` (every live `note_update` child applied, any order) and `save_note_session` (one child per session). |
+| `src/proto.rs` | The API's messages (`proto/*/v1`) as `message!` structs with the protos' numbers: what the core sends and reads over Connect, no generated code. |
+| `src/transport.rs` | The `Transport` seam: one HTTP request, bytes in and out (`fetch`, `URLSession`, `OkHttp`; a recorder in tests). |
+| `src/connect.rs` | `Connect<T>`: unary POSTs to `/api/<package>.<Service>/<Method>` as `application/proto` with `connect-protocol-version: 1` and the session in `x-session-token`; the protocol's JSON error mapped to `Code` (the status when there is none); `Relay` and `Devices` implemented over it; the group and storage services as methods (`Group`, `Membership`, `Invite`, `Presigned`). |
+| `src/kratos.rs` | The native sign-in over Kratos's API flows under `/.ory/`: `start_login` (a flow with a session token exchange code, the `basable` OpenID method, the browser URL from the 422), `finish_login` (the exchange for the session token), `whoami`, `logout`. |
 | `src/harness/` | `RelayModel` (`relay`'s handlers and sweeps rule for rule in memory with a movable clock, membership and the wake-ups `device` would push) and `DevicesModel` (`device`'s key handlers: registration, requests, fulfilment, publishing with the one-publisher rule, a hostile `swap_public_key` for the pin tests); `block_on` for futures that never wait. Public so the shells' tests can drive them. |
 
 ## Builds
@@ -86,6 +90,6 @@ matches. A breaking change is a new type number, never a repurposed field.
 
 ## Still to come
 
-The Connect and Kratos clients behind a transport seam (the `Relay` and
-`Devices` seams over HTTP, plus the group and storage services), the
-blob encryption and upload, the `Core` facade and its UniFFI exports.
+The blob encryption and upload through the presigned URLs, the `Core`
+facade that holds the pieces together for a shell, and its UniFFI and
+wasm-bindgen exports.

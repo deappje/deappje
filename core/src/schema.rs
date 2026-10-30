@@ -286,7 +286,7 @@ macro_rules! scalar_field {
 
             fn write(&self, number: u32, out: &mut Vec<Field>) {
                 if *self != <$ty>::default() {
-                    out.push(Field { number, value: self.to_value() });
+                    out.push(Field { number, value: <$ty as Scalar>::to_value(self) });
                 }
             }
         }
@@ -300,7 +300,7 @@ macro_rules! scalar_field {
 
             fn write(&self, number: u32, out: &mut Vec<Field>) {
                 if let Some(v) = self {
-                    out.push(Field { number, value: v.to_value() });
+                    out.push(Field { number, value: <$ty as Scalar>::to_value(v) });
                 }
             }
         }
@@ -346,6 +346,20 @@ impl Scalar for i64 {
     }
 }
 
+impl Scalar for i32 {
+    fn from_value(value: &Value, number: u32) -> Result<Self, SchemaError> {
+        match value {
+            // int32 on the wire is a varint sign-extended to 64 bits.
+            Value::Varint(v) => Ok(*v as i64 as i32),
+            _ => Err(SchemaError::Type(number)),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        Value::Varint(i64::from(*self) as u64)
+    }
+}
+
 impl Scalar for u32 {
     fn from_value(value: &Value, number: u32) -> Result<Self, SchemaError> {
         match value {
@@ -388,6 +402,7 @@ impl Scalar for f64 {
 scalar_field!(String);
 scalar_field!(Vec<u8>);
 scalar_field!(i64);
+scalar_field!(i32);
 scalar_field!(u32);
 scalar_field!(bool);
 scalar_field!(f64);
@@ -473,6 +488,19 @@ pub trait Element: Sized {
     fn to_value(&self) -> Value;
 }
 
+/// A list of strings (`repeated string`): each is its own key.
+impl Element for String {
+    const KEY: ElementKey = ElementKey::Value;
+
+    fn from_value(value: &Value, number: u32) -> Result<Self, SchemaError> {
+        <String as Scalar>::from_value(value, number)
+    }
+
+    fn to_value(&self) -> Value {
+        Scalar::to_value(self)
+    }
+}
+
 /// A list of ids: each id is its own key.
 impl Element for Uuid {
     const KEY: ElementKey = ElementKey::Value;
@@ -518,12 +546,14 @@ macro_rules! message {
                 $( $crate::schema::FieldSpec { number: $num, name: stringify!($field), kind: <$ty as $crate::schema::FieldValue>::KIND }, )*
             ];
 
+            #[allow(unused_variables)] // an empty message reads nothing
             fn from_fields(fields: &[$crate::wire::Field]) -> Result<Self, $crate::schema::SchemaError> {
                 Ok(Self {
                     $( $field: <$ty as $crate::schema::FieldValue>::read(fields, $num)?, )*
                 })
             }
 
+            #[allow(unused_mut)] // an empty message writes nothing
             fn to_fields(&self) -> Vec<$crate::wire::Field> {
                 let mut out = Vec::new();
                 $( $crate::schema::FieldValue::write(&self.$field, $num, &mut out); )*
