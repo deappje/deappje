@@ -141,7 +141,7 @@ impl Keyring {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::SoftwareDeviceKey;
+    use crate::shell::{DeviceKeyExt as _, SoftwareDeviceKey};
 
     #[test]
     fn a_wrap_reaches_its_device_from_its_sender_only() {
