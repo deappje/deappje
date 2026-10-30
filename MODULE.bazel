@@ -31,7 +31,18 @@ bazel_dep(name = "bazel_lib", version = "3.7.0")
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2024",
-    extra_target_triples = ["x86_64-unknown-linux-gnu"],
+    extra_target_triples = [
+        "x86_64-unknown-linux-gnu",
+        # The client core (docs/01-deappje/05-deployment.md, "The apps"):
+        # the two Android ABIs, the two iOS platforms and the web. A build
+        # for one of them happens only behind --//:apps or from the web
+        # client's wasm target; the server never selects them.
+        "aarch64-linux-android",
+        "x86_64-linux-android",
+        "aarch64-apple-ios",
+        "aarch64-apple-ios-sim",
+        "wasm32-unknown-unknown",
+    ],
     versions = ["1.98.1"],
 )
 use_repo(rust, "rust_toolchains")
@@ -120,3 +131,17 @@ oci.pull(
     platforms = ["linux/amd64"],
 )
 use_repo(oci, "dbmate", "dbmate_linux_amd64", "distroless_cc", "distroless_cc_linux_amd64")
+
+# --- The apps (docs/01-deappje/05-deployment.md, "The apps") ----------------
+# Loaded here, used nowhere the scaffold's `bazel test //...` reaches: every
+# target under ios/ and android/ and every non-host build of core/ is
+# incompatible unless --//:apps is set (BUILD.bazel, `//:apps_on`), so the
+# server builds with no Xcode and no ANDROID_HOME. apps.yaml is where these
+# modules do work.
+bazel_dep(name = "apple_support", version = "2.11.0")
+bazel_dep(name = "rules_swift", version = "4.2.2")
+bazel_dep(name = "rules_apple", version = "5.3.1")
+bazel_dep(name = "rules_kotlin", version = "2.4.21")
+bazel_dep(name = "rules_android", version = "0.8.0")
+bazel_dep(name = "rules_android_ndk", version = "0.1.5")
+bazel_dep(name = "rules_jvm_external", version = "7.2")

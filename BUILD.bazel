@@ -1,6 +1,26 @@
-# Root package: the routing topology every generated crate reads and the one
-# push target the CI runs (the buf lint gate is //proto:lint).
+# Root package: the routing topology every generated crate reads, the one
+# push target the CI runs (the buf lint gate is //proto:lint), and the flag
+# that turns the apps on.
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_multirun//:defs.bzl", "multirun")
+
+# The apps (docs/01-deappje/05-deployment.md, "The apps"): off by default,
+# so `bazel test //...` builds the server, the core's host tests and the web
+# client only; `bazel test --//:apps //android/...` and `//ios/...` are the
+# app runs (apps.yaml). A target that needs the apps carries
+# `target_compatible_with = select({":apps_on": [], "//conditions:default":
+# ["@platforms//:incompatible"]})`.
+bool_flag(
+    name = "apps",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "apps_on",
+    flag_values = {":apps": "True"},
+    visibility = ["//visibility:public"],
+)
 
 exports_files(
     [
