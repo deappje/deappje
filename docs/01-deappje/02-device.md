@@ -182,6 +182,44 @@ Token invalidation (APNs 410, FCM `UNREGISTERED`) clears `push_token` through th
 `DeviceService`: RegisterDevice, SetPushToken, ListDevices, RequestGroupKeys, ListKeyRequests,
 FulfilKeyRequest, PublishWrappedKeys, GetWrappedKeys, RemoveDevice.
 
+## Implementation record
+
+What the code settled beyond the text above (`nanoservices/device`, 2026-10-30):
+
+- **A device's public key never changes.** A registration under a known id with another key is
+  refused (`FailedPrecondition`): the pinned keys on every peer would reject it anyway, and a
+  device with a new key is a new device. A repeat refreshes the platform and `last_seen_at`.
+- **Every request names the calling device**, which must be the caller's; the device, not the
+  session, is what holds keys. `ListDevices` and `ListKeyRequests` are answered for a device
+  that holds a key for the group; a non-holder lists nothing.
+- **Publishing a key**: for `key_id > 1` the publishing device must hold `key_id - 1`, and a wrap
+  lands only for a registered device whose user is a member and, for a rotation, that holds the
+  previous key; the rest of the batch is dropped and the answer shows what landed, so a client
+  that listed holders a moment ago never fails for a member removed meanwhile. One publisher per
+  key id, as designed. Any member may publish (a viewer included; the clients decide who
+  rotates).
+- **Fulfilment** deletes the request for a requester that is gone or no longer a member, and
+  wakes the requester with reason `keys`. A viewer may fulfil for its own devices.
+- **Wake-ups** carry `reason` plus ids as a string map (`push.rs`, the constants the plan asked
+  for); the APNs payload is `{"aps":{"content-available":1},"wake":{...}}` as a background push,
+  the FCM one a high-priority data message. The effect key is the event plus the device.
+  Group-wide wake-ups ask `group` for the membership of each distinct holder user first.
+- **The push secrets are optional** `secretKeyRef`s (the plan left the choice to the
+  implementing session): requiring all five from day one would stop every preview deploy until
+  an Apple push key and a Firebase project exist, while three nanoservices are still being
+  implemented. Until they are added the app logs and drops every wake-up. Where to get them:
+  Apple Developer, Certificates, Identifiers & Profiles, Keys, a key with the Apple Push
+  Notifications service (the `.p8` file's text, its key id, the team id, and the app's bundle
+  id); Firebase console, Project settings, Service accounts, Generate new private key (the
+  JSON). `APNS_HOST=https://api.sandbox.push.apple.com` for a development build.
+- **JWTs** (APNs ES256, Google RS256) are signed with `ring` and base64url, no JWT crate;
+  tokens are cached fifty minutes behind a `std::sync::Mutex`.
+- **`DeviceLeftGroup`** goes to `relay` for every device of a removed user, keys or not: relay
+  may hold a row for a device that acked before its keys came.
+- The unique indexes on `wrapped_key (group_id, key_id, device_id)` and `key_request (group_id,
+  device_id)` the text declares were missing from the manifest and are now in both (migrations
+  edited in place; a preview database that applied the plain ones is recreated).
+
 ## Tests
 
 - Unit: rotation batch rule (same key id, different wrapper ⇒ refused); wrapped key for a

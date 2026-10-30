@@ -2,8 +2,12 @@ syntax = "proto3";
 
 package device.v1;
 
-// DeviceService: the API of nanoservice `device`. Fill the
-// message fields; the build regenerates the Rust types and the Connect stubs.
+// DeviceService: the API of nanoservice `device`. Every method needs a
+// Kratos session; the caller is the session's identity, and every request
+// names the calling device, which must be the caller's. Ids are UUIDs as
+// text; a time is milliseconds since the Unix epoch, UTC; a platform is
+// "ios", "android" or "web"; a push provider "apns" or "fcm". Key material
+// is opaque bytes the server never opens (docs/01-deappje/02-device.md).
 service DeviceService {
   rpc RegisterDevice(RegisterDeviceRequest) returns (RegisterDeviceResponse);
   rpc SetPushToken(SetPushTokenRequest) returns (SetPushTokenResponse);
@@ -16,74 +20,166 @@ service DeviceService {
   rpc RemoveDevice(RemoveDeviceRequest) returns (RemoveDeviceResponse);
 }
 
+// A device as its owner sees it.
+message Device {
+  string id = 1;
+  string user_id = 2;
+  // The X25519 public key, 32 bytes.
+  bytes public_key = 3;
+  string platform = 4;
+  // Empty when the device has no push token.
+  string push_provider = 5;
+  string push_token = 6;
+  int64 created_at_ms = 7;
+  int64 last_seen_at_ms = 8;
+}
+
+// A device as another member sees it: what wrapping a key for it needs.
+message DeviceInfo {
+  string id = 1;
+  string user_id = 2;
+  bytes public_key = 3;
+  string platform = 4;
+}
+
+// An open key request, with what a holder needs to verify the requesting
+// device before a tap.
+message KeyRequest {
+  string id = 1;
+  string group_id = 2;
+  DeviceInfo device = 3;
+  // Set when the request came through an invite: the invite and
+  // HMAC-SHA256(invite_secret, device_public_key), opaque to the server.
+  string invite_id = 4;
+  bytes invite_tag = 5;
+  int64 created_at_ms = 6;
+}
+
+// One copy of a group key, wrapped for one device (HPKE Auth mode, the
+// wrapping device as sender).
+message WrappedKey {
+  string id = 1;
+  string group_id = 2;
+  int32 key_id = 3;
+  string device_id = 4;
+  bytes wrapped = 5;
+  string wrapped_by_device = 6;
+  int64 created_at_ms = 7;
+}
+
+// The caller's device, by the id the device minted. A repeat refreshes the
+// platform and last_seen; the public key of a device never changes.
 message RegisterDeviceRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  bytes public_key = 2;
+  string platform = 3;
 }
 
 message RegisterDeviceResponse {
-  // TODO: the response fields.
+  Device device = 1;
 }
 
+// An empty token clears the device's push token.
 message SetPushTokenRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string push_provider = 2;
+  string push_token = 3;
 }
 
 message SetPushTokenResponse {
-  // TODO: the response fields.
+  Device device = 1;
 }
 
+// The devices holding a key for the group, so the calling device, a
+// holder itself, can wrap for them.
 message ListDevicesRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
 }
 
 message ListDevicesResponse {
-  // TODO: the response fields.
+  repeated DeviceInfo devices = 1;
 }
 
+// The calling device, whose user is a member, asks the holders for the
+// group's keys; every holder device is woken.
 message RequestGroupKeysRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
+  string invite_id = 3;
+  bytes invite_tag = 4;
 }
 
 message RequestGroupKeysResponse {
-  // TODO: the response fields.
+  KeyRequest request = 1;
 }
 
+// The open requests in the groups the calling device holds a key for.
 message ListKeyRequestsRequest {
-  // TODO: the request fields.
+  string device_id = 1;
 }
 
 message ListKeyRequestsResponse {
-  // TODO: the response fields.
+  repeated KeyRequest requests = 1;
 }
 
+// One wrap handed over by a fulfilment.
+message WrappedKeyInput {
+  int32 key_id = 1;
+  bytes wrapped = 2;
+}
+
+// The calling device, a holder, hands the requesting device the group's
+// keys, one wrap per key id. The caller must be an admin or member unless
+// the requesting device is their own.
 message FulfilKeyRequestRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string request_id = 2;
+  repeated WrappedKeyInput keys = 3;
 }
 
 message FulfilKeyRequestResponse {
-  // TODO: the response fields.
+  KeyRequest request = 1;
 }
 
+// One wrap of a published key, for one device.
+message WrapFor {
+  string device_id = 1;
+  bytes wrapped = 2;
+}
+
+// The calling device publishes one group key wrapped for each listed
+// device: the first key of a group for itself, a rotation for every holder
+// of the previous key, a subgroup's key for the parent's holders. A key id
+// already published by another device is refused.
 message PublishWrappedKeysRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
+  int32 key_id = 3;
+  repeated WrapFor wraps = 4;
 }
 
+// What landed: a wrap for a device whose user is not a member, or that
+// does not hold the previous key, is dropped.
 message PublishWrappedKeysResponse {
-  // TODO: the response fields.
+  repeated WrappedKey keys = 1;
 }
 
+// Every key wrapped for the calling device, or those of one group.
 message GetWrappedKeysRequest {
-  // TODO: the request fields.
+  string device_id = 1;
+  string group_id = 2;
 }
 
 message GetWrappedKeysResponse {
-  // TODO: the response fields.
+  repeated WrappedKey keys = 1;
 }
 
+// The owner drops one of their devices with its keys and requests.
 message RemoveDeviceRequest {
-  // TODO: the request fields.
+  string device_id = 1;
 }
 
 message RemoveDeviceResponse {
-  // TODO: the response fields.
+  Device device = 1;
 }

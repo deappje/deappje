@@ -241,148 +241,532 @@ pub struct PurgeUserDevicesRequest {
     pub user_id: Uuid,
 }
 
-/// `RegisterDeviceRequest` — answered with `Device` (see routing.yaml).
+// --- device ---
+//
+// The server stores key material it cannot open: a wrapped key is
+// ciphertext one member's device produced for another device's public key
+// (`docs/01-deappje/02-device.md`). A device is identified by a
+// client-minted id; `caller` is the Kratos identity the api crate took
+// from the session, and a device belongs to exactly one user.
+
+/// Where a device runs. Sent and stored as its lowercase name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    Ios,
+    Android,
+    Web,
+}
+
+impl Platform {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Platform::Ios => "ios",
+            Platform::Android => "android",
+            Platform::Web => "web",
+        }
+    }
+}
+
+impl fmt::Display for Platform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A platform name that is none of the three.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownPlatform(pub String);
+
+impl fmt::Display for UnknownPlatform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown platform {:?} (ios, android or web)", self.0)
+    }
+}
+
+impl std::error::Error for UnknownPlatform {}
+
+impl FromStr for Platform {
+    type Err = UnknownPlatform;
+
+    fn from_str(s: &str) -> Result<Platform, UnknownPlatform> {
+        match s {
+            "ios" => Ok(Platform::Ios),
+            "android" => Ok(Platform::Android),
+            "web" => Ok(Platform::Web),
+            other => Err(UnknownPlatform(other.to_owned())),
+        }
+    }
+}
+
+/// The push service a device's token belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PushProvider {
+    Apns,
+    Fcm,
+}
+
+impl PushProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PushProvider::Apns => "apns",
+            PushProvider::Fcm => "fcm",
+        }
+    }
+}
+
+impl fmt::Display for PushProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A push provider name that is neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownPushProvider(pub String);
+
+impl fmt::Display for UnknownPushProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown push provider {:?} (apns or fcm)", self.0)
+    }
+}
+
+impl std::error::Error for UnknownPushProvider {}
+
+impl FromStr for PushProvider {
+    type Err = UnknownPushProvider;
+
+    fn from_str(s: &str) -> Result<PushProvider, UnknownPushProvider> {
+        match s {
+            "apns" => Ok(PushProvider::Apns),
+            "fcm" => Ok(PushProvider::Fcm),
+            other => Err(UnknownPushProvider(other.to_owned())),
+        }
+    }
+}
+
+/// `RegisterDeviceRequest` — answered with `Device`: the caller's device,
+/// by the id the device minted. A repeat refreshes `last_seen_at` and the
+/// platform; the public key of a device never changes (a device with a
+/// new key is a new device).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterDeviceRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub public_key: Vec<u8>,
+    pub platform: Platform,
 }
 
-/// `SetPushTokenRequest` — answered with `Device` (see routing.yaml).
+/// `SetPushTokenRequest` — answered with `Device`: the caller's device
+/// gets a push token, or loses it (`None`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetPushTokenRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub push: Option<PushToken>,
 }
 
-/// `ListDevicesRequest` — answered with `DeviceList` (see routing.yaml).
+/// A push token and the service it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushToken {
+    pub provider: PushProvider,
+    pub token: String,
+}
+
+/// `ListDevicesRequest` — answered with `DeviceList`: the devices holding
+/// a key for the group, with their public keys, so the calling device can
+/// wrap for them. The calling device must hold a key itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListDevicesRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Uuid,
 }
 
-/// `RequestGroupKeysRequest` — answered with `KeyRequest` (see routing.yaml).
+/// `RequestGroupKeysRequest` — answered with `KeyRequest`: the calling
+/// device, whose user is a member, asks the group's holders for its keys.
+/// `invite_tag` is `HMAC-SHA256(invite_secret, device_public_key)`,
+/// opaque to the server. A repeat from the same device returns the open
+/// request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestGroupKeysRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Uuid,
+    pub invite_id: Option<Uuid>,
+    pub invite_tag: Option<Vec<u8>>,
 }
 
-/// `ListKeyRequestsRequest` — answered with `KeyRequestList` (see routing.yaml).
+/// `ListKeyRequestsRequest` — answered with `KeyRequestList`: the open
+/// requests in the groups the calling device holds a key for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListKeyRequestsRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
 }
 
-/// `FulfilKeyRequestRequest` — answered with `KeyRequest` (see routing.yaml).
+/// `FulfilKeyRequestRequest` — answered with `KeyRequest` (the one
+/// fulfilled): the calling device, a holder, hands the requesting device
+/// the group's keys, one wrap per key id. The caller must be an admin or
+/// member unless the requesting device is their own.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FulfilKeyRequestRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub request_id: Uuid,
+    pub keys: Vec<WrappedKeyInput>,
 }
 
-/// `PublishWrappedKeysRequest` — answered with `WrappedKeyList` (see routing.yaml).
+/// One wrap handed over by a fulfilment: the group key `key_id`, wrapped
+/// for the requesting device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrappedKeyInput {
+    pub key_id: i32,
+    pub wrapped: Vec<u8>,
+}
+
+/// `PublishWrappedKeysRequest` — answered with `WrappedKeyList`: the
+/// calling device publishes one group key, wrapped for each listed device
+/// (the first key of a group for itself, a rotation for every holder of
+/// the previous key, a subgroup's key for the parent's holders). A key id
+/// already published by another device is refused: the loser re-reads and
+/// adopts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishWrappedKeysRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Uuid,
+    pub key_id: i32,
+    pub wraps: Vec<WrapFor>,
 }
 
-/// `GetWrappedKeysRequest` — answered with `WrappedKeyList` (see routing.yaml).
+/// One wrap of a published key: for `device_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrapFor {
+    pub device_id: Uuid,
+    pub wrapped: Vec<u8>,
+}
+
+/// `GetWrappedKeysRequest` — answered with `WrappedKeyList`: every key
+/// wrapped for the calling device, or those of one group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetWrappedKeysRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Option<Uuid>,
 }
 
-/// `RemoveDeviceRequest` — answered with `Device` (see routing.yaml).
+/// `RemoveDeviceRequest` — answered with `Device` (the one removed): the
+/// owner drops one of their devices with its keys and requests; `relay`
+/// learns per group it held a key for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoveDeviceRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
 }
 
-/// `GroupHeadAdvanced` — a void fan-out event (see routing.yaml).
+/// `GroupHeadAdvanced` — a void fan-out event from `relay` after a push
+/// batch committed: `device` wakes every holder device but the writer's.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupHeadAdvanced {
-    // TODO: the fields.
+    pub group_id: Uuid,
+    pub head_seq: i64,
+    pub writer_device: Uuid,
 }
 
-/// `HistoryRequested` — a void fan-out event (see routing.yaml).
+/// `HistoryRequested` — a void fan-out event from `relay`: wake the listed
+/// devices (the group's holders, the requester excluded) to answer a
+/// history request for a range, or for one object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryRequested {
-    // TODO: the fields.
+    pub request_id: Uuid,
+    pub group_id: Uuid,
+    pub requester_device: Uuid,
+    pub from_seq: i64,
+    pub to_seq: i64,
+    pub object_id: Option<Uuid>,
+    pub devices: Vec<Uuid>,
 }
 
-/// `HistoryReady` — a void fan-out event (see routing.yaml).
+/// `HistoryReady` — a void fan-out event from `relay`: a holder pushed
+/// rows through `through_seq`; wake the requester to pull. `complete`
+/// means the request is fulfilled.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryReady {
-    // TODO: the fields.
+    pub request_id: Uuid,
+    pub requester_device: Uuid,
+    pub through_seq: i64,
+    pub complete: bool,
 }
 
-/// `DeviceLeftGroup` — a void fan-out event (see routing.yaml).
+/// `DeviceLeftGroup` — a void fan-out event from `device` to `relay`: the
+/// device lost its keys for the group (member removed, device removed,
+/// account purged), so `relay` stops waiting for its ack.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceLeftGroup {
-    // TODO: the fields.
+    pub group_id: Uuid,
+    pub device_id: Uuid,
 }
 
-/// `PushObjectsRequest` — answered with `PushResult` (see routing.yaml).
+// --- relay ---
+//
+// The relay keeps, per group, the rows some device has not acked yet, 672
+// hours at most; member devices are the store. A row's `seq` identifies its
+// state; a tombstone is a row with `deleted` and no value
+// (`docs/01-deappje/02-relay.md`). The server never parses a value.
+
+/// A row of the log as the server holds it: `value` is the envelope
+/// (plaintext header, ciphertext), absent on a tombstone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entry {
+    pub id: Uuid,
+    pub value: Option<Vec<u8>>,
+    pub seq: i64,
+    pub deleted: bool,
+}
+
+/// One object of a push: `base_seq` is the seq of the row the device
+/// edited from, 0 for a new object; a delete is `deleted` with no value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushEntry {
+    pub id: Uuid,
+    pub value: Option<Vec<u8>>,
+    pub base_seq: i64,
+    pub deleted: bool,
+}
+
+/// `PushObjectsRequest` — answered with `PushResult`: one batch, one
+/// transaction, from a device that holds the group (its ack at or above
+/// the eviction floor); the caller must be an admin or member.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushObjectsRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Uuid,
+    pub objects: Vec<PushEntry>,
 }
 
-/// `PullChangesRequest` — answered with `ChangeSet` (see routing.yaml).
+/// An accepted push: the object's new seq.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Accepted {
+    pub id: Uuid,
+    pub seq: i64,
+}
+
+/// A refused push: the row as the server holds it, for the rebase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Conflict {
+    pub id: Uuid,
+    pub current: Entry,
+}
+
+/// The answer to a push: per object accepted or in conflict, or the whole
+/// batch refused because the device is not a holder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PushResult {
+    Accepted { accepted: Vec<Accepted>, conflicts: Vec<Conflict>, head_seq: i64 },
+    BehindFloor { evicted_through_seq: i64 },
+}
+
+/// `PullChangesRequest` — answered with `ChangeSet`: the rows after
+/// `since_seq`, oldest first, at most `limit` (0 is the default page).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullChangesRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Uuid,
+    pub since_seq: i64,
+    pub limit: i32,
 }
 
-/// `AckSeqRequest` — answered with `AckResult` (see routing.yaml).
+/// A page of the log with where the group stands: its head, the eviction
+/// floor and the lowest ack among its devices (none when no device has a
+/// row).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangeSet {
+    pub entries: Vec<Entry>,
+    pub head_seq: i64,
+    pub evicted_through_seq: i64,
+    pub min_acked_seq: Option<i64>,
+    pub more: bool,
+}
+
+/// `AckSeqRequest` — answered with `AckResult`: the device holds every row
+/// of the group through `seq`. Monotone, except 0, a device's first act in
+/// a group and its way to start over.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AckSeqRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Uuid,
+    pub seq: i64,
 }
 
-/// `GetHeadsRequest` — answered with `HeadList` (see routing.yaml).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AckResult {
+    pub evicted_through_seq: i64,
+    pub min_acked_seq: Option<i64>,
+}
+
+/// `GetHeadsRequest` — answered with `HeadList`: where the device stands
+/// in every listed group it is a member of.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetHeadsRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_ids: Vec<Uuid>,
 }
 
-/// `RequestHistoryRequest` — answered with `HistoryRequest` (see routing.yaml).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Head {
+    pub group_id: Uuid,
+    pub head_seq: i64,
+    pub evicted_through_seq: i64,
+    pub min_acked_seq: Option<i64>,
+}
+
+/// The groups the caller is a member of, among those asked; a group left
+/// out is one the caller is no longer in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeadList {
+    pub heads: Vec<Head>,
+}
+
+/// `RequestHistoryRequest` — answered with `HistoryRequest`: rows in
+/// `[from_seq, to_seq]`, or one object, from a holder; `unfillable` at
+/// once when the group has no other holder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestHistoryRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Uuid,
+    pub from_seq: i64,
+    pub to_seq: i64,
+    pub object_id: Option<Uuid>,
 }
 
-/// `ListHistoryRequestsRequest` — answered with `HistoryRequestList` (see routing.yaml).
+/// Where a history request stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HistoryStatus {
+    /// Stored, waiting for a holder to claim it.
+    Open,
+    /// Claimed by the device that asked.
+    Claimed,
+    /// Claimed by another device.
+    Taken,
+    /// Nobody holds anything older than the window: nothing was stored.
+    Unfillable,
+}
+
+impl HistoryStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HistoryStatus::Open => "open",
+            HistoryStatus::Claimed => "claimed",
+            HistoryStatus::Taken => "taken",
+            HistoryStatus::Unfillable => "unfillable",
+        }
+    }
+}
+
+/// A history request as stored, with its status for the caller. An
+/// unfillable one carries a nil id: nothing was stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryRequest {
+    pub id: Uuid,
+    pub group_id: Uuid,
+    pub requester_device: Uuid,
+    pub from_seq: i64,
+    pub to_seq: i64,
+    pub object_id: Option<Uuid>,
+    pub claimed_by: Option<Uuid>,
+    pub claimed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub status: HistoryStatus,
+}
+
+/// `ListHistoryRequestsRequest` — answered with `HistoryRequestList`: the
+/// group's open requests a holder may claim (unclaimed, or claimed more
+/// than five minutes ago).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListHistoryRequestsRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub group_id: Uuid,
 }
 
-/// `ClaimHistoryRequest` — answered with `HistoryRequest` (see routing.yaml).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryRequestList {
+    pub requests: Vec<HistoryRequest>,
+}
+
+/// `ClaimHistoryRequest` — answered with `HistoryRequest`: the calling
+/// device, a holder, takes the request; the first wins, the rest are
+/// answered `taken`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaimHistoryRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub request_id: Uuid,
 }
 
-/// `PushHistoryRequest` — answered with `PushHistoryResult` (see routing.yaml).
+/// `PushHistoryRequest` — answered with `PushHistoryResult`: the claimer
+/// pushes the rows it holds in the range, oldest first, as they were in
+/// the log; `complete` on the last call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushHistoryRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub request_id: Uuid,
+    pub entries: Vec<Entry>,
+    pub complete: bool,
 }
 
-/// `ObjectDeleted` — a void fan-out event (see routing.yaml).
+/// What a history push did: rows re-inserted at their original seqs, rows
+/// skipped because an id already had a row, and the last seq of the call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushHistoryResult {
+    pub inserted: i64,
+    pub skipped: i64,
+    pub through_seq: i64,
+    pub complete: bool,
+}
+
+/// `ObjectDeleted` — a void fan-out event from `relay` to `storage`, per
+/// tombstone: the object's files go.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectDeleted {
-    // TODO: the fields.
+    pub group_id: Uuid,
+    pub object_id: Uuid,
 }
 
-/// `PresignUploadRequest` — answered with `UploadGrant` (see routing.yaml).
+// --- storage ---
+//
+// A file lives in the environment's private bucket under
+// `g/<group_id>/o/<object_id>/<slot>`; the group prefix is the
+// authorisation boundary, the slot names the size cap
+// (`docs/01-deappje/02-storage.md`). The server never sees the bytes.
+
+/// `PresignUploadRequest` — answered with `UploadGrant`: a presigned PUT
+/// for `key` under the caller's group, `size` bytes (the slot's cap and
+/// the group's quota apply; the PUT is signed for exactly that length).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresignUploadRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
+    pub key: String,
+    pub size: i64,
 }
 
-/// `PresignDownloadRequest` — answered with `DownloadGrant` (see routing.yaml).
+/// `PresignDownloadRequest` — answered with `DownloadGrant`: a presigned
+/// GET for `key` under the caller's group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresignDownloadRequest {
-    // TODO: the fields.
+    pub caller: Uuid,
+    pub group_id: Uuid,
+    pub key: String,
 }
 
 /// A group as `group` holds it. `deleted_at` is set from the moment a
@@ -462,73 +846,85 @@ pub struct PurgeResult {
     pub remaining: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A device as its owner sees it, push token included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
-    // TODO: the fields.
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub public_key: Vec<u8>,
+    pub platform: Platform,
+    pub push: Option<PushToken>,
+    pub created_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A device as another member sees it: what wrapping a key for it needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub public_key: Vec<u8>,
+    pub platform: Platform,
+}
+
+/// The holders of a group's keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceList {
-    // TODO: the fields.
+    pub group_id: Uuid,
+    pub devices: Vec<DeviceInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// An open key request, with what a holder needs to verify the
+/// requesting device: its user, platform and public key, and the invite
+/// tag when it came through an invite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyRequest {
-    // TODO: the fields.
+    pub id: Uuid,
+    pub group_id: Uuid,
+    pub device: DeviceInfo,
+    pub invite_id: Option<Uuid>,
+    pub invite_tag: Option<Vec<u8>>,
+    pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The open requests in the groups the calling device holds a key for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyRequestList {
-    // TODO: the fields.
+    pub requests: Vec<KeyRequest>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One copy of a group key, wrapped for one device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrappedKey {
+    pub id: Uuid,
+    pub group_id: Uuid,
+    pub key_id: i32,
+    pub device_id: Uuid,
+    pub wrapped: Vec<u8>,
+    pub wrapped_by_device: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Wrapped keys, by group then key id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WrappedKeyList {
-    // TODO: the fields.
+    pub keys: Vec<WrappedKey>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PushResult {
-    // TODO: the fields.
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChangeSet {
-    // TODO: the fields.
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AckResult {
-    // TODO: the fields.
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HeadList {
-    // TODO: the fields.
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoryRequest {
-    // TODO: the fields.
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoryRequestList {
-    // TODO: the fields.
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PushHistoryResult {
-    // TODO: the fields.
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A presigned PUT, valid until `expires_at`, on the environment's
+/// private-bucket address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadGrant {
-    // TODO: the fields.
+    pub key: String,
+    pub url: String,
+    pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A presigned GET, valid until `expires_at`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadGrant {
-    // TODO: the fields.
+    pub key: String,
+    pub url: String,
+    pub expires_at: DateTime<Utc>,
 }
 // basable:messages-end

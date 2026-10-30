@@ -4,19 +4,15 @@
 //! What this nanoservice owns is what it is: 0 processing-object
 //! type(s), 3 plain table(s), 2 external call(s).
 
-// A rendered skeleton has stubs nothing calls yet; the allow goes once the
-// bodies are filled.
-#![allow(dead_code)]
-
-use basable_core::AppError;
 use basable_db::{NanoPool, Nanoservice, Stateful};
 
-pub mod handlers;
 pub mod effects;
-pub mod provider;
-pub mod simulator;
+pub mod handlers;
 pub mod model;
-pub mod repository;
+pub mod provider;
+pub mod push;
+mod repository;
+pub mod simulator;
 
 /// The schema marker: this nanoservice owns `nano_device` and gets a
 /// pool bound to it (`SET ROLE nano_device`). A cross-schema query
@@ -38,11 +34,14 @@ pub struct Device {
 impl Device {
     /// Builds the component. Called once from `app/src/main.rs`.
     pub fn new(_app: &basable_app::App, pool: NanoPool<Schema>) -> Self {
-        Self {
-            pool,
-            // Production wires the real provider; tests wire the simulator.
-            calls: effects::Calls::from_env(),
-        }
+        // Production wires the real providers; tests wire the simulator.
+        Self::with_calls(pool, effects::Calls::from_env())
+    }
+
+    /// The component over an explicit adapter set: what the tests build,
+    /// with `effects::Calls::new(simulator)`.
+    pub fn with_calls(pool: NanoPool<Schema>, calls: effects::Calls) -> Self {
+        Self { pool, calls }
     }
 }
 
@@ -50,11 +49,3 @@ impl Device {
 /// schedule): it answers messages. A type or a schedule it gains brings a
 /// `loops()` here.
 impl<R: 'static> basable_app::Component<R> for Device {}
-
-/// The error a step not filled in yet answers with, so the skeleton deploys
-/// green instead of panicking. `regex_search unimplemented_step` lists what
-/// is left.
-pub(crate) fn unimplemented_step(step: &'static str) -> AppError {
-    tracing::warn!(step, "unimplemented step reached");
-    AppError::unimplemented(step)
-}

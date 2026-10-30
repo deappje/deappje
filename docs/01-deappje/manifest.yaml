@@ -123,7 +123,7 @@ nanoservices:
             - { name: wrapped, type: bytes }
             - { name: wrapped_by_device, type: uuid }
             - { name: created_at, type: timestamp }
-          indexes: [ { columns: [group_id, key_id, device_id] }, { columns: [device_id] } ]
+          indexes: [ { columns: [group_id, key_id, device_id], unique: true }, { columns: [device_id] } ]
         - name: key_request
           columns:
             - { name: id, type: uuid, primaryKey: true }
@@ -132,7 +132,7 @@ nanoservices:
             - { name: invite_id, type: uuid, nullable: true }
             - { name: invite_tag, type: bytes, nullable: true }
             - { name: created_at, type: timestamp }
-          indexes: [ { columns: [group_id, device_id] } ]
+          indexes: [ { columns: [group_id, device_id], unique: true } ]
     externalSystems:
       - name: apns
         calls:

@@ -74,3 +74,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "j
 http = "1"
 futures = "0.3"
 dashmap = "6"
+# The push providers' JWTs (APNs ES256, Google RS256) are signed with ring,
+# already in the graph through rustls; base64url is the JWT's encoding.
+ring = "0.17"
+base64 = "0.22"

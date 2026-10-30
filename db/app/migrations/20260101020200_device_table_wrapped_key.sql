@@ -17,7 +17,7 @@ CREATE TABLE wrapped_key (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE INDEX idx_wrapped_key_group_id_key_id_device_id ON wrapped_key (group_id, key_id, device_id);
+CREATE UNIQUE INDEX idx_wrapped_key_group_id_key_id_device_id ON wrapped_key (group_id, key_id, device_id);
 
 CREATE INDEX idx_wrapped_key_device_id ON wrapped_key (device_id);
 

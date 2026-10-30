@@ -2,11 +2,16 @@
 //! simulator. Green on day one; the first thing a real provider must keep
 //! green. Ack-loss probes are mandatory for irreversible adapters.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use basable_effecttest::{Harness, audit};
 use device::effects::*;
 use device::simulator::{Fault, Simulator};
+
+fn data() -> BTreeMap<String, String> {
+    BTreeMap::from([("reason".to_owned(), "head".to_owned())])
+}
 
 audit!(send_apns, || async {
     let sim = Arc::new(Simulator::new());
@@ -18,6 +23,8 @@ audit!(send_apns, || async {
         calls.send_apns.clone(),
         || SendApnsArgs {
             key: "send_apns-1".into(),
+            token: "apns-token".into(),
+            data: data(),
         },
         move || {
             let sim = landed.clone();
@@ -32,8 +39,7 @@ audit!(send_apns, || async {
         let sim = ambiguity.clone();
         async move { sim.inject("send_apns", Fault::AckLoss, 1) }
     })
-    // A convergent effect with no intent scope in its args: the only
-    // possible late call is a duplicate.
+    // A convergent effect: a late duplicate is one extra silent wake.
     .advance_intent(|a| a)
 });
 
@@ -47,6 +53,8 @@ audit!(send_fcm, || async {
         calls.send_fcm.clone(),
         || SendFcmArgs {
             key: "send_fcm-1".into(),
+            token: "fcm-token".into(),
+            data: data(),
         },
         move || {
             let sim = landed.clone();
@@ -61,7 +69,5 @@ audit!(send_fcm, || async {
         let sim = ambiguity.clone();
         async move { sim.inject("send_fcm", Fault::AckLoss, 1) }
     })
-    // A convergent effect with no intent scope in its args: the only
-    // possible late call is a duplicate.
     .advance_intent(|a| a)
 });

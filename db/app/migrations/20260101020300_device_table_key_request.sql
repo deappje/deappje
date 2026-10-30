@@ -16,7 +16,7 @@ CREATE TABLE key_request (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE INDEX idx_key_request_group_id_device_id ON key_request (group_id, device_id);
+CREATE UNIQUE INDEX idx_key_request_group_id_device_id ON key_request (group_id, device_id);
 
 -- dbmate records this version in the same transaction, and the role may
 -- not write the ledger.
