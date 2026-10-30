@@ -17,7 +17,10 @@ from the server's.
    fixed by a seed.
 2. **Every dependency builds for wasm32-unknown-unknown and the phone
    triples** (the hub is resolved for all of them) and draws no randomness
-   of its own: no `getrandom`, no `rand` with an OS backend.
+   of its own: no `getrandom`, no `rand` with an OS backend. The one
+   exception is `yrs`'s `fastrand`, which the core never relies on (every
+   `Doc` gets a client id from `CoreRng`); it reaches the browser's entropy
+   through getrandom's `js` feature, so the wasm build still links.
 3. **The server sees bytes.** An object's value leaves this crate only as
    an `Envelope` (`src/envelope.rs`); a group key leaves it only wrapped
    (`src/keyring.rs`); an invite secret leaves it only as a link fragment or
@@ -44,6 +47,7 @@ from the server's.
 | `src/relay.rs` | The relay's contract as values (`Entry`, `PushEntry`, `PushResult`, `ChangeSet`, `Head`, `HistoryRequest`, `Code`, `RelayError`) and the `Relay` seam (async; Connect for the shells, the model for tests). |
 | `src/store.rs` | The local store: per group the rows (envelopes with the type and parent read out of the ones the device can open), the cursor, the `Phase` (New, CatchingUp, Holder), the outbox of `Pending { Op::Create / Edit / Delete }` with the sealed bytes and the base plaintext an edit was made from; written through to `Storage` and read back whole at `open`. |
 | `src/sync.rs` | The engine `Syncer`: `create`/`edit`/`delete` (the cascade over the children held) and `read`; `sync_group` by phase (join: ack 0, the window, a history request; catch up: page and ack as far as `HistoryReady` says, complete = the whole range; holder: pull, ack, drop tombstones every device passed, then push the outbox with conflicts rebased up to three times, a tombstone dropping the edit, an invalid result parked for the user); a device below the floor or refused an ack starts over and keeps its outbox for the replay; `serve_history` for holders; `history_ready` for the wake-up. Its tests (`src/sync/tests.rs`) are the conformance scenarios and the randomised multi-device harness (four devices, outages, eviction, two absences longer than the window), forty seeds. |
+| `src/notes.rs` | `NoteDoc` over `yrs` (53-bit client id from the generator, byte offsets): `apply` a child's update, `set_text` (only the changed span is deleted and inserted), `session_update` (the delta since the session began), `end_session`; `Syncer::open_note` (every live `note_update` child applied, any order) and `save_note_session` (one child per session). |
 | `src/harness/` | `RelayModel`: `relay`'s handlers and sweeps rule for rule in memory with a movable clock, membership and the wake-ups `device` would push; `block_on` for futures that never wait. Public so the shells' tests can drive it. |
 
 ## Builds
@@ -77,6 +81,6 @@ matches. A breaking change is a new type number, never a repurposed field.
 
 ## Still to come
 
-The note CRDT, the key exchange over `device`'s contract (wrapped keys,
-key requests, rotation), the Connect and Kratos clients behind a
-transport seam, the UniFFI exports.
+The key exchange over `device`'s contract (wrapped keys, key requests,
+rotation), the Connect and Kratos clients behind a transport seam, the
+UniFFI exports.

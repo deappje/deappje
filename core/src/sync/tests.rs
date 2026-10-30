@@ -482,3 +482,39 @@ fn run_harness(seed: u8) {
     }
     assert_eq!(w.model.open_requests(w.group), 0, "seed {seed}");
 }
+
+#[test]
+fn two_devices_editing_a_note_offline_see_the_same_body() {
+    let w = World::new(9);
+    let (mut a, mut b) = (w.device(1, 1), w.device(2, 2));
+    let (ua, ub, now) = (a.user, b.user, a.now);
+    let note = ids::random(&mut a.rng);
+    let doc = Document::new(ua, now, crate::types::Note { title: "Lists".into() });
+    a.syncer().create(w.group, note, ObjectType::Note, doc.encode()).unwrap();
+    let mut body = a.syncer().open_note(w.group, note).unwrap();
+    body.set_text("Shopping:\n");
+    assert!(a.syncer().save_note_session(w.group, note, &mut body, ua, now).unwrap().is_some());
+    a.sync(&w.model, w.group);
+    b.sync(&w.model, w.group);
+    // Offline, A adds an item and B changes the heading.
+    let mut on_a = a.syncer().open_note(w.group, note).unwrap();
+    on_a.set_text("Shopping:\nmilk\n");
+    a.syncer().save_note_session(w.group, note, &mut on_a, ua, now).unwrap();
+    let mut on_b = b.syncer().open_note(w.group, note).unwrap();
+    on_b.set_text("Groceries:\n");
+    b.syncer().save_note_session(w.group, note, &mut on_b, ub, now).unwrap();
+    assert!(b.syncer().save_note_session(w.group, note, &mut on_b, ub, now).unwrap().is_none(), "nothing new since");
+    b.sync(&w.model, w.group);
+    a.sync(&w.model, w.group);
+    b.sync(&w.model, w.group);
+    let text_a = a.syncer().open_note(w.group, note).unwrap().text();
+    let text_b = b.syncer().open_note(w.group, note).unwrap().text();
+    assert_eq!(text_a, text_b);
+    assert_eq!(text_a, "Groceries:\nmilk\n");
+    assert_eq!(a.store.group(w.group).unwrap().children_of(note).len(), 3, "three sessions, three children");
+    // Deleting the note tombstones the children by cascade.
+    a.delete(w.group, note);
+    a.sync(&w.model, w.group);
+    b.sync(&w.model, w.group);
+    assert!(b.live(w.group).is_empty());
+}

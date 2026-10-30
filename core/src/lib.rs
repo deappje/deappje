@@ -15,7 +15,8 @@
 //! [`schema`] (typed fields, documents), [`types`] (the object types),
 //! [`rebase`] (the conflict rebase), [`relay`] (the relay's contract),
 //! [`store`] (the local store and the outbox), [`sync`] (the engine),
-//! [`harness`] (the in-memory relay model the tests drive).
+//! [`notes`] (the note CRDT), [`harness`] (the in-memory relay model the
+//! tests drive).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -26,6 +27,7 @@ pub mod harness;
 pub mod ids;
 pub mod invite;
 pub mod keyring;
+pub mod notes;
 pub mod rebase;
 pub mod relay;
 pub mod rng;
