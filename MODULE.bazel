@@ -114,7 +114,31 @@ crate.from_cargo(
         "aarch64-apple-ios-sim",
     ],
 )
-use_repo(crate, "core_crates", "crates")
+
+# The binding generator's own hub (core/tools/bindgen): uniffi with its
+# `cli` feature, which Cargo would otherwise unify into the core's own
+# uniffi and so into every phone build. Host only.
+# uniffi_bindgen's metadata-only compile and its full compile do not agree
+# on the crate hash (the generator fails to link with E0460 under the
+# repository's pipelined compilation), so it is compiled once.
+crate.annotation(
+    crate = "uniffi_bindgen",
+    disable_pipelining = True,
+    repositories = ["bindgen_crates"],
+)
+crate.from_cargo(
+    name = "bindgen_crates",
+    cargo_lockfile = "//core/tools/bindgen:Cargo.lock",
+    lockfile = "//core/tools/bindgen:Cargo.Bazel.lock",
+    manifests = ["//core/tools/bindgen:Cargo.toml"],
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+    ],
+)
+use_repo(crate, "bindgen_crates", "core_crates", "crates")
 
 # --- buf (lint and breaking checks; codegen is protoc's) --------------------
 buf = use_extension("@rules_buf//buf:extensions.bzl", "buf")
