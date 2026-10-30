@@ -248,7 +248,7 @@ impl<R: GroupRoutes> GroupHandler<R> for Group {
         invite_msg(&invite)
     }
 
-    async fn handle_accept_invite_request(&self, _ctx: &Ctx, msg: messages::AcceptInviteRequest, _s: GroupSender<'_, R>) -> Result<messages::Membership, AppError> {
+    async fn handle_accept_invite_request(&self, _ctx: &Ctx, msg: messages::AcceptInviteRequest, _s: GroupSender<'_, R>) -> Result<messages::InviteAccepted, AppError> {
         self.refuse_deleting_account(msg.caller).await?;
         let now = Utc::now();
         // The invite's group, read unlocked so the locks below are taken in
@@ -269,7 +269,7 @@ impl<R: GroupRoutes> GroupHandler<R> for Group {
         if let Some(existing) = repo::get_membership(&mut *tx, group.id, msg.caller).await.map_err(db("membership"))? {
             // Already in, whatever the invite's state now: nothing to
             // change, and no use consumed.
-            return membership_msg(&existing);
+            return Ok(messages::InviteAccepted { membership: membership_msg(&existing)?, invite: invite_msg(&invite)? });
         }
         invite_admits(&invite, now)?;
         if let Some(parent_id) = group.parent_group_id
@@ -287,7 +287,7 @@ impl<R: GroupRoutes> GroupHandler<R> for Group {
         repo::insert_membership(&mut *tx, &membership).await.map_err(db("insert membership"))?;
         repo::record_invite_use(&mut *tx, invite.id).await.map_err(db("record use"))?;
         tx.commit().await.map_err(db("commit"))?;
-        membership_msg(&membership)
+        Ok(messages::InviteAccepted { membership: membership_msg(&membership)?, invite: invite_msg(&invite)? })
     }
 
     async fn handle_list_members_request(&self, _ctx: &Ctx, msg: messages::ListMembersRequest, _s: GroupSender<'_, R>) -> Result<messages::MemberList, AppError> {

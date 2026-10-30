@@ -812,6 +812,15 @@ pub struct Membership {
     pub joined_at: DateTime<Utc>,
 }
 
+/// An invite accepted: the membership, and the invite it came through,
+/// whose id the joining device puts on its key request so the holders
+/// can verify the invite's tag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InviteAccepted {
+    pub membership: Membership,
+    pub invite: Invite,
+}
+
 /// The members of one group, oldest membership first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberList {

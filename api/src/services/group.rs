@@ -136,8 +136,8 @@ impl<R: ApiRoutes + Send + Sync + 'static> GroupService for GroupServiceImpl<R> 
             return Err(into_connect_error(AppError::invalid_argument("code: empty")));
         }
         let msg = messages::AcceptInviteRequest { caller: caller(&ctx).into_connect()?, code: req.code };
-        let m = self.sender.send_accept_invite_request(&ctx, msg).await.into_connect()?;
-        Ok(Response::new(AcceptInviteResponse { membership: Some(membership(m)).into(), ..Default::default() }))
+        let a = self.sender.send_accept_invite_request(&ctx, msg).await.into_connect()?;
+        Ok(Response::new(AcceptInviteResponse { membership: Some(membership(a.membership)).into(), invite: Some(invite(a.invite)).into(), ..Default::default() }))
     }
 
     async fn list_members(&self, ctx: RequestContext, request: ServiceRequest<'_, ListMembersRequest>) -> ServiceResult<ListMembersResponse> {

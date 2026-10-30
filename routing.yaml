@@ -32,7 +32,7 @@ nanoservices:
       - {message: GetGroupRequest, response: Group}
       - {message: ListGroupsRequest, response: GroupList}
       - {message: CreateInviteRequest, response: Invite}
-      - {message: AcceptInviteRequest, response: Membership}
+      - {message: AcceptInviteRequest, response: InviteAccepted}
       - {message: ListMembersRequest, response: MemberList}
       - {message: AddMemberRequest, response: Membership}
       - {message: RemoveMemberRequest, response: Membership}
@@ -63,7 +63,7 @@ nanoservices:
       - {message: GetGroupRequest, response: Group}
       - {message: ListGroupsRequest, response: GroupList}
       - {message: CreateInviteRequest, response: Invite}
-      - {message: AcceptInviteRequest, response: Membership}
+      - {message: AcceptInviteRequest, response: InviteAccepted}
       - {message: ListMembersRequest, response: MemberList}
       - {message: AddMemberRequest, response: Membership}
       - {message: RemoveMemberRequest, response: Membership}

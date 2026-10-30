@@ -150,6 +150,7 @@ impl Fx {
         self.group
             .handle_accept_invite_request(&self.ctx, AcceptInviteRequest { caller, code: code.to_owned() }, self.sender())
             .await
+            .map(|a| a.membership)
     }
 
     /// Admits `who` to the group through a fresh one-use invite.

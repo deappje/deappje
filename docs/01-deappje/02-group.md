@@ -136,7 +136,7 @@ already tolerate.
 | GetGroupRequest | Group | caller must be a member |
 | ListGroupsRequest | GroupList | all groups of the caller, with parent ids |
 | CreateInviteRequest | Invite | caller must be admin |
-| AcceptInviteRequest | Membership | see invite invariants |
+| AcceptInviteRequest | InviteAccepted (the membership and the invite: its id goes on the joining device's key request) | see invite invariants |
 | AddMemberRequest | Membership | subgroups only: caller is `admin` or `member` of the subgroup, the user a member of the parent; insert the membership with the given role (`member` or `viewer`); no invite, no acceptance; refused on a top-level group. The caller's device then wraps the subgroup keys for that user's devices (`02-device.md`, subgroup trust) |
 | ListMembersRequest | MemberList | user ids and roles; caller must be a member |
 | RemoveMemberRequest | Membership | caller admin; cascades to subgroups; sends `MemberRemoved` after commit |

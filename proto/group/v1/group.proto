@@ -122,8 +122,11 @@ message AcceptInviteRequest {
   string code = 1;
 }
 
+// The membership, and the invite it came through: its id goes on the
+// joining device's key request, so a holder can check the invite's tag.
 message AcceptInviteResponse {
   Membership membership = 1;
+  Invite invite = 2;
 }
 
 // The caller must be a member.
