@@ -161,17 +161,18 @@ fn take<const N: usize>(input: &[u8], pos: &mut usize) -> Result<[u8; N], Decode
     Ok(out)
 }
 
-/// The first field with the number, as a varint.
+/// The last field with the number, as a varint (the last occurrence of a
+/// singular field is its value, as protobuf has it).
 pub fn varint_of(fields: &[Field], number: u32) -> Option<u64> {
-    fields.iter().find(|f| f.number == number).and_then(|f| match &f.value {
+    fields.iter().rfind(|f| f.number == number).and_then(|f| match &f.value {
         Value::Varint(v) => Some(*v),
         _ => None,
     })
 }
 
-/// The first field with the number, as bytes.
+/// The last field with the number, as bytes.
 pub fn bytes_of(fields: &[Field], number: u32) -> Option<&[u8]> {
-    fields.iter().find(|f| f.number == number).and_then(|f| match &f.value {
+    fields.iter().rfind(|f| f.number == number).and_then(|f| match &f.value {
         Value::Bytes(b) => Some(b.as_slice()),
         _ => None,
     })
@@ -195,7 +196,7 @@ mod tests {
         assert_eq!(decode(&bytes).unwrap(), fields);
         assert_eq!(&bytes[..3], &[0x08, 0xac, 0x02], "300 as a varint after tag 1");
         assert_eq!(varint_of(&fields, 1), Some(300));
-        assert_eq!(bytes_of(&fields, 2), Some(&b"hi"[..]));
+        assert_eq!(bytes_of(&fields, 2), Some(&b""[..]), "the last occurrence is the value");
     }
 
     #[test]

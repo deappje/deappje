@@ -11,7 +11,9 @@
 //! from one source.
 //!
 //! Layers, bottom up: [`wire`] (protobuf wire format), [`crypto`] (HPKE,
-//! AEAD, hashes), [`ids`], [`envelope`], [`keyring`], [`trust`], [`invite`].
+//! AEAD, hashes), [`ids`], [`envelope`], [`keyring`], [`trust`], [`invite`],
+//! [`schema`] (typed fields, documents), [`types`] (the object types),
+//! [`rebase`] (the conflict rebase).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -21,7 +23,10 @@ pub mod envelope;
 pub mod ids;
 pub mod invite;
 pub mod keyring;
+pub mod rebase;
 pub mod rng;
+pub mod schema;
 pub mod shell;
 pub mod trust;
+pub mod types;
 pub mod wire;

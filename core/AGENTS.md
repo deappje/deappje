@@ -38,6 +38,9 @@ from the server's.
 | `src/keyring.rs` | `GroupKey`, `WrapIds`, `wrap`/`unwrap` (HPKE Auth, `info` = group ‖ key id ‖ recipient device ‖ wrapping device), `Keyring` (every generation per group, `latest`). |
 | `src/trust.rs` | `fingerprint` (SHA-256 of the public key, twelve symbols `xxxx-xxxx-xxxx`), `Pins` (`check` refuses a changed key; `accept` is the person's act). |
 | `src/invite.rs` | `InviteSecret` (16 bytes, the link's fragment in the code alphabet, the HMAC tag over the joining device's key), `join_link`, `parse_join_link`. |
+| `src/schema.rs` | `ObjectType` (numbers, `Strategy`, `ParentRule`, `may_write`), `FieldKind`/`ElementKey`/`FieldSpec`/`Schema` for the rebase, `FieldValue`/`Scalar`/`Element`/`Message`/`Object` (typed fields over the wire codec, proto3 defaults absent, `Option` for presence), the `message!` and `wire_enum!` macros, `Meta` (fields 1-4: parent, author, authored_at, edited_at), `Document<T>` (seal/open/validate). |
+| `src/types.rs` | Every object type as a `message!` body with `impl Object` (number, invariants): `FileRef`, `Geo`, `Birthday`, the enums; `ObjectType::schema()` and `validate_value()` dispatch by number. Own fields start at 10; all at schema version 1. |
+| `src/rebase.rs` | `diff` (base → local, per singular field and per element by key), `apply` (onto current, unknown fields pass through), `rebase` (by strategy: singleton and append-only go whole). The conformance cases of `03-testing.md` are its tests. |
 
 ## Builds
 
@@ -49,9 +52,15 @@ from the server's.
 - The Android and iOS libraries and the UniFFI bindings come with the apps
   (`docs/01-deappje/05-deployment.md`, "The apps").
 
+## Adding a field or a type
+
+A field: add it to the `message!` body with the next number, bump that
+type's `SCHEMA_VERSION`, never reuse a number. A type: a new number in its
+feature block in `object_types!`, a body in `types.rs`, both dispatch
+matches. A breaking change is a new type number, never a repurposed field.
+
 ## Still to come
 
-The local store, the sync engine against `relay`'s contract, the outbox
-and the rebase, the note CRDT, the type schemas, the Connect and Kratos
-clients behind a transport seam, and the conformance vectors of
-`03-testing.md`.
+The local store, the sync engine against `relay`'s contract with the
+outbox and the multi-device harness, the note CRDT, the Connect and
+Kratos clients behind a transport seam, the UniFFI exports.
