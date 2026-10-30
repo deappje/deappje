@@ -29,7 +29,7 @@ from the server's.
 
 | File | Responsibility |
 |---|---|
-| `src/shell.rs` | The seams: `Random`, `Clock`, `DeviceKey`; `SoftwareDeviceKey` for tests and the browser without "remember this browser". |
+| `src/shell.rs` | The seams: `Random`, `Clock`, `DeviceKey`, `Storage` (named blobs the core writes through); `SoftwareDeviceKey`, `MemoryStorage`, `FixedClock`, `SeededRandom` for tests and the browser without "remember this browser". |
 | `src/rng.rs` | `CoreRng`: ChaCha20 seeded from the shell; `rand_core` impls for the crates that take a generator. |
 | `src/wire.rs` | The protobuf wire format: encode, decode, fields by number. The envelope is written here, and the rebase will work at this level. |
 | `src/crypto/` | `hash` (SHA-256, HMAC), `aead` (XChaCha20-Poly1305 for values and blobs; ChaCha20-Poly1305 for HPKE), `hpke` (RFC 9180 Auth mode, DHKEM X25519 / HKDF-SHA256 / ChaCha20-Poly1305, by hand so the device key stays behind its seam; tested against the `hpke` crate both ways). |
@@ -41,6 +41,10 @@ from the server's.
 | `src/schema.rs` | `ObjectType` (numbers, `Strategy`, `ParentRule`, `may_write`), `FieldKind`/`ElementKey`/`FieldSpec`/`Schema` for the rebase, `FieldValue`/`Scalar`/`Element`/`Message`/`Object` (typed fields over the wire codec, proto3 defaults absent, `Option` for presence), the `message!` and `wire_enum!` macros, `Meta` (fields 1-4: parent, author, authored_at, edited_at), `Document<T>` (seal/open/validate). |
 | `src/types.rs` | Every object type as a `message!` body with `impl Object` (number, invariants): `FileRef`, `Geo`, `Birthday`, the enums; `ObjectType::schema()` and `validate_value()` dispatch by number. Own fields start at 10; all at schema version 1. |
 | `src/rebase.rs` | `diff` (base → local, per singular field and per element by key), `apply` (onto current, unknown fields pass through), `rebase` (by strategy: singleton and append-only go whole). The conformance cases of `03-testing.md` are its tests. |
+| `src/relay.rs` | The relay's contract as values (`Entry`, `PushEntry`, `PushResult`, `ChangeSet`, `Head`, `HistoryRequest`, `Code`, `RelayError`) and the `Relay` seam (async; Connect for the shells, the model for tests). |
+| `src/store.rs` | The local store: per group the rows (envelopes with the type and parent read out of the ones the device can open), the cursor, the `Phase` (New, CatchingUp, Holder), the outbox of `Pending { Op::Create / Edit / Delete }` with the sealed bytes and the base plaintext an edit was made from; written through to `Storage` and read back whole at `open`. |
+| `src/sync.rs` | The engine `Syncer`: `create`/`edit`/`delete` (the cascade over the children held) and `read`; `sync_group` by phase (join: ack 0, the window, a history request; catch up: page and ack as far as `HistoryReady` says, complete = the whole range; holder: pull, ack, drop tombstones every device passed, then push the outbox with conflicts rebased up to three times, a tombstone dropping the edit, an invalid result parked for the user); a device below the floor or refused an ack starts over and keeps its outbox for the replay; `serve_history` for holders; `history_ready` for the wake-up. Its tests (`src/sync/tests.rs`) are the conformance scenarios and the randomised multi-device harness (four devices, outages, eviction, two absences longer than the window), forty seeds. |
+| `src/harness/` | `RelayModel`: `relay`'s handlers and sweeps rule for rule in memory with a movable clock, membership and the wake-ups `device` would push; `block_on` for futures that never wait. Public so the shells' tests can drive it. |
 
 ## Builds
 
@@ -59,8 +63,20 @@ type's `SCHEMA_VERSION`, never reuse a number. A type: a new number in its
 feature block in `object_types!`, a body in `types.rs`, both dispatch
 matches. A breaking change is a new type number, never a repurposed field.
 
+## Invariants the engine keeps
+
+- A row's value is exactly what the server has at that seq: a device's own
+  write is sealed once (in the op) and the row takes those bytes on accept.
+- A push is preceded by a pull in the same sync, and a device's own rows
+  that are the whole stretch after its cursor are acked without a pull.
+- The outbox is never thrown away: not by a start-over, not by an outage;
+  only an accept, a tombstone (the edit is dropped and said so) or a
+  replay onto a gone object removes an entry.
+- The store is consistent between any two relay calls: an outage returns
+  `SyncError::Relay(Unavailable)` and the next sync continues.
+
 ## Still to come
 
-The local store, the sync engine against `relay`'s contract with the
-outbox and the multi-device harness, the note CRDT, the Connect and
-Kratos clients behind a transport seam, the UniFFI exports.
+The note CRDT, the key exchange over `device`'s contract (wrapped keys,
+key requests, rotation), the Connect and Kratos clients behind a
+transport seam, the UniFFI exports.
