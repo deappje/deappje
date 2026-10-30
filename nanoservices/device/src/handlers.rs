@@ -77,15 +77,16 @@ fn key_request_msg(r: &model::KeyRequest, d: &model::Device) -> Result<messages:
     })
 }
 
-fn wrapped_key_msg(k: &model::WrappedKey) -> messages::WrappedKey {
+fn wrapped_key_msg(k: &model::WrappedKeyCopy) -> messages::WrappedKey {
     messages::WrappedKey {
-        id: k.id,
-        group_id: k.group_id,
-        key_id: k.key_id,
-        device_id: k.device_id,
-        wrapped: k.wrapped.clone(),
-        wrapped_by_device: k.wrapped_by_device,
-        created_at: k.created_at,
+        id: k.key.id,
+        group_id: k.key.group_id,
+        key_id: k.key.key_id,
+        device_id: k.key.device_id,
+        wrapped: k.key.wrapped.clone(),
+        wrapped_by_device: k.key.wrapped_by_device,
+        wrapped_by_public_key: k.wrapped_by_public_key.clone(),
+        created_at: k.key.created_at,
     }
 }
 

@@ -893,7 +893,10 @@ pub struct KeyRequestList {
     pub requests: Vec<KeyRequest>,
 }
 
-/// One copy of a group key, wrapped for one device.
+/// One copy of a group key, wrapped for one device, with the public key
+/// of the device that wrapped it (empty when that device is gone): the
+/// recipient needs it to open the wrap, and holds nothing yet to list the
+/// holders with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WrappedKey {
     pub id: Uuid,
@@ -902,6 +905,7 @@ pub struct WrappedKey {
     pub device_id: Uuid,
     pub wrapped: Vec<u8>,
     pub wrapped_by_device: Uuid,
+    pub wrapped_by_public_key: Vec<u8>,
     pub created_at: DateTime<Utc>,
 }
 

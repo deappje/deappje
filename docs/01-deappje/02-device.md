@@ -219,6 +219,11 @@ What the code settled beyond the text above (`nanoservices/device`, 2026-10-30):
 - The unique indexes on `wrapped_key (group_id, key_id, device_id)` and `key_request (group_id,
   device_id)` the text declares were missing from the manifest and are now in both (migrations
   edited in place; a preview database that applied the plain ones is recreated).
+- **A wrapped key is answered with the wrapping device's public key** (`wrapped_by_public_key`,
+  joined from `device`, empty when that device is gone). Opening a wrap in HPKE Auth mode needs
+  the sender's public key, and the recipient of its first key holds nothing yet, so it cannot
+  list the holders to learn it; the pin rule above still applies to what it is handed (the
+  client core, 2026-10-30).
 
 ## Tests
 

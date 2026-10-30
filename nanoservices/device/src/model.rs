@@ -28,6 +28,15 @@ pub struct WrappedKey {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A wrapped key as its recipient is answered: the row with the public
+/// key of the device that wrapped it, empty when that device is gone.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WrappedKeyCopy {
+    #[sqlx(flatten)]
+    pub key: WrappedKey,
+    pub wrapped_by_public_key: Vec<u8>,
+}
+
 /// A row of `nano_device.key_request`.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct KeyRequest {

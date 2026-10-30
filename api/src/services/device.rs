@@ -71,6 +71,7 @@ fn wrapped_key(k: messages::WrappedKey) -> WrappedKey {
         device_id: k.device_id.to_string(),
         wrapped: k.wrapped,
         wrapped_by_device: k.wrapped_by_device.to_string(),
+        wrapped_by_public_key: k.wrapped_by_public_key,
         created_at_ms: millis(k.created_at),
         ..Default::default()
     }

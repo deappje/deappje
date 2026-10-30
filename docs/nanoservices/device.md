@@ -8,7 +8,7 @@ Design: `docs/01-deappje/02-device.md`. Code:
 ## Owns
 
 - Table `device` (`id`, `user_id`, `public_key`, `platform`, `push_provider`, `push_token`, `created_at`, `last_seen_at`).
-- Table `wrapped_key` (`id`, `group_id`, `key_id`, `device_id`, `wrapped`, `wrapped_by_device`, `created_at`).
+- Table `wrapped_key` (`id`, `group_id`, `key_id`, `device_id`, `wrapped`, `wrapped_by_device`, `created_at`); answered with the wrapping device's public key joined in (`wrapped_by_public_key`, empty when that device is gone), which opening the wrap needs.
 - Table `key_request` (`id`, `group_id`, `device_id`, `invite_id`, `invite_tag`, `created_at`).
 - External call `send_apns` on apns: `idempotent`.
 - External call `send_fcm` on fcm: `idempotent`.

@@ -184,14 +184,15 @@ impl Fx {
     }
 
     async fn keys_of(&self, caller: Uuid, device_id: Uuid, group_id: Option<Uuid>) -> Vec<(Uuid, i32)> {
+        self.keys_full(caller, device_id, group_id).await.iter().map(|k| (k.group_id, k.key_id)).collect()
+    }
+
+    async fn keys_full(&self, caller: Uuid, device_id: Uuid, group_id: Option<Uuid>) -> Vec<WrappedKey> {
         self.device
             .handle_get_wrapped_keys_request(&self.ctx, GetWrappedKeysRequest { caller, device_id, group_id }, self.sender())
             .await
             .unwrap()
             .keys
-            .iter()
-            .map(|k| (k.group_id, k.key_id))
-            .collect()
     }
 
     async fn list_devices(&self, caller: Uuid, device_id: Uuid, group_id: Uuid) -> Result<Vec<Uuid>, AppError> {
@@ -336,6 +337,8 @@ async fn key_requests_are_fulfilled_by_a_holder_who_may_write() {
     assert_eq!(done.id, req.id);
     assert_eq!(reasons(&fx.sim.pushes_to(&b1.to_string())), vec![reason::KEYS]);
     assert_eq!(fx.keys_of(b, b1, Some(g)).await, vec![(g, 1)]);
+    let handed = fx.keys_full(b, b1, Some(g)).await;
+    assert_eq!((handed[0].wrapped_by_device, handed[0].wrapped_by_public_key.clone()), (a1, key_bytes(a1.as_bytes()[0])), "the wrap names its wrapper and carries its public key, which opening it needs");
     assert!(fx.list_requests(a, a1).await.is_empty(), "fulfilled: gone");
     assert_eq!(code_of(&fx.fulfil(a, a1, req.id, &[1]).await.unwrap_err()), Code::NotFound);
     assert_eq!(code_of(&fx.request_keys(b, b1, g).await.unwrap_err()), Code::FailedPrecondition, "already a holder");

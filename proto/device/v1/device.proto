@@ -65,6 +65,11 @@ message WrappedKey {
   bytes wrapped = 5;
   string wrapped_by_device = 6;
   int64 created_at_ms = 7;
+  // The wrapping device's X25519 public key, 32 bytes: what opening the
+  // wrap (HPKE Auth mode) needs, and a device that holds nothing yet
+  // cannot list the holders to learn it. Empty when the wrapping device is
+  // gone; the recipient then asks for the keys again.
+  bytes wrapped_by_public_key = 8;
 }
 
 // The caller's device, by the id the device minted. A repeat refreshes the

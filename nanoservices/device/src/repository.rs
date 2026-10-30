@@ -11,7 +11,11 @@ use uuid::Uuid;
 use crate::model;
 
 const DEVICE_COLUMNS: &str = "id, user_id, public_key, platform, push_provider, push_token, created_at, last_seen_at";
-const KEY_COLUMNS: &str = "id, group_id, key_id, device_id, wrapped, wrapped_by_device, created_at";
+/// A key with the wrapping device's public key beside it (`k` the key,
+/// `d` the device, left-joined: a wrapping device that is gone leaves it
+/// empty).
+const KEY_COPY_COLUMNS: &str =
+    "k.id, k.group_id, k.key_id, k.device_id, k.wrapped, k.wrapped_by_device, k.created_at, COALESCE(d.public_key, ''::bytea) AS wrapped_by_public_key";
 const REQUEST_COLUMNS: &str = "id, group_id, device_id, invite_id, invite_tag, created_at";
 
 // --- device ---
@@ -151,10 +155,12 @@ pub(crate) async fn insert_wrapped_keys<'e>(e: impl PgExecutor<'e>, rows: &[mode
     Ok(done.rows_affected())
 }
 
-/// The keys wrapped for a device, all groups or one, by group then key id.
-pub(crate) async fn keys_for_device<'e>(e: impl PgExecutor<'e>, device_id: Uuid, group_id: Option<Uuid>) -> Result<Vec<model::WrappedKey>, sqlx::Error> {
-    sqlx::query_as::<_, model::WrappedKey>(&format!(
-        "SELECT {KEY_COLUMNS} FROM wrapped_key WHERE device_id = $1 AND ($2::uuid IS NULL OR group_id = $2) ORDER BY group_id, key_id, id"
+/// The keys wrapped for a device, all groups or one, by group then key id,
+/// each with its wrapping device's public key.
+pub(crate) async fn keys_for_device<'e>(e: impl PgExecutor<'e>, device_id: Uuid, group_id: Option<Uuid>) -> Result<Vec<model::WrappedKeyCopy>, sqlx::Error> {
+    sqlx::query_as::<_, model::WrappedKeyCopy>(&format!(
+        "SELECT {KEY_COPY_COLUMNS} FROM wrapped_key k LEFT JOIN device d ON d.id = k.wrapped_by_device \
+         WHERE k.device_id = $1 AND ($2::uuid IS NULL OR k.group_id = $2) ORDER BY k.group_id, k.key_id, k.id"
     ))
     .bind(device_id)
     .bind(group_id)
@@ -162,10 +168,12 @@ pub(crate) async fn keys_for_device<'e>(e: impl PgExecutor<'e>, device_id: Uuid,
     .await
 }
 
-/// The rows of one key id, for the listed devices.
-pub(crate) async fn keys_of<'e>(e: impl PgExecutor<'e>, group_id: Uuid, key_id: i32, devices: &[Uuid]) -> Result<Vec<model::WrappedKey>, sqlx::Error> {
-    sqlx::query_as::<_, model::WrappedKey>(&format!(
-        "SELECT {KEY_COLUMNS} FROM wrapped_key WHERE group_id = $1 AND key_id = $2 AND device_id = ANY($3) ORDER BY device_id, id"
+/// The rows of one key id, for the listed devices, each with its wrapping
+/// device's public key.
+pub(crate) async fn keys_of<'e>(e: impl PgExecutor<'e>, group_id: Uuid, key_id: i32, devices: &[Uuid]) -> Result<Vec<model::WrappedKeyCopy>, sqlx::Error> {
+    sqlx::query_as::<_, model::WrappedKeyCopy>(&format!(
+        "SELECT {KEY_COPY_COLUMNS} FROM wrapped_key k LEFT JOIN device d ON d.id = k.wrapped_by_device \
+         WHERE k.group_id = $1 AND k.key_id = $2 AND k.device_id = ANY($3) ORDER BY k.device_id, k.id"
     ))
     .bind(group_id)
     .bind(key_id)
