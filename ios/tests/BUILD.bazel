@@ -1,0 +1,117 @@
+# The shell's tests (docs/01-deappje/03-testing.md, "App shells"), each an
+# ios_unit_test on the simulator: one per seam, the end-to-end run of two
+# devices over the core's in-memory server, and the app's models over the
+# same. `bazel test --//:apps //ios/...` runs them all.
+load("@rules_apple//apple:ios.bzl", "ios_application")
+load("@rules_apple//apple/testing/default_runner:ios_test_runner.bzl", "ios_test_runner")
+load("@rules_swift//swift:swift.bzl", "swift_library")
+load("//ios:defs.bzl", "IOS_ONLY", "MINIMUM_OS_VERSION", "ios_test")
+
+# The runner of the two Keychain tests: rules_apple's legacy one (Google's
+# xctestrunner), which installs the host for real and launches it itself.
+# The default xctestrun runner has xcodebuild do a placeholder install of
+# the host from its own path, and securityd then sees none of the host's
+# entitlements (-34018 on every Keychain call). The legacy runner's own
+# default device is an iPhone 6s Plus, which no iOS 26 runtime boots.
+ios_test_runner(
+    name = "keychain_runner",
+    device_type = "iPhone 17",
+)
+
+# The two Keychain tests run inside this empty app: the simulator's Keychain
+# answers a process whose entitlements name an application identifier only
+# (a bare xctest bundle gets errSecMissingEntitlement), and an app of its
+# own keeps the real app's start-up (its Keychain, its network) out of the
+# tests. A hosted test is an xcodebuild run installing this one bundle id on
+# the simulator, so the two are `exclusive`: never at the same time. The
+# other tests need no host and run as bare bundles, in parallel.
+swift_library(
+    name = "host_lib",
+    testonly = True,
+    srcs = ["host/HostApp.swift"],
+    module_name = "DeappjeTestHost",
+    target_compatible_with = IOS_ONLY,
+)
+
+ios_application(
+    name = "host",
+    testonly = True,
+    bundle_id = "nl.deappje.tests",
+    entitlements = "host/host.entitlements",
+    families = ["iphone"],
+    infoplists = ["host/Info.plist"],
+    minimum_os_version = MINIMUM_OS_VERSION,
+    target_compatible_with = IOS_ONLY,
+    deps = [":host_lib"],
+)
+
+# The seams a test gives a core: memory, a fixed clock, seeded entropy, and
+# a device signed in through the model server's token.
+swift_library(
+    name = "support",
+    testonly = True,
+    srcs = glob(["support/*.swift"]),
+    module_name = "TestSupport",
+    target_compatible_with = IOS_ONLY,
+    deps = [
+        "//ios/core",
+        "//ios/shell",
+    ],
+)
+
+ios_test(
+    name = "random_test",
+    srcs = ["RandomTests.swift"],
+    deps = ["//ios/shell"],
+)
+
+ios_test(
+    name = "clock_test",
+    srcs = ["ClockTests.swift"],
+    deps = ["//ios/shell"],
+)
+
+ios_test(
+    name = "secrets_test",
+    srcs = ["SecretsTests.swift"],
+    runner = ":keychain_runner",
+    tags = ["exclusive"],
+    test_host = ":host",
+    deps = ["//ios/shell"],
+)
+
+ios_test(
+    name = "device_key_test",
+    srcs = ["DeviceKeyTests.swift"],
+    runner = ":keychain_runner",
+    tags = ["exclusive"],
+    test_host = ":host",
+    deps = ["//ios/shell"],
+)
+
+ios_test(
+    name = "storage_test",
+    srcs = ["StorageTests.swift"],
+    deps = ["//ios/shell"],
+)
+
+ios_test(
+    name = "transport_test",
+    srcs = ["TransportTests.swift"],
+    deps = ["//ios/shell"],
+)
+
+ios_test(
+    name = "end_to_end_test",
+    srcs = ["EndToEndTests.swift"],
+    deps = [":support"],
+)
+
+ios_test(
+    name = "app_model_test",
+    srcs = ["AppModelTests.swift"],
+    deps = [
+        ":support",
+        "//ios/application",
+    ],
+)
