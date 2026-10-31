@@ -100,6 +100,108 @@ against a fake Kratos, pairs, pushes an object and sees it rendered, driven thro
 in-memory relay model from the conformance harness. Both run only in `apps.yaml`
 (`05-deployment.md`), never in the server's `//...`.
 
+## Feature suites (every shell, the same scenarios)
+
+Each shell carries the feature suite below, written once per platform (Kotlin `kt_jvm_test`,
+Swift `ios_unit_test`, TypeScript vitest) against the shell's own client code over the core's
+in-memory `ModelServer` (`core/AGENTS.md`), with memory-backed seams and nothing mocked in the
+core. The scenarios are the same on every platform, numbered so a gap is visible: a feature the
+core has and a shell does not test is a missing `Fnn`. A shell adds a scenario here before it
+adds the test, so the three stay one suite. Device A is the first user's phone, A2 the same
+user's second device, B another user's device; "sign in" is `modelServer.signIn(token, user)`,
+`setSessionToken(token)`, `restoreSession`; "sync" is `sync()`; a step that needs the other
+device to see something syncs it first.
+
+**Session and device**
+- F01 sign in: `restoreSession` yields the identity; without a token, none.
+- F02 register: `registerDevice` twice is one device; `deviceId` and `fingerprint` are stable.
+- F03 reopen: a second client over the same storage and secrets has the same device id, keys
+  and rows, and `listObjects` matches before and after.
+- F04 logout: after `logout`, `restoreSession` yields none and a write fails `not_signed_in`.
+- F05 outage: with `setOutage(true)` a `sync` fails with kind `api` / code `unavailable`, the
+  store is unchanged, the outbox keeps the write; `setOutage(false)` and the next sync lands it.
+
+**Groups and membership**
+- F06 create: `createGroup` makes the group, its profile singleton (`groupProfileId`), the
+  creator an admin holding key 1; `listGroups` shows it with `holds_keys`.
+- F07 join by invite: A `createInvite`, B `join(link)`; A's `pendingKeyRequests` shows B with
+  `invite_verified` true and B's fingerprint; A approves; B syncs, `keys_received`, reads A's
+  post.
+- F08 roles: a viewer's `createObject` is refused (`api` / `permission_denied`) and the outbox
+  is empty afterwards; after `setMemberRole(member)` the same write lands.
+- F09 removal and rotation: A `removeMember(B)`, `rotateKeys`; a post A writes after is not in
+  B's `listObjects` after B syncs (B's sync reports the group gone or no key); A2 receives the
+  new generation.
+- F10 leave: B `leaveGroup`; `listGroups` on B lacks it; `listMembers` on A lacks B.
+- F11 members: `listMembers` carries every member with role and joined time, in a stable order.
+- F12 profile: two admins edit different fields of the group profile offline; both edits
+  survive the sync (field-level rebase); the same field goes to the later push.
+
+**A second device, history and the window**
+- F13 own device: A2 signs in as A's user, registers, syncs; A's `pendingKeyRequests` shows it
+  with `invite_verified` false and its fingerprint; A approves; A2 holds every row.
+- F14 catch-up after eviction: A posts, every device syncs, `advance(window + 1h)` and `sweep`
+  empty the server; B joins; A syncs (serves history); B becomes a holder with every post.
+- F15 no wake-up: the same with no `historyReady` call at all: B's next sync completes.
+- F16 joiners together: B and C join within the grace; one `sync` of A serves both (A's
+  `SyncReport` shows one request served); both hold everything.
+- F17 start over: B edits offline, `advance(window + 1h)`, `sweep`; B's sync reports
+  `started_over`, then B catches up and its offline edit lands rebased (or is dropped with
+  `EditDropped` when the object was deleted meanwhile).
+
+**Object types** (one scenario per type, each: create, `readObject`, `listObjects` by type,
+edit where the strategy allows, delete, and the other device sees each step)
+- F20 post: text; only the author's devices edit; a comment and a photo under it go with its
+  delete (cascade).
+- F21 comment: under a post, a photo, a venue; `parent_id` kept; deleted with the parent.
+- F22 reaction: `createObjectWithId` at UUIDv5(parent, user); a second reaction by the same
+  user is an edit of the same id; two users' reactions are two objects.
+- F23 photo: `uploadFile` of bytes under slot `full` (`hasBlob` true for the derived key),
+  thumbnail bytes in the value, `downloadFile` round trip on the other device; the file is gone
+  from the bucket after the photo's delete.
+- F24 album: title and cover; photos as children; cover change by another member is a rebase.
+- F25 todo list and items: `pos` ordering; two devices tick and untick the same item offline,
+  later push wins; a move (`pos` edit) never duplicates.
+- F26 note: `saveNote` on two devices offline with different insertions, `readNote` on both
+  gives the same text; a title edit is a rebase; the note's delete cascades to its updates.
+- F27 expense pool, expense, settlement: the general pool singleton (`generalPoolId`); an
+  expense with participants (`equal`, `weights`, `exact`), edited by two devices (one the
+  amount, one a participant) with both kept; a settlement is append-only (edit refused, delete
+  allowed); a ticket kind expense.
+- F28 ticket share: holder and status; a transfer edits holder; its file through `uploadFile`.
+- F29 event: start and end; an edit that crosses them is reported `invalid` and not pushed;
+  `yearly`.
+- F30 poll and vote: a `choice` and a `dates` poll; votes at UUIDv5(poll, user); a changed
+  vote is an edit; an option edit by the author never fights a vote.
+- F31 message: a thread (`reply_to`), photos as children, edit, delete.
+- F32 venue: fields and a comment and reaction under it.
+- F33 member profile: display name, birthday; the singleton id (`memberProfileId`); only its
+  user edits it.
+- F34 invite secret: created by `createInvite`, readable by every holder, never edited.
+- F35 unknown field: an object written with a newer schema version is shown and not rewritten
+  (the shell's edit refuses or passes the unknown bytes through unchanged).
+
+**Conflicts**
+- F40 different fields: two devices edit different fields of one object offline; both kept.
+- F41 same field: the later push wins; the loser's local view updates on its next sync.
+- F42 edit vs delete: an edit against a tombstone is dropped and reported (`EditDropped`).
+- F43 invalid rebase: a rebase result that fails validation is parked and reported
+  (`invalid` in the `SyncReport`), never pushed; fixing the object clears it.
+
+**Wake-ups (the shell's dispatcher, a unit test)**
+- F50 reasons `head`, `keys`, `rotate`, `history` call `sync`; `key_request` refreshes the
+  pending list; `history_ready` calls `historyReady(requestId, throughSeq, complete)` then
+  `sync`; an unknown reason is ignored; a malformed payload is ignored and logged.
+
+**Screens** (where the shell has the screen; rendered against a client over `ModelServer`)
+- F60 sign-in shows the one button and, signed in, the groups list.
+- F61 groups: create shows the new group; join by link shows the group without keys and the
+  waiting state.
+- F62 approvals: a pending request shows the fingerprint and whether the invite vouches for
+  it; approving removes it.
+- F63 timeline: posts newest first; compose adds one; edit and delete on own posts only.
+- F64 sync indicator: an outage shows the offline state and clears when the server is back.
+
 ## CI gate
 
 The scaffold's workflow: lint → Bazel build and test (every unit and integration suite above,
