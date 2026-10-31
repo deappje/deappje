@@ -1,16 +1,31 @@
-# The React frontend: a Vite app built by Bazel (rules_js) into dist/, which
-# the workflow uploads as the `static` artifact; the platform serves it at /
-# from the environment's public bucket. No image and no pod. package.json and
-# pnpm-lock.yaml pin the npm graph: add a dependency to package.json and the
-# verify build (.basable/verify.sh) refreshes the lock. The Connect client is
-# generated from //proto at build into src/gen/; nothing generated is
+# The web client: a Vite + React app around the wasm build of the core,
+# built by Bazel (rules_js) into dist/, which the workflow uploads as the
+# `static` artifact; the platform serves it at / from the environment's
+# public bucket. No image and no pod. package.json and pnpm-lock.yaml pin
+# the npm graph: add a dependency to package.json and the verify build
+# (.basable/verify.sh) refreshes the lock. The core's glue and .wasm are
+# copied from //core:core_wasm into src/wasm/ at build; nothing generated is
 # committed.
-load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_run_binary", "js_run_devserver")
+load("@aspect_rules_js//js:defs.bzl", "js_run_binary", "js_run_devserver")
+load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//frontend/react:typescript/package_json.bzl", typescript = "bin")
 load("@npm//frontend/react:vite/package_json.bzl", vite = "bin")
+load("@npm//frontend/react:vitest/package_json.bzl", vitest = "bin")
 
 npm_link_all_packages(name = "node_modules")
+
+# The core for the browser: wasm-bindgen's glue (deappje_core.js, its .d.ts)
+# and the module (deappje_core_bg.wasm), as src/wasm/. The shell's only
+# way to the server and the store is through it.
+copy_to_directory(
+    name = "wasm",
+    srcs = ["//core:core_wasm"],
+    out = "src/wasm",
+    # The rule leaves an empty directory for JS snippets the core has none of.
+    exclude_srcs_patterns = ["snippets"],
+    root_paths = ["core/core_wasm"],
+)
 
 # Everything the app is made of; `:node_modules` is every package in
 # package.json, so a new dependency needs no edit here.
@@ -18,35 +33,10 @@ SRCS = glob(["src/**"]) + [
     "index.html",
     "package.json",
     "tsconfig.json",
+    "vite.config.mjs",
     ":node_modules",
-    ":proto_es",
+    ":wasm",
 ]
-
-# The Connect client: TypeScript messages and service descriptors for every
-# .proto under //proto (protoc-gen-es, target=ts), regenerated each build.
-js_binary(
-    name = "protoc_es",
-    data = [":node_modules/@bufbuild/protoc-gen-es"],
-    entry_point = "tools/protoc.mjs",
-)
-
-js_run_binary(
-    name = "proto_es",
-    srcs = ["//proto:protos"],
-    args = [
-        "$(execpath //tools:protoc)",
-        "proto",
-        "$(RULEDIR)/src/gen",
-        "$(execpaths //proto:protos)",
-    ],
-    # The protos are read where they are (another package); copying them
-    # into this package's bin tree is not possible.
-    copy_srcs_to_bin = False,
-    mnemonic = "ProtocEs",
-    out_dirs = ["src/gen"],
-    tool = ":protoc_es",
-    tools = ["//tools:protoc"],
-)
 
 vite.vite_binary(
     name = "vite",
@@ -54,9 +44,9 @@ vite.vite_binary(
     data = ["vite.config.mjs"],
 )
 
-# The production bundle: dist/, content-hashed assets under dist/assets/,
-# index.html at its root. The workflow uploads bazel-bin/frontend/react/dist
-# as the `static` artifact.
+# The production bundle: dist/, content-hashed assets under dist/assets/
+# (the .wasm among them), index.html at its root. The workflow uploads
+# bazel-bin/frontend/react/dist as the `static` artifact.
 js_run_binary(
     name = "build",
     srcs = SRCS,
@@ -68,25 +58,34 @@ js_run_binary(
 )
 
 # `ibazel run //frontend/react:start`: the dev server, /api proxied to an app
-# listening on localhost:8080.
+# on localhost:8080 and /.ory to a Kratos on localhost:4433.
 js_run_devserver(
     name = "start",
     args = [
         ".",
         "--host",
     ],
-    data = SRCS + ["vite.config.mjs"],
+    data = SRCS,
     tool = ":vite",
 )
 
 # The type check: Vite strips types without checking them, so this test is
-# what makes a type error a red build.
+# what makes a type error a red build. The tests are in src/ and checked too.
 typescript.tsc_test(
     name = "typecheck",
     args = [
         "-p",
         "tsconfig.json",
     ],
+    chdir = package_name(),
+    data = SRCS,
+)
+
+# The tests (vitest, under Node): the seams' unit tests and the end-to-end
+# test of two browsers over the wasm ModelServer, no network.
+vitest.vitest_test(
+    name = "test",
+    args = ["run"],
     chdir = package_name(),
     data = SRCS,
 )
