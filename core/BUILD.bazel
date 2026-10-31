@@ -44,6 +44,9 @@ rust_shared_library(
 
 rust_wasm_bindgen(
     name = "core_wasm",
+    # The glue's file name, what the web client imports
+    # (frontend/react/src/wasm/deappje_core.js).
+    out_name = "deappje_core",
     target = "web",
     wasm_file = ":core_cdylib",
     visibility = ["//visibility:public"],
