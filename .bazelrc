@@ -40,3 +40,9 @@ test:ci --test_env=TEST_DATABASE_URL
 # Remote cache (the platform's, per tenant): filled in when it is provisioned.
 # build:ci --remote_cache=https://bazel-cache.basable.com
 # build:ci --remote_instance_name=abandon-above-toss/deappje
+
+# --- android/ ---
+# The ABIs //android:app is built for: one platform per ABI (android/BUILD.bazel),
+# the APK packing each build of the core under lib/<platform name>/. Read only
+# by android_binary's split transition; nothing else sees it.
+build --@rules_android//flags:android_platforms=//android:arm64-v8a,//android:x86_64

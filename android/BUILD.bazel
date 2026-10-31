@@ -1,0 +1,218 @@
+# The Android shell (docs/01-deappje/05-deployment.md, "The apps"): Kotlin
+# and Jetpack Compose over the core's UniFFI bindings. Every target here is
+# behind --//:apps (the root BUILD), so the server's `bazel test //...` never
+# loads the SDK or the Maven graphs. The kt_jvm_tests run against the host
+# build of the core on JNA's library path (docs/01-deappje/03-testing.md,
+# "App shells"); `bazel test --//:apps //android/...` is the run.
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_android//android:rules.bzl", "android_binary")
+load("@rules_kotlin//kotlin:android.bzl", "kt_android_library")
+load("@rules_kotlin//kotlin:core.bzl", "kt_compiler_plugin")
+load("@rules_kotlin//kotlin:jvm.bzl", "kt_jvm_library", "kt_jvm_test")
+load(":environment.bzl", "environment_source")
+
+package(default_visibility = ["//visibility:private"])
+
+# What every target here carries: buildable with the apps on, skipped otherwise.
+APPS = select({
+    "//:apps_on": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+# One platform per ABI the APK ships (--android_platforms in .bazelrc). The
+# name is the directory the APK packs that ABI's libraries under, so it is
+# the ABI's own.
+platform(
+    name = "arm64-v8a",
+    constraint_values = [
+        "@platforms//os:android",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+platform(
+    name = "x86_64",
+    constraint_values = [
+        "@platforms//os:android",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+# --- The bindings ---
+# The generated Kotlin (//core:bindings_kotlin), compiled twice: for the phone
+# over JNA's AAR (libjnidispatch.so per ABI), and for the host tests over
+# JNA's jar. A Kotlin call that no longer matches the core's exported
+# interface fails both here, before any emulator.
+# UniFFI names an error's fields as the Rust enum does, and three variants of
+# CoreError (Api, Login, Crypto) have one called `message`, which in a Kotlin
+# Exception collides with Throwable.message and does not compile. Until the
+# core renames them, the field is `detail` on this side: the backticked
+# `message` is written nowhere else in the file. (The exception's own
+# `message` still reads "code=..., message=...".)
+genrule(
+    name = "bindings_kotlin",
+    srcs = ["//core:bindings_kotlin"],
+    outs = ["bindings/uniffi/deappje_core/deappje_core.kt"],
+    cmd = "sed 's/`message`/`detail`/g' $< > $@",
+    target_compatible_with = APPS,
+)
+
+kt_android_library(
+    name = "bindings",
+    srcs = [":bindings_kotlin"],
+    custom_package = "uniffi.deappje_core",
+    target_compatible_with = APPS,
+    deps = [
+        "@maven_app//:net_java_dev_jna_jna",
+        "@maven_app//:org_jetbrains_kotlinx_kotlinx_coroutines_core_jvm",
+    ],
+)
+
+kt_jvm_library(
+    name = "bindings_host",
+    srcs = [":bindings_kotlin"],
+    target_compatible_with = APPS,
+    deps = [
+        "@maven_host//:net_java_dev_jna_jna",
+        "@maven_host//:org_jetbrains_kotlinx_kotlinx_coroutines_core_jvm",
+    ],
+)
+
+# --- The seams ---
+# The six seams the core needs from the shell (core/src/shell.rs,
+# core/src/transport.rs), in plain Kotlin over the JDK and OkHttp: no Android
+# API, so the same sources compile for the host tests. The Android Keystore
+# parts (keystore/) are in the app only.
+SHELL_SRCS = glob(["src/main/kotlin/com/deappje/android/shell/*.kt"])
+
+kt_jvm_library(
+    name = "shell_host",
+    srcs = SHELL_SRCS,
+    target_compatible_with = APPS,
+    deps = [
+        ":bindings_host",
+        "@maven_host//:com_squareup_okhttp3_okhttp",
+        "@maven_host//:org_jetbrains_kotlinx_kotlinx_coroutines_core_jvm",
+    ],
+)
+
+# --- The app ---
+# The Compose compiler, built for the toolchain's Kotlin.
+kt_compiler_plugin(
+    name = "compose_plugin",
+    id = "androidx.compose.compiler.plugins.kotlin",
+    target_compatible_with = APPS,
+    target_embedded_compiler = True,
+    deps = ["@maven_app//:org_jetbrains_kotlin_kotlin_compose_compiler_plugin_embeddable"],
+)
+
+# The environment this build talks to, from environments.bzl through
+# --//:environment: preview by default, live from apps.yaml on main.
+write_file(
+    name = "environment_kt",
+    out = "Environment.kt",
+    content = select({
+        "//:environment_live": environment_source("live"),
+        "//conditions:default": environment_source("preview"),
+    }),
+)
+
+kt_android_library(
+    name = "app_lib",
+    srcs = glob(["src/main/kotlin/**/*.kt"]) + [":environment_kt"],
+    custom_package = "com.deappje.android",
+    plugins = [":compose_plugin"],
+    target_compatible_with = APPS,
+    deps = [
+        ":bindings",
+        "@maven_app//:androidx_activity_activity_compose",
+        "@maven_app//:androidx_browser_browser",
+        "@maven_app//:androidx_compose_foundation_foundation",
+        "@maven_app//:androidx_compose_material3_material3",
+        "@maven_app//:androidx_compose_runtime_runtime",
+        "@maven_app//:androidx_compose_ui_ui",
+        "@maven_app//:androidx_core_core_ktx",
+        "@maven_app//:androidx_lifecycle_lifecycle_runtime_compose",
+        "@maven_app//:androidx_lifecycle_lifecycle_viewmodel_compose",
+        "@maven_app//:com_squareup_okhttp3_okhttp",
+        "@maven_app//:org_jetbrains_kotlinx_kotlinx_coroutines_android",
+        "@maven_app//:org_jetbrains_kotlinx_kotlinx_coroutines_core_jvm",
+    ],
+)
+
+# The debug APK: the app over the core's library for each platform of
+# --android_platforms. Debug-signed by the rules' key; store signing is later
+# and by hand (README.md).
+android_binary(
+    name = "app",
+    custom_package = "com.deappje.android",
+    manifest = "AndroidManifest.xml",
+    min_sdk_version = 26,
+    resource_files = glob(["res/**"]),
+    target_compatible_with = APPS,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":app_lib",
+        "//core:core_android",
+    ],
+)
+
+# --- The tests ---
+# Each seam against the bindings with the host core, and one end-to-end run
+# over the in-memory server (two users, two devices, one group). The host
+# core is a data dependency; HostCore.kt puts its directory on JNA's path.
+TEST_DEPS = [
+    ":bindings_host",
+    ":shell_host",
+    ":test_support",
+    "@maven_host//:junit_junit",
+    "@maven_host//:org_jetbrains_kotlinx_kotlinx_coroutines_core_jvm",
+]
+
+kt_jvm_library(
+    name = "test_support",
+    testonly = True,
+    srcs = [
+        "src/test/kotlin/com/deappje/android/HostCore.kt",
+        "src/test/kotlin/com/deappje/android/MemorySeams.kt",
+    ],
+    target_compatible_with = APPS,
+    deps = [
+        ":bindings_host",
+        ":shell_host",
+        "@maven_host//:junit_junit",
+    ],
+)
+
+[
+    kt_jvm_test(
+        name = test,
+        size = "small",
+        srcs = ["src/test/kotlin/com/deappje/android/%s.kt" % test],
+        data = ["//core:core_host_library"],
+        target_compatible_with = APPS,
+        test_class = "com.deappje.android.%s" % test,
+        deps = TEST_DEPS,
+    )
+    for test in [
+        "SecureRandomSourceTest",
+        "SystemClockTest",
+        "FileStorageTest",
+        "EncryptedFileSecretsTest",
+        "DeviceKeyTest",
+        "EndToEndTest",
+    ]
+]
+
+kt_jvm_test(
+    name = "OkHttpTransportTest",
+    size = "small",
+    srcs = ["src/test/kotlin/com/deappje/android/OkHttpTransportTest.kt"],
+    data = ["//core:core_host_library"],
+    target_compatible_with = APPS,
+    test_class = "com.deappje.android.OkHttpTransportTest",
+    deps = TEST_DEPS + [
+        "@maven_host//:com_squareup_okhttp3_mockwebserver",
+        "@maven_host//:com_squareup_okhttp3_okhttp",
+    ],
+)
