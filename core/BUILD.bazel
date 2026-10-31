@@ -3,7 +3,7 @@
 # scaffold's `bazel test //...`; its non-host builds (the apps' libraries,
 # the web client's wasm) come with the targets that use them.
 load("@core_crates//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_shared_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_shared_library", "rust_static_library", "rust_test")
 load("@rules_rust_wasm_bindgen//:defs.bzl", "rust_wasm_bindgen")
 
 # Cargo.toml travels as compile data: uniffi's macros read the crate's
@@ -83,4 +83,28 @@ genrule(
     cmd = "$(location //core/tools/bindgen:uniffi-bindgen) generate --library $(location :core_host) --language swift --no-format --out-dir $(RULEDIR)/bindings/swift",
     tools = ["//core/tools/bindgen:uniffi-bindgen"],
     visibility = ["//visibility:public"],
+)
+
+# --- The iOS libraries -------------------------------------------------------
+# The core as the iOS shell links it (docs/01-deappje/05-deployment.md, "The
+# apps"): a static library of the same sources, built for whichever iOS
+# platform rules_apple's transition selects (aarch64-apple-ios-sim for the
+# simulator app, aarch64-apple-ios for a device build; the Rust toolchain
+# tells them apart by apple_support's simulator/device constraint). The
+# Swift bindings beside it come from :bindings_swift, generated from the
+# host build, so the two never drift. Only behind --//:apps, and only for
+# an iOS target platform: on the host or on Linux it is skipped.
+rust_static_library(
+    name = "core_ios",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    compile_data = ["Cargo.toml"],
+    crate_name = "deappje_core",
+    target_compatible_with = select({
+        "//:apps_on": ["@platforms//os:ios"],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//ios:__subpackages__"],
+    deps = all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
 )

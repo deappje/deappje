@@ -201,3 +201,13 @@ bazel_dep(name = "rules_jvm_external", version = "7.2")
 # behind --//:apps: a core that does not compile to wasm fails CI, as the
 # plan asks (03-testing.md).
 bazel_dep(name = "rules_rust_wasm_bindgen", version = "0.74.0")
+
+# --- ios/ --------------------------------------------------------------------
+# What the iOS shell needs beyond the three Apple modules above, which
+# register their own toolchains (apple_support the Xcode C toolchains and
+# the xcode locator, rules_swift the Swift toolchains, rules_apple its
+# bundling toolchains) from their own MODULE files, so nothing is registered
+# here. The bindings' C header is a cc_library (ios/core/BUILD.bazel), and
+# Bazel 9 has no native one: rules_cc must be a direct dependency to load it
+# from. The version is the one the graph already resolved to.
+bazel_dep(name = "rules_cc", version = "0.2.26")
