@@ -44,5 +44,12 @@ test:ci --test_env=TEST_DATABASE_URL
 # --- android/ ---
 # The ABIs //android:app is built for: one platform per ABI (android/BUILD.bazel),
 # the APK packing each build of the core under lib/<platform name>/. Read only
-# by android_binary's split transition; nothing else sees it.
-build --@rules_android//flags:android_platforms=//android:arm64-v8a,//android:x86_64
+# by android_binary's split transition; nothing else sees it. Canonical labels:
+# rules_android resolves the value against its own repository.
+build --@rules_android//flags:android_platforms=@@//android:arm64-v8a,@@//android:x86_64
+# rules_android builds its own tools from source, in Java 17 (its example
+# sets the same): the language level for the target and the tool side, and a
+# tool runtime that runs what that level compiles (the default is a JDK 11).
+build --java_language_version=17
+build --tool_java_language_version=17
+build --tool_java_runtime_version=remotejdk_21

@@ -49,12 +49,16 @@ platform(
 # core renames them, the field is `detail` on this side: the backticked
 # `message` is written nowhere else in the file. (The exception's own
 # `message` still reads "code=..., message=...".)
+# The generated file is a `tools` entry, not a source: the generator reads a
+# HOST build of the core, and a source would be rebuilt in the Android
+# configuration of :app's split, where its libdeappje_core.so collides with
+# //core:core_android's. The exec configuration keeps it the host's.
 genrule(
     name = "bindings_kotlin",
-    srcs = ["//core:bindings_kotlin"],
     outs = ["bindings/uniffi/deappje_core/deappje_core.kt"],
-    cmd = "sed 's/`message`/`detail`/g' $< > $@",
+    cmd = "sed 's/`message`/`detail`/g' $(location //core:bindings_kotlin) > $@",
     target_compatible_with = APPS,
+    tools = ["//core:bindings_kotlin"],
 )
 
 kt_android_library(
@@ -147,7 +151,6 @@ android_binary(
     name = "app",
     custom_package = "com.deappje.android",
     manifest = "AndroidManifest.xml",
-    min_sdk_version = 26,
     resource_files = glob(["res/**"]),
     target_compatible_with = APPS,
     visibility = ["//visibility:public"],

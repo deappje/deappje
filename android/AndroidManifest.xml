@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Android shell (docs/01-deappje/05-deployment.md, "The apps"). The
+     deappje://auth intent filter is the return URL of the Kratos native
+     sign-in: the browser comes back with ?code=... and the activity hands it
+     to the core. No backup: the store and the secrets belong to this device,
+     whose key never changes (docs/01-deappje/02-device.md). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.deappje.android">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:name=".DeappjeApplication"
+        android:label="@string/app_name"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="false"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="deappje" android:host="auth" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
