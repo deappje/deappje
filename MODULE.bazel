@@ -201,3 +201,132 @@ bazel_dep(name = "rules_jvm_external", version = "7.2")
 # behind --//:apps: a core that does not compile to wasm fails CI, as the
 # plan asks (03-testing.md).
 bazel_dep(name = "rules_rust_wasm_bindgen", version = "0.74.0")
+
+# --- android/ ---
+# The Android shell (android/, docs/01-deappje/05-deployment.md, "The apps").
+# rules_cc is named here so the NDK repository android/ndk.bzl creates, which
+# the root module owns, can load `@rules_cc//cc:cc_library.bzl`.
+bazel_dep(name = "rules_cc", version = "0.2.14")
+
+# The SDK and the NDK are the machine's, read from ANDROID_HOME and
+# ANDROID_NDK_HOME at fetch time (android/README.md); without them both
+# repositories are empty and register nothing, which the server's `bazel test
+# //...` relies on. Everything under android/ and //core:core_android is behind
+# --//:apps.
+android_sdk_repository_extension = use_extension("@rules_android//rules/android_sdk_repository:rule.bzl", "android_sdk_repository_extension")
+android_sdk_repository_extension.configure(
+    api_level = 35,
+    build_tools_version = "35.0.0",
+)
+use_repo(android_sdk_repository_extension, "androidsdk")
+
+register_toolchains("@androidsdk//:sdk-toolchain", "@androidsdk//:all")
+
+# rules_android_ndk's extension fails without an NDK; android/ndk.bzl wraps
+# its repository rule and yields an empty repository instead. API 26 is the
+# app's minSdkVersion (android/AndroidManifest.xml).
+android_ndk = use_extension("//android:ndk.bzl", "android_ndk")
+android_ndk.configure(api_level = 26)
+use_repo(android_ndk, "androidndk")
+
+register_toolchains("@androidndk//:all")
+
+# The Kotlin toolchain is rules_kotlin's default (Kotlin 2.4.21, registered by
+# the module itself); the Compose compiler plugin below is the one built for
+# that compiler, and the standard library is the toolchain's: the Maven copy
+# is excluded from both graphs so the dex holds exactly one.
+maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
+
+# The app's graph: Compose and Material 3, the lifecycle runtime, Custom Tabs,
+# OkHttp, the coroutines the bindings use, and JNA as the AAR that carries
+# libjnidispatch.so per ABI. Its own name, since protobuf's module also fills
+# a repository called `maven`. Pinned in android/maven_app_install.json
+# (`REPIN=1 bazel run @maven_app//:pin` after a change here). AndroidX pins
+# exact versions of its own transitives, which Coursier cannot reconcile
+# across releases: the versions named here win (`pinned`), so the artifacts
+# AndroidX disagrees about are named too.
+maven.install(
+    name = "maven_app",
+    aar_import_bzl_label = "@rules_android//rules:rules.bzl",
+    artifacts = [
+        # What the app uses.
+        "androidx.activity:activity-compose:1.11.0",
+        "androidx.browser:browser:1.9.0",
+        "androidx.compose.foundation:foundation:1.9.4",
+        "androidx.compose.material3:material3:1.4.0",
+        "androidx.compose.runtime:runtime:1.9.4",
+        "androidx.compose.ui:ui:1.9.4",
+        "androidx.core:core-ktx:1.17.0",
+        "androidx.lifecycle:lifecycle-runtime-compose:2.9.4",
+        "androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4",
+        # The transitives AndroidX's releases pin exactly and differently,
+        # each family held at one version.
+        "androidx.activity:activity:1.11.0",
+        "androidx.activity:activity-ktx:1.11.0",
+        "androidx.annotation:annotation:1.9.1",
+        "androidx.collection:collection:1.5.0",
+        "androidx.collection:collection-ktx:1.5.0",
+        "androidx.compose.animation:animation:1.9.4",
+        "androidx.compose.animation:animation-core:1.9.4",
+        "androidx.compose.foundation:foundation-layout:1.9.4",
+        "androidx.compose.material:material-icons-core:1.7.8",
+        "androidx.compose.material:material-ripple:1.9.4",
+        "androidx.compose.runtime:runtime-saveable:1.9.4",
+        "androidx.compose.ui:ui-geometry:1.9.4",
+        "androidx.compose.ui:ui-graphics:1.9.4",
+        "androidx.compose.ui:ui-text:1.9.4",
+        "androidx.compose.ui:ui-unit:1.9.4",
+        "androidx.compose.ui:ui-util:1.9.4",
+        "androidx.core:core:1.17.0",
+        "androidx.lifecycle:lifecycle-common:2.9.4",
+        "androidx.lifecycle:lifecycle-runtime:2.9.4",
+        "androidx.lifecycle:lifecycle-runtime-ktx:2.9.4",
+        "androidx.lifecycle:lifecycle-viewmodel:2.9.4",
+        "androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4",
+        "androidx.lifecycle:lifecycle-viewmodel-savedstate:2.9.4",
+        "androidx.savedstate:savedstate:1.3.3",
+        "androidx.savedstate:savedstate-ktx:1.3.3",
+        "com.squareup.okhttp3:okhttp:4.12.0",
+        "net.java.dev.jna:jna:aar:5.17.0",
+        "org.jetbrains.kotlin:kotlin-compose-compiler-plugin-embeddable:2.4.21",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2",
+    ],
+    excluded_artifacts = [
+        "org.jetbrains.kotlin:kotlin-stdlib",
+        "org.jetbrains.kotlin:kotlin-stdlib-common",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk7",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk8",
+    ],
+    lock_file = "//android:maven_app_install.json",
+    repositories = [
+        "https://maven.google.com",
+        "https://repo1.maven.org/maven2",
+    ],
+    use_starlark_android_rules = True,
+    version_conflict_policy = "pinned",
+)
+
+# The host tests' graph (the kt_jvm_tests of android/BUILD.bazel): JNA as the
+# plain jar with the desktop libjnidispatch, the coroutines, OkHttp and its
+# MockWebServer, JUnit 4. Pinned in android/maven_host_install.json
+# (`REPIN=1 bazel run @maven_host//:pin`).
+maven.install(
+    name = "maven_host",
+    artifacts = [
+        "com.squareup.okhttp3:mockwebserver:4.12.0",
+        "com.squareup.okhttp3:okhttp:4.12.0",
+        "junit:junit:4.13.2",
+        "net.java.dev.jna:jna:5.17.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2",
+    ],
+    excluded_artifacts = [
+        "org.jetbrains.kotlin:kotlin-stdlib",
+        "org.jetbrains.kotlin:kotlin-stdlib-common",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk7",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk8",
+    ],
+    lock_file = "//android:maven_host_install.json",
+    repositories = ["https://repo1.maven.org/maven2"],
+)
+use_repo(maven, "maven_app", "maven_host")
