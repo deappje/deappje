@@ -119,6 +119,7 @@ struct Inner {
     wakeups: BTreeMap<Uuid, VecDeque<Wakeup>>,
     outage: bool,
     calls: u64,
+    pulled: u64,
 }
 
 /// The model.
@@ -280,6 +281,11 @@ impl RelayModel {
         self.inner.lock().expect("no poison").calls
     }
 
+    /// How many entries `pull_changes` has handed out, all devices.
+    pub fn pulled(&self) -> u64 {
+        self.inner.lock().expect("no poison").pulled
+    }
+
     /// The wake-ups queued for a device, oldest first, taken.
     pub fn take_wakeups(&self, device_id: Uuid) -> Vec<Wakeup> {
         self.inner.lock().expect("no poison").wakeups.remove(&device_id).map(Vec::from).unwrap_or_default()
@@ -432,7 +438,7 @@ impl Relay for RelayModel {
     }
 
     async fn pull_changes(&self, device_id: Uuid, group_id: Uuid, since_seq: i64, limit: i32) -> Result<ChangeSet, ApiError> {
-        let inner = self.call()?;
+        let mut inner = self.call()?;
         inner.require_member(device_id, group_id)?;
         if since_seq < 0 || limit < 0 {
             return Err(err(Code::InvalidArgument, "since_seq and limit are not negative"));
@@ -450,6 +456,7 @@ impl Relay for RelayModel {
         rows.sort_by_key(|e| e.seq);
         let more = rows.len() > limit;
         rows.truncate(limit);
+        inner.pulled += rows.len() as u64;
         Ok(ChangeSet { entries: rows, head_seq: head.head_seq, evicted_through_seq: head.evicted_through_seq, min_acked_seq: inner.min_acked(group_id), more })
     }
 

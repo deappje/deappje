@@ -42,7 +42,7 @@ impl Dev {
 
     fn deliver(&mut self, model: &RelayModel) {
         for w in model.take_wakeups(self.id) {
-            if let Wakeup::HistoryReady { request_id, through_seq, complete, .. } = w {
+            if let Wakeup::HistoryReady { request_id, through_seq, complete } = w {
                 self.syncer().history_ready(request_id, through_seq, complete);
             }
         }
@@ -395,13 +395,15 @@ fn a_lost_history_ready_wake_up_costs_only_the_next_sync() {
     }
 }
 
-/// A request nobody answered within the window is swept; the requester
-/// finds it gone on its next sync and asks again.
+/// A request nobody answered within the window is swept, and the sweep of
+/// old rows in the same hour drops the requester's ack row and moves the
+/// floor: the requester finds its request gone, starts over (ack 0 again)
+/// and asks up to the floor as it is now, so one upload brings everything.
 #[test]
-fn a_swept_request_is_asked_again() {
+fn a_swept_request_starts_over() {
     let w = World::new(11);
     let mut a = w.device(1, 1);
-    a.post(w.group, "old");
+    let old = a.post(w.group, "old");
     a.sync(&w.model, w.group);
     w.model.evict();
     let mut b = w.device(2, 2);
@@ -410,18 +412,66 @@ fn a_swept_request_is_asked_again() {
         [Event::HistoryRequested { request_id }] => *request_id,
         other => panic!("{other:?}"),
     };
+    // A writes on while B waits; nobody serves, and a window passes.
+    let new = a.post(w.group, "new");
+    a.sync(&w.model, w.group);
     w.model.advance(WINDOW_MS + HOUR);
+    w.model.evict();
     w.model.expire_requests();
+    assert_eq!(w.model.head(w.group), (2, 2), "the new row went by age");
+    assert_eq!(w.model.ack(w.group, b.id), None, "B lost its row with it");
+    let events = b.sync(&w.model, w.group);
+    assert_eq!(events, vec![Event::StartedOver], "the request is gone");
+    assert_eq!(b.phase(w.group), Phase::New);
     let events = b.sync(&w.model, w.group);
     let second = match events.as_slice() {
         [Event::HistoryRequested { request_id }] => *request_id,
         other => panic!("{other:?}"),
     };
     assert_ne!(first, second, "a new request");
-    assert_eq!(b.phase(w.group), Phase::CatchingUp { request_id: Some(second), floor: 1, through_seq: 0, complete: false });
-    a.serve(&w.model, w.group);
+    assert_eq!(b.phase(w.group), Phase::CatchingUp { request_id: Some(second), floor: 2, through_seq: 0, complete: false }, "up to the floor as it is now");
+    assert_eq!(w.model.ack(w.group, b.id), Some(0), "the row is back, holding the restore");
+    let served = a.serve(&w.model, w.group);
+    assert!(matches!(served.as_slice(), [Event::HistoryServed { rows: 2, .. }]), "one upload: {served:?}");
     let events = b.sync(&w.model, w.group);
     assert!(events.contains(&Event::BecameHolder), "{events:?}");
+    assert!(b.read::<Post>(w.group, old).is_some() && b.read::<Post>(w.group, new).is_some());
+}
+
+/// A device waiting on a holder fetches only what is new since its last
+/// pull, not the window again, and the whole stretch once complete.
+#[test]
+fn a_waiting_device_does_not_fetch_the_window_again() {
+    let w = World::new(13);
+    let mut a = w.device(1, 1);
+    for i in 0..3 {
+        a.post(w.group, &format!("old {i}"));
+    }
+    a.sync(&w.model, w.group);
+    w.model.evict();
+    for i in 0..5 {
+        a.post(w.group, &format!("window {i}"));
+    }
+    a.sync(&w.model, w.group);
+    assert_eq!(w.model.head(w.group), (8, 3));
+    let mut b = w.device(2, 2);
+    let events = b.sync(&w.model, w.group);
+    assert!(matches!(events.last(), Some(Event::HistoryRequested { .. })), "{events:?}");
+    let pulled = w.model.pulled();
+    assert_eq!(b.sync(&w.model, w.group), vec![], "waiting");
+    assert_eq!(w.model.pulled(), pulled, "nothing new: nothing fetched");
+    a.post(w.group, "while waiting");
+    a.sync(&w.model, w.group);
+    let pulled = w.model.pulled();
+    let events = b.sync(&w.model, w.group);
+    assert!(matches!(events.as_slice(), [Event::Applied { seq: 9, .. }]), "the new row still shows: {events:?}");
+    assert_eq!(w.model.pulled(), pulled + 1, "and only it is fetched");
+    a.serve(&w.model, w.group);
+    let pulled = w.model.pulled();
+    let events = b.sync(&w.model, w.group);
+    assert!(events.contains(&Event::BecameHolder), "{events:?}");
+    assert_eq!(w.model.pulled(), pulled + 9, "complete: the whole stretch from the cursor, once");
+    assert_eq!(b.live(w.group), a.live(w.group));
 }
 
 /// A device joining shortly after another needs no upload: the first
@@ -526,6 +576,7 @@ fn run_harness(seed: u8, wakeups: bool) {
             away = Some((pick(4, &mut rng), 60));
             w.model.advance(WINDOW_MS + HOUR);
             w.model.evict();
+            w.model.expire_requests();
         }
         if let Some((d, left)) = away {
             away = if left == 0 { None } else { Some((d, left - 1)) };
@@ -579,6 +630,7 @@ fn run_harness(seed: u8, wakeups: bool) {
             85..=94 => {
                 w.model.advance(HOUR);
                 w.model.evict();
+                w.model.expire_requests();
             }
             _ => {
                 w.model.set_outage(true);

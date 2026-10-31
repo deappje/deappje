@@ -2,7 +2,8 @@
 
 Owns the relay: a window of ciphertext rows per group, tombstones included, that some device
 has not yet acked, 672 hours at most; the group's counter; one acked cursor per device; and a
-row per history request, open or complete, until the sweep. Plain executor with two hourly sweeps. Member devices are the
+row per history request, open or complete, until the sweep (a window after it was made, or
+after it completed). Plain executor with two hourly sweeps. Member devices are the
 store, each of them holding the whole group; this nanoservice forgets everything after 672
 hours. Directive §2 per table, §7 (counter row under
 `FOR UPDATE`; a boolean or a number is all that crosses) for its messages.
@@ -65,15 +66,16 @@ group's rows, so nothing it has not acked can be evicted by ack from under it.
 | from_seq | int64 | 1 for a device that joins or starts over |
 | to_seq | int64 | the eviction floor the requester saw; rows above it are still on the server |
 | object_id | uuid, nullable | a request for one object instead of a range |
-| claimed_by | uuid, nullable | the holder device answering it |
+| claimed_by | uuid, nullable | the holder device answering it; named to that device only, never to another (a device id is the caller's word, so another member holding it could push as the claimer) |
 | claimed_at | timestamp, nullable | a claim older than 5 minutes without `complete` counts as abandoned |
 | through_seq | int64 | the last seq a holder pushed back so far: `from_seq - 1` before any, `to_seq` once complete; the requester acks no further |
 | completed_at | timestamp, nullable | set by the claimer's last call; the row stays, marked, for the requester to read |
 | created_at | timestamp | |
 
 Index `(group_id)`. A row is a request, open or complete: `complete` marks it rather than deleting
-it, so the requester can read where it stands without depending on a wake-up. Rows older than 672
-hours are dropped by the sweep, complete or not.
+it, so the requester can read where it stands without depending on a wake-up. The sweep drops an
+open row 672 hours after it was made and a complete one 672 hours after it completed, so a request
+completed late still leaves its requester the whole window to read `complete`.
 
 ## Push
 
@@ -205,7 +207,9 @@ A holder that wakes lists the group's open requests (`ListHistoryRequestsRequest
 unclaimed, plus claimed more than 5 minutes ago) and claims one:
 `ClaimHistoryRequest { request_id }` is a single conditional update (`claimed_by` null, or
 `claimed_at` older than 5 minutes) that records the device and the time; the first caller wins
-and the rest are answered `taken`. A caller that is not a holder is refused. Only the claimer
+and the rest are answered `taken` (or `complete`, when the last push landed between the read and
+the update). The claimer itself claiming again, as after a lost answer, is answered `claimed`. A
+caller that is not a holder is refused. Only the claimer
 may then push, so one holder uploads, not every holder. A claimer that dies is replaced after 5
 minutes by whoever claims next, and the rows it already restored are skipped on the re-push.
 Client policy: a holder claims a one-object request only if it still has the file; the
@@ -234,8 +238,15 @@ The requester does not depend on the wake-up. `GetHistoryRequestRequest { reques
 `HistoryRequest` answers any member of the group with the row's `status` (`open`, `claimed`,
 `taken`, `complete`) and `through_seq`, and a device catching up reads it on every sync, so it
 pages and acks as far as `through_seq` and becomes a holder on `complete` whether the wake-up
-came, came late or never came (a browser gets none). A complete row stays until the sweep; `not
-found` means the sweep dropped it, and the requester asks again: a re-push skips what is there.
+came, came late or never came (a browser gets none). A complete row stays a window from its
+completion; `not found` means the sweep dropped it, a window after the device asked, and the
+requester **starts over** rather than asking again: the sweep of old rows in the same hour has
+likely dropped its `group_device` row and raised the floor, so a fresh join acks 0 (the row that
+holds the restored rows back from eviction) and asks up to the floor as it is now. Only a
+Connect-coded `not_found` means swept: a bare HTTP 404 is a route the server lacks (a client newer
+than the server mid-deploy) and is waited out like an outage. While it waits, the requester pulls
+only what is new since its last pull, not the window again; complete, it pages the whole stretch
+from its ack once.
 
 Two devices joining close together cost one upload, or none. A complete restore from seq 1
 leaves a **witness** on the group head (`restored_through_seq = to_seq`, `restored_at = now`):
@@ -257,7 +268,7 @@ A request for one object (`object_id` set) is answered the same way with one ent
 `complete`. If the object's files have expired from the bucket, the holder re-uploads them to
 their derived keys before it reports `complete`, and the requester downloads them directly.
 
-No retries, no timeouts on the server: a requester whose request was swept asks again, and the
+No retries, no timeouts on the server: a requester whose request was swept starts over, and the
 client shows "waiting for a member to come online" while one is open. A holder that is offline keeps its row, so a
 request waits for it rather than closing. Nothing records who answered: the entries were
 encrypted under the group key, so the answerer was a key holder, and nothing reads it later.
@@ -291,7 +302,8 @@ download.
   catching up, which its acks show. By age, not by position, so a restored row the requester
   never acked still goes, and a pass whose lowest evicted seq is at or below the witness clears
   it.
-- `expire_history_requests`: delete rows older than 672 hours.
+- `expire_history_requests`: delete open rows made more than 672 hours ago and complete rows
+  completed more than 672 hours ago (`COALESCE(completed_at, created_at)`).
 
 Postgres therefore holds, per group, what some device has not acked yet, for 28 days at most.
 No device can hold anything back: a device that does not keep up is evicted with the rows it did
@@ -355,6 +367,12 @@ What the code settled beyond the text above (`nanoservices/relay`, 2026-10-30):
   requester follows its request through the relay and the `history_ready` wake-up is a hurry-up
   like every other push. Before, the wake-up was the only carrier of `through_seq` and
   `complete`, and a dropped one left the requester catching up for good.
+- **The review of that change** (2026-10-31): the sweep keeps a complete row a window from its
+  completion; a swept request makes the requester start over; a bare 404 is `Unavailable` in the
+  core, not `NotFound`; a claim that loses to a completion answers `complete`, and the claimer
+  claiming again answers `claimed` in the model as in the handler; `claimed_by` is named to the
+  claimer only, in every answer; a device waiting on a holder skips the part of the window it
+  already pulled.
 - **The restore witness and the grace** (2026-10-31): two joins minutes apart used to cost two
   uploads, the second one skipped row by row by the server, because the floor never comes down
   and the second joiner could not know the rows were back. Now a complete restore from seq 1

@@ -37,7 +37,9 @@ pub enum Phase {
     /// Joined, or starting over: acks 0 and pulls the window next.
     New,
     /// Asked a holder for everything older than the window; pages and acks
-    /// the restored rows as `HistoryReady` says how far.
+    /// the restored rows as far as the request, read on every sync, says
+    /// the holder has pushed. The `history_ready` wake-up only brings that
+    /// read sooner; a device that never gets one finishes all the same.
     CatchingUp {
         /// The request, once the server stored one.
         request_id: Option<Uuid>,

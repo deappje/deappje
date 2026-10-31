@@ -25,7 +25,7 @@ Plain tables (schema `nano_relay`): `object`, `group_head`, `group_device`, `his
 
 ## Messages
 
-Handles: `PushObjectsRequest` → `PushResult`, `PullChangesRequest` → `ChangeSet`, `AckSeqRequest` → `AckResult`, `GetHeadsRequest` → `HeadList`, `RequestHistoryRequest` → `HistoryRequest`, `ListHistoryRequestsRequest` → `HistoryRequestList`, `ClaimHistoryRequest` → `HistoryRequest`, `PushHistoryRequest` → `PushHistoryResult`, `DeviceLeftGroup`, `PurgeGroupObjectsRequest` → `PurgeResult`.
+Handles: `PushObjectsRequest` → `PushResult`, `PullChangesRequest` → `ChangeSet`, `AckSeqRequest` → `AckResult`, `GetHeadsRequest` → `HeadList`, `RequestHistoryRequest` → `HistoryRequest`, `GetHistoryRequestRequest` → `HistoryRequest`, `ListHistoryRequestsRequest` → `HistoryRequestList`, `ClaimHistoryRequest` → `HistoryRequest`, `PushHistoryRequest` → `PushHistoryResult`, `DeviceLeftGroup`, `PurgeGroupObjectsRequest` → `PurgeResult`.
 Sends: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`, `HistoryReady`.
 
-API: `RelayService` in `api/src/services/relay.rs` (PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory, ListHistoryRequests, ClaimHistory, PushHistory).
+API: `RelayService` in `api/src/services/relay.rs` (PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory, GetHistoryRequest, ListHistoryRequests, ClaimHistory, PushHistory).

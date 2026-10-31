@@ -192,6 +192,8 @@ nanoservices:
             - { name: group_id, type: uuid, primaryKey: true }
             - { name: head_seq, type: int64 }
             - { name: evicted_through_seq, type: int64 }
+            - { name: restored_through_seq, type: int64 }
+            - { name: restored_at, type: timestamp, nullable: true }
         - name: group_device
           columns:
             - { name: group_id, type: uuid }
@@ -209,6 +211,8 @@ nanoservices:
             - { name: object_id, type: uuid, nullable: true }
             - { name: claimed_by, type: uuid, nullable: true }
             - { name: claimed_at, type: timestamp, nullable: true }
+            - { name: through_seq, type: int64 }
+            - { name: completed_at, type: timestamp, nullable: true }
             - { name: created_at, type: timestamp }
           indexes: [ { columns: [group_id] } ]
     schedules:

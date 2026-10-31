@@ -45,19 +45,28 @@ cannot be trusted with an empty slot, `base_seq = 0` included.
 - `GetHeads` answers the groups the caller is a member of among those
   asked; one left out is one the caller is no longer in.
 
-## History (`RequestHistory`, `ListHistoryRequests`, `ClaimHistory`, `PushHistory`)
+## History (`RequestHistory`, `GetHistoryRequest`, `ListHistoryRequests`, `ClaimHistory`, `PushHistory`)
 
 ```mermaid
 stateDiagram-v2
     [*] --> unfillable: no other device at or above the floor (nothing stored)
-    [*] --> open: a row, HistoryRequested to the holders
-    open --> claimed: ClaimHistory by a holder (first wins; the rest: taken)
+    [*] --> complete: the restore witness covers the range (nil id, nothing stored)
+    [*] --> open: a row, HistoryRequested to the holders (none when an older open request covers it)
+    open --> claimed: ClaimHistory by a holder (first wins; the rest: taken; the claimer again: claimed)
     claimed --> open: 5 minutes without complete (abandoned: claimable again)
-    claimed --> claimed: PushHistory, oldest first, rows re-inserted at their original seqs; HistoryReady to the requester
-    claimed --> [*]: PushHistory complete (the row goes)
-    open --> [*]: 672 hours (expire_history_requests)
-    claimed --> [*]: 672 hours
+    claimed --> claimed: PushHistory, oldest first, rows re-inserted at their original seqs, through_seq recorded; HistoryReady to the requester
+    claimed --> complete: PushHistory complete (completed_at, through_seq = to_seq; the row stays)
+    open --> complete: the covering request's complete push
+    complete --> [*]: 672 hours after completed_at (expire_history_requests)
+    open --> [*]: 672 hours after created_at
+    claimed --> [*]: 672 hours after created_at
 ```
+
+`GetHistoryRequest` answers any member with the row and its status for the
+caller (`open`, `claimed`, `taken`, `complete`): the requester reads it on
+every sync, so a lost `HistoryReady` costs only the wait for that sync, and
+`not_found` means swept (the requester starts over). Every answer names
+`claimed_by` to the claimer only.
 
 A re-inserted row keeps its seq and gets a fresh `uploaded_at`; an id that
 already has a row, at any seq, live or tombstone, is skipped: the current
@@ -71,7 +80,8 @@ row always wins. Neither the head nor the floor moves.
   group's devices below the new floor that have not acked within the
   window lose their row (they start over when they are back). A device
   catching up (a recent ack below the floor) keeps its row.
-- `expire_history_requests`: rows older than the window go.
+- `expire_history_requests`: an open request goes a window after it was
+  made, a complete one a window after it completed.
 
 ## Edge cases
 

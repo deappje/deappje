@@ -125,8 +125,11 @@ message GetHeadsResponse {
 // "claimed" (by the calling device), "taken" (by another), "unfillable"
 // (nobody holds anything older than the window; nothing was stored, the
 // id is empty) or "complete" (the claimer pushed its last call; the row
-// stays until the sweep). through_seq is the last seq pushed back so far:
-// from_seq - 1 before any, to_seq once complete.
+// stays a window from its completion, then the sweep drops it).
+// through_seq is the last seq pushed back so far: from_seq - 1 before any,
+// to_seq once complete. claimed_by is set only for the claimer itself: a
+// device id is the caller's word, so the relay names the claimer to no
+// other device.
 message HistoryRequest {
   string id = 1;
   string group_id = 2;
@@ -156,7 +159,8 @@ message RequestHistoryResponse {
 
 // The request by id, for any member of its group: how the requester
 // follows its own request on every sync, whether or not the history_ready
-// wake-up arrived. Not found once the sweep has dropped it: ask again.
+// wake-up arrived. Not found once the sweep has dropped it (an open request
+// a window after it was made): the requester starts over.
 message GetHistoryRequestRequest {
   string device_id = 1;
   string request_id = 2;

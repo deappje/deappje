@@ -34,9 +34,9 @@ The relay — ciphertext per group until every holder has acked it, 672 hours at
 
 - Plain tables: `object`, `group_head`, `group_device`, `history_request`.
 - Schedules (ticker workers): `evict_objects` every 1h, `expire_history_requests` every 1h.
-- Handles: `PushObjectsRequest` → `PushResult`, `PullChangesRequest` → `ChangeSet`, `AckSeqRequest` → `AckResult`, `GetHeadsRequest` → `HeadList`, `RequestHistoryRequest` → `HistoryRequest`, `ListHistoryRequestsRequest` → `HistoryRequestList`, `ClaimHistoryRequest` → `HistoryRequest`, `PushHistoryRequest` → `PushHistoryResult`, `DeviceLeftGroup`, `PurgeGroupObjectsRequest` → `PurgeResult`.
+- Handles: `PushObjectsRequest` → `PushResult`, `PullChangesRequest` → `ChangeSet`, `AckSeqRequest` → `AckResult`, `GetHeadsRequest` → `HeadList`, `RequestHistoryRequest` → `HistoryRequest`, `GetHistoryRequestRequest` → `HistoryRequest`, `ListHistoryRequestsRequest` → `HistoryRequestList`, `ClaimHistoryRequest` → `HistoryRequest`, `PushHistoryRequest` → `PushHistoryResult`, `DeviceLeftGroup`, `PurgeGroupObjectsRequest` → `PurgeResult`.
 - Sends: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`, `HistoryReady`.
-- API: `RelayService` (PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory, ListHistoryRequests, ClaimHistory, PushHistory).
+- API: `RelayService` (PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory, GetHistoryRequest, ListHistoryRequests, ClaimHistory, PushHistory).
 
 ### `storage`
 
@@ -90,6 +90,7 @@ Presigns uploads and downloads under the caller's group prefix, deletes an objec
 | `AckSeqRequest` | `AckResult` |  | `relay`  |
 | `GetHeadsRequest` | `HeadList` |  | `relay`  |
 | `RequestHistoryRequest` | `HistoryRequest` |  | `relay`  |
+| `GetHistoryRequestRequest` | `HistoryRequest` |  | `relay`  |
 | `ListHistoryRequestsRequest` | `HistoryRequestList` |  | `relay`  |
 | `ClaimHistoryRequest` | `HistoryRequest` |  | `relay`  |
 | `PushHistoryRequest` | `PushHistoryResult` |  | `relay`  |

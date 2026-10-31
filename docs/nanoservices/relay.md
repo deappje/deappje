@@ -8,15 +8,15 @@ Design: `docs/01-deappje/02-relay.md`. Code:
 ## Owns
 
 - Table `object` (`id`, `group_id`, `value`, `seq`, `deleted`, `uploaded_at`).
-- Table `group_head` (`group_id`, `head_seq`, `evicted_through_seq`).
+- Table `group_head` (`group_id`, `head_seq`, `evicted_through_seq`, `restored_through_seq`, `restored_at`).
 - Table `group_device` (`group_id`, `device_id`, `acked_seq`, `updated_at`).
-- Table `history_request` (`id`, `group_id`, `requester_device`, `from_seq`, `to_seq`, `object_id`, `claimed_by`, `claimed_at`, `created_at`).
+- Table `history_request` (`id`, `group_id`, `requester_device`, `from_seq`, `to_seq`, `object_id`, `claimed_by`, `claimed_at`, `through_seq`, `completed_at`, `created_at`).
 - Schedule `evict_objects` every 1h.
 - Schedule `expire_history_requests` every 1h.
 
 ## Messages
 
-- Handles: `PushObjectsRequest`, `PullChangesRequest`, `AckSeqRequest`, `GetHeadsRequest`, `RequestHistoryRequest`, `ListHistoryRequestsRequest`, `ClaimHistoryRequest`, `PushHistoryRequest`, `DeviceLeftGroup`, `PurgeGroupObjectsRequest`.
+- Handles: `PushObjectsRequest`, `PullChangesRequest`, `AckSeqRequest`, `GetHeadsRequest`, `RequestHistoryRequest`, `GetHistoryRequestRequest`, `ListHistoryRequestsRequest`, `ClaimHistoryRequest`, `PushHistoryRequest`, `DeviceLeftGroup`, `PurgeGroupObjectsRequest`.
 - Sends: `CheckMembershipRequest`, `GroupHeadAdvanced`, `ObjectDeleted`, `HistoryRequested`, `HistoryReady`.
 
 ## Directive sections that bind
@@ -30,6 +30,7 @@ Design: `docs/01-deappje/02-relay.md`. Code:
 - [x] `handle_ack_seq_request` in `src/handlers.rs`.
 - [x] `handle_get_heads_request` in `src/handlers.rs`.
 - [x] `handle_request_history_request` in `src/handlers.rs`.
+- [x] `handle_get_history_request_request` in `src/handlers.rs`.
 - [x] `handle_list_history_requests_request` in `src/handlers.rs`.
 - [x] `handle_claim_history_request` in `src/handlers.rs`.
 - [x] `handle_push_history_request` in `src/handlers.rs`.

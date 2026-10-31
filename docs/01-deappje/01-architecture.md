@@ -136,7 +136,8 @@ server keeps a row, tombstones included, until every device has acked it, 672 ho
   each call and pages them from its low ack, acking as it goes, while every other device's
   cursor is already past them. An answer marked complete is complete, since every holder holds
   the whole group. Restored rows go by the ack rule as the requester acks past them, or by age
-  672 hours after their re-insert. No server-side retries: the requester asks again. This is how
+  672 hours after their re-insert. No server-side retries: a requester whose request was swept
+  starts over and asks again. This is how
   a new member, a new device or a device that started over gets everything from seq 1, and how
   an expired photo comes back (the holder re-uploads the file to its derived key, then reports
   the request complete).

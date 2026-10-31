@@ -458,18 +458,17 @@ impl Syncer<'_> {
         self.become_holder(relay, group_id, head_seq, floor, events).await
     }
 
-    /// Pages the restored rows from the cursor as far as the holder has
-    /// pushed, acking as it goes; complete and past the floor, the device
-    /// holds the group.
+    /// Reads the request, pages the restored rows from the cursor as far as
+    /// the holder has pushed, acking as it goes; complete and past the
+    /// floor, the device holds the group. A request the sweep dropped
+    /// means starting over.
     async fn catch_up<R: Relay>(&mut self, relay: &R, group_id: Uuid, events: &mut Vec<Event>) -> Result<(), SyncError> {
-        let Some(Phase::CatchingUp { mut request_id, floor, mut through_seq, mut complete }) = self.store.group(group_id).map(|g| g.phase.clone()) else { return Ok(()) };
+        let Some(Phase::CatchingUp { request_id, floor, mut through_seq, mut complete }) = self.store.group(group_id).map(|g| g.phase.clone()) else { return Ok(()) };
         if let Some(id) = request_id
             && !complete
         {
             // The request as the server has it, so the device follows the
-            // holder's progress whether or not the wake-up arrived. Swept
-            // (not found) is asked again below; a re-push skips what is
-            // there.
+            // holder's progress whether or not the wake-up arrived.
             match relay.get_history_request(self.device_id, id).await {
                 Ok(r) => {
                     let (t, c) = progress(floor, through_seq, complete, r.through_seq, r.status == HistoryStatus::Complete);
@@ -478,13 +477,23 @@ impl Syncer<'_> {
                     }
                     (through_seq, complete) = (t, c);
                 }
-                Err(ApiError { code: crate::api::Code::NotFound, .. }) => request_id = None,
+                Err(ApiError { code: crate::api::Code::NotFound, .. }) => {
+                    // Swept: a window has passed since the device asked, so
+                    // the sweep of old rows has likely dropped its ack row
+                    // and moved the floor too. Asking again without that row
+                    // would let the restored rows be evicted before they are
+                    // paged; starting over acks 0 and asks up to the floor as
+                    // it is now. The next sync joins (the join comes through
+                    // here, so it cannot be called from here).
+                    self.store.start_over(group_id);
+                    events.push(Event::StartedOver);
+                    return Ok(());
+                }
                 Err(e) => return Err(e.into()),
             }
         }
         if request_id.is_none() && !complete {
-            // No request yet (the join), or the one there was is gone
-            // (swept before this device saw it complete): ask.
+            // No request yet: the join, or the answer to the ask was lost.
             let request = relay.request_history(self.device_id, group_id, 1, floor, None).await?;
             match request.status {
                 HistoryStatus::Unfillable => {
@@ -508,9 +517,18 @@ impl Syncer<'_> {
                 }
             }
         }
-        let mut acked = self.store.group(group_id).map_or(0, |g| g.acked_seq);
+        let (mut acked, known_head) = self.store.group(group_id).map_or((0, 0), |g| (g.acked_seq, g.head_seq));
+        // Until the request is complete, only the rows through `through_seq`
+        // are news below the head this device last pulled to: the stretch
+        // between is in the store, so the pull skips it (a device waiting on
+        // a holder would otherwise fetch the whole window on every sync).
+        // Complete, the pull runs whole from the cursor.
+        let skip_to = if complete { 0 } else { known_head };
         let mut since = acked;
         loop {
+            if since >= through_seq && since < skip_to {
+                since = skip_to;
+            }
             let page = relay.pull_changes(self.device_id, group_id, since, 0).await?;
             for entry in &page.entries {
                 self.apply_entry(group_id, entry, events);
