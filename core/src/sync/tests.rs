@@ -424,6 +424,72 @@ fn a_swept_request_is_asked_again() {
     assert!(events.contains(&Event::BecameHolder), "{events:?}");
 }
 
+/// A device joining shortly after another needs no upload: the first
+/// restore's rows are still in the window, the relay vouches for them, and
+/// eviction by ack leaves the group alone for the grace.
+#[test]
+fn a_second_joiner_within_the_grace_needs_no_upload() {
+    let w = World::new(12);
+    let mut a = w.device(1, 1);
+    let posts: Vec<Uuid> = (0..3).map(|i| a.post(w.group, &format!("post {i}"))).collect();
+    a.sync(&w.model, w.group);
+    w.model.evict();
+    assert!(w.model.log(w.group).is_empty());
+    let mut b = w.device(2, 2);
+    b.sync(&w.model, w.group);
+    a.serve(&w.model, w.group);
+    w.model.take_wakeups(a.id);
+    let events = b.sync(&w.model, w.group);
+    assert!(events.contains(&Event::BecameHolder), "{events:?}");
+
+    w.model.advance(10 * 60 * 1000);
+    w.model.evict();
+    assert_eq!(w.model.log(w.group).len(), 3, "within the grace the restored rows stay, though every device acked them");
+    let mut c = w.device(3, 3);
+    let events = c.sync(&w.model, w.group);
+    assert!(events.contains(&Event::HistoryPresent) && events.contains(&Event::BecameHolder), "{events:?}");
+    assert!(!events.iter().any(|e| matches!(e, Event::HistoryRequested { .. })), "{events:?}");
+    assert!(w.model.take_wakeups(a.id).iter().all(|w| !matches!(w, Wakeup::HistoryRequested { .. })), "no holder was asked");
+    assert_eq!(w.model.ack(w.group, c.id), Some(3));
+    for p in &posts {
+        assert!(c.read::<Post>(w.group, *p).is_some());
+    }
+
+    // Past the grace the sweep evicts again, and the next joiner needs a holder.
+    w.model.advance(HOUR);
+    w.model.evict();
+    assert!(w.model.log(w.group).is_empty());
+    let mut d = w.device(4, 4);
+    let events = d.sync(&w.model, w.group);
+    assert!(events.iter().any(|e| matches!(e, Event::HistoryRequested { .. })), "{events:?}");
+}
+
+/// Two devices joining together are served by one upload: the second
+/// request is covered by the first and completes with it.
+#[test]
+fn two_joiners_at_once_are_served_by_one_upload() {
+    let w = World::new(13);
+    let mut a = w.device(1, 1);
+    let posts: Vec<Uuid> = (0..3).map(|i| a.post(w.group, &format!("post {i}"))).collect();
+    a.sync(&w.model, w.group);
+    w.model.evict();
+    let (mut b, mut c) = (w.device(2, 2), w.device(3, 3));
+    b.sync(&w.model, w.group);
+    c.sync(&w.model, w.group);
+    assert_eq!(w.model.open_requests(w.group), 2);
+    assert_eq!(w.model.take_wakeups(a.id).iter().filter(|w| matches!(w, Wakeup::HistoryRequested { .. })).count(), 1, "the covered request is not announced");
+    let served = a.serve(&w.model, w.group);
+    assert_eq!(served.iter().filter(|e| matches!(e, Event::HistoryServed { .. })).count(), 1, "one upload: {served:?}");
+    assert_eq!(w.model.open_requests(w.group), 0, "the covered request completed with the covering one");
+    for dev in [&mut b, &mut c] {
+        let events = dev.sync(&w.model, w.group);
+        assert!(events.contains(&Event::BecameHolder), "{events:?}");
+        for p in &posts {
+            assert!(dev.read::<Post>(w.group, *p).is_some());
+        }
+    }
+}
+
 /// Random push/pull/ack/offline interleavings, with eviction and a holder
 /// serving history, over four devices of two users: every device ends
 /// with the same rows.

@@ -9,7 +9,7 @@ use chrono::Utc;
 use std::collections::BTreeMap;
 
 use crate::Relay;
-use crate::handlers::window_cutoff;
+use crate::handlers::{RESTORE_GRACE, window_cutoff};
 use crate::repository as repo;
 
 /// Rows evicted by age per statement.
@@ -17,10 +17,12 @@ const AGE_BATCH: i64 = 10_000;
 
 impl Relay {
     /// `evict_objects`, every 1h. By ack: per group, the rows every device
-    /// has acked go and the floor follows the minimum. By age: rows older
-    /// than the window go, batched, the floors follow the highest seq
-    /// taken per group, and the devices below the new floor that have not
-    /// acked within the window lose their row (they start over).
+    /// has acked go and the floor follows the minimum, except for the grace
+    /// after a restore. By age: rows older than the window go, batched, the
+    /// floors follow the highest seq taken per group, and the devices
+    /// below the new floor that have not acked within the window lose
+    /// their row (they start over). Either rule clears the restore witness
+    /// when it reaches restored rows.
     pub async fn tick_evict_objects<R>(&self, ctx: &Ctx, _s: interfaces::RelaySender<'static, R>) -> Result<(), BoxError>
     where
         R: interfaces::RelayRoutes + Send + Sync + 'static,
@@ -31,15 +33,28 @@ impl Relay {
     }
 
     pub(crate) async fn evict_by_ack(&self, ctx: &Ctx) -> Result<(), BoxError> {
+        let grace_from = Utc::now() - RESTORE_GRACE;
         for (group_id, min) in repo::group_minimums(&*self.pool).await? {
             if ctx.is_done() {
                 return Ok(());
             }
             let mut tx = self.pool.begin().await?;
             let head = repo::lock_head(&mut tx, group_id).await?;
+            if head.restored_at.is_some_and(|t| t > grace_from) {
+                // A restore just landed: the rows stay for the grace, so a
+                // device joining a little after the one that asked finds
+                // its history in the window and needs no upload.
+                tx.commit().await?;
+                continue;
+            }
             let evicted = repo::delete_objects_through(&mut *tx, group_id, min).await?;
             if min > head.evicted_through_seq {
                 repo::raise_floor(&mut *tx, group_id, min).await?;
+            }
+            if min >= 1 && head.restored_through_seq > 0 {
+                // Rows from seq 1 up went with this pass: the witness no
+                // longer holds.
+                repo::clear_restored(&mut *tx, group_id).await?;
             }
             tx.commit().await?;
             if evicted > 0 {
@@ -56,16 +71,21 @@ impl Relay {
                 return Ok(());
             }
             let gone = repo::delete_objects_older_than(&*self.pool, cutoff, AGE_BATCH).await?;
-            let mut highest: BTreeMap<uuid::Uuid, i64> = BTreeMap::new();
+            let mut taken: BTreeMap<uuid::Uuid, (i64, i64)> = BTreeMap::new(); // (lowest, highest) seq per group
             for (group_id, seq) in &gone {
-                let h = highest.entry(*group_id).or_insert(*seq);
-                *h = (*h).max(*seq);
+                let t = taken.entry(*group_id).or_insert((*seq, *seq));
+                t.0 = t.0.min(*seq);
+                t.1 = t.1.max(*seq);
             }
-            for (group_id, seq) in highest {
+            for (group_id, (lowest, highest)) in taken {
                 let mut tx = self.pool.begin().await?;
-                repo::lock_head(&mut tx, group_id).await?;
-                let floor = repo::raise_floor(&mut *tx, group_id, seq).await?;
+                let head = repo::lock_head(&mut tx, group_id).await?;
+                let floor = repo::raise_floor(&mut *tx, group_id, highest).await?;
                 let stale = repo::delete_stale_devices(&mut *tx, group_id, floor, cutoff).await?;
+                if head.restored_through_seq > 0 && lowest <= head.restored_through_seq {
+                    // A restored row aged out: the witness no longer holds.
+                    repo::clear_restored(&mut *tx, group_id).await?;
+                }
                 tx.commit().await?;
                 tracing::info!(group = %group_id, floor, stale_devices = stale, "evicted by age");
             }
@@ -75,8 +95,9 @@ impl Relay {
         }
     }
 
-    /// `expire_history_requests`, every 1h: requests older than the window
-    /// are dropped, answered or not.
+    /// `expire_history_requests`, every 1h: an open request older than the
+    /// window is dropped, answered or not; a complete one a window after
+    /// it completed, so its requester can still read it.
     pub async fn tick_expire_history_requests<R>(&self, _ctx: &Ctx, _s: interfaces::RelaySender<'static, R>) -> Result<(), BoxError>
     where
         R: interfaces::RelayRoutes + Send + Sync + 'static,

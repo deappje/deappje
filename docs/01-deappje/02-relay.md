@@ -33,6 +33,8 @@ its own device out of the wake-up.
 | group_id | uuid | primary key |
 | head_seq | int64 | last assigned sequence |
 | evicted_through_seq | int64 | the eviction floor: every row written at `seq ≤` this has been evicted once, by age or because every device had acked it (a history re-insert may put a copy back); a device whose ack is at or above it is a holder, one whose cursor is below it starts over |
+| restored_through_seq | int64 | the restore witness: every row at or below this seq that any holder has is in the log right now (0: none). Set by a complete restore from seq 1 to its `to_seq` (never lowered), cleared by an eviction that reaches a restored row. A whole-range request it covers is answered `complete` on the spot |
+| restored_at | timestamp, nullable | when the witness was last set; eviction by ack leaves the group alone for 30 minutes after it (the grace) |
 
 Created with zeros on the first push to a group.
 
@@ -157,8 +159,10 @@ commit after a higher one and a client that pulled in between misses it forever 
 **The path of a new device**, taken on joining and on starting over: ack 0, which gives it a row
 and pins the group's minimum ack at 0; pull from 0 and apply the window, to have something to
 show, and follow the head from there like any device, without acking; ask a holder for
-everything older with `RequestHistoryRequest { from_seq: 1, to_seq: evicted_through_seq }`; on
-every sync while it waits (`HistoryReady` hurries one), read the request (`GetHistoryRequest`)
+everything older with `RequestHistoryRequest { from_seq: 1, to_seq: evicted_through_seq }`
+(answered `complete` on the spot when the window still holds the range after another device's
+restore; "History requests"); on every sync while it waits (`HistoryReady` hurries one), read
+the request (`GetHistoryRequest`)
 and page the restored rows from its ack up to its `through_seq`, acking each page, which is
 honest, since the holder pushes oldest first and every row with a seq at or below `through_seq`
 is then in; when the request is complete and the last page is acked it holds everything through
@@ -232,6 +236,19 @@ The requester does not depend on the wake-up. `GetHistoryRequestRequest { reques
 pages and acks as far as `through_seq` and becomes a holder on `complete` whether the wake-up
 came, came late or never came (a browser gets none). A complete row stays until the sweep; `not
 found` means the sweep dropped it, and the requester asks again: a re-push skips what is there.
+
+Two devices joining close together cost one upload, or none. A complete restore from seq 1
+leaves a **witness** on the group head (`restored_through_seq = to_seq`, `restored_at = now`):
+every row at or below it that any holder has is in the log, until an eviction reaches a restored
+row and clears it; eviction by ack leaves the group alone for 30 minutes after a restore (the
+grace, "Sweeps"), so the rows a joiner's restore put back are still there for the next joiner. A
+whole-range request whose `to_seq` the witness covers is answered `complete` on the spot, with a
+nil id: nothing is stored, nobody is woken, and the requester pages what its pull already gave
+it. A whole-range request made while an older open one reaches its `to_seq` is **covered**: it
+is stored and the requester follows it as usual, but it is not announced and holders do not
+list it, and the complete push of the covering request completes it in the same transaction
+(`through_seq = to_seq`, a `HistoryReady` to its requester). A one-object request is never
+covered and never covers: its holder may have a file to re-upload first.
 Restored rows are ordinary rows: they go by the ack rule as soon as the requester, the last
 device below them, has acked past them, and by age 672 hours after their re-insert if it never
 does.
@@ -261,15 +278,19 @@ download.
 
 ## Sweeps (schedules, hourly, idempotent)
 
-- `evict_objects`, two rules. **By ack**: per group with a non-null `min_acked_seq`, delete rows
-  with `seq ≤ min_acked_seq`, live and tombstones alike, restored ones included, and set
-  `evicted_through_seq = GREATEST(evicted_through_seq, min_acked_seq)`: every device has them,
-  so the cache has no reader left for them. **By age**: delete rows with
-  `uploaded_at < now - 672h`, batched 10k per statement; per group set `evicted_through_seq =
-  GREATEST(evicted_through_seq, MAX(seq) evicted)`, then delete the group's `group_device` rows
-  with `acked_seq` below the new floor and `updated_at < now - 672h`: a device that had not
-  acked an evicted row is evicted with it, unless it is catching up, which its acks show. By
-  age, not by position, so a restored row the requester never acked still goes.
+- `evict_objects`, two rules. **By ack**: per group with a non-null `min_acked_seq`, unless its
+  `restored_at` is within the last 30 minutes (the grace: the group is skipped whole, since
+  evicting only its older rows would move the floor past rows the witness still vouches for),
+  delete rows with `seq ≤ min_acked_seq`, live and tombstones alike, restored ones included, and
+  set `evicted_through_seq = GREATEST(evicted_through_seq, min_acked_seq)`: every device has
+  them, so the cache has no reader left for them; a pass with `min_acked_seq ≥ 1` clears the
+  witness. **By age**: delete rows with `uploaded_at < now - 672h`, batched 10k per statement;
+  per group set `evicted_through_seq = GREATEST(evicted_through_seq, MAX(seq) evicted)`, then
+  delete the group's `group_device` rows with `acked_seq` below the new floor and `updated_at <
+  now - 672h`: a device that had not acked an evicted row is evicted with it, unless it is
+  catching up, which its acks show. By age, not by position, so a restored row the requester
+  never acked still goes, and a pass whose lowest evicted seq is at or below the witness clears
+  it.
 - `expire_history_requests`: delete rows older than 672 hours.
 
 Postgres therefore holds, per group, what some device has not acked yet, for 28 days at most.
@@ -334,6 +355,12 @@ What the code settled beyond the text above (`nanoservices/relay`, 2026-10-30):
   requester follows its request through the relay and the `history_ready` wake-up is a hurry-up
   like every other push. Before, the wake-up was the only carrier of `through_seq` and
   `complete`, and a dropped one left the requester catching up for good.
+- **The restore witness and the grace** (2026-10-31): two joins minutes apart used to cost two
+  uploads, the second one skipped row by row by the server, because the floor never comes down
+  and the second joiner could not know the rows were back. Now a complete restore from seq 1
+  records how far the log is whole again, eviction by ack waits 30 minutes, a covered request is
+  answered `complete` at once, and a request made while another is in progress completes with
+  it. The floor's meaning is unchanged; a joiner answered `complete` acks only rows it pulled.
 - **Eviction by age** raises a group's floor to the highest seq taken in the batch and drops the
   devices below it that have not acked within the window, under the counter lock, batched
   ten thousand rows per statement; a purge deletes ten thousand rows per call and the counter,

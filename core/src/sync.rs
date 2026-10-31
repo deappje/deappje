@@ -78,6 +78,9 @@ pub enum Event {
     },
     /// Nobody holds anything older than the window.
     Unfillable,
+    /// The history asked for was in the window already (a restore for
+    /// another device, not yet evicted): no holder was needed.
+    HistoryPresent,
     /// A row could not be opened: the key is not held yet.
     NoKey {
         /// The object.
@@ -447,13 +450,10 @@ impl Syncer<'_> {
         };
         self.store.set_cursor(group_id, 0, head_seq, floor);
         if floor >= 1 {
-            let request = relay.request_history(self.device_id, group_id, 1, floor, None).await?;
-            if request.status != HistoryStatus::Unfillable {
-                self.store.set_phase(group_id, Phase::CatchingUp { request_id: Some(request.id), floor, through_seq: 0, complete: false });
-                events.push(Event::HistoryRequested { request_id: request.id });
-                return Ok(());
-            }
-            events.push(Event::Unfillable);
+            // Everything older than the window is a holder's to give, or
+            // is in the window already: the catch-up asks.
+            self.store.set_phase(group_id, Phase::CatchingUp { request_id: None, floor, through_seq: 0, complete: false });
+            return self.catch_up(relay, group_id, events).await;
         }
         self.become_holder(relay, group_id, head_seq, floor, events).await
     }
@@ -482,18 +482,31 @@ impl Syncer<'_> {
                 Err(e) => return Err(e.into()),
             }
         }
-        if request_id.is_none() {
-            // The request is gone (swept before this device saw it
-            // complete, or never stored): ask again.
+        if request_id.is_none() && !complete {
+            // No request yet (the join), or the one there was is gone
+            // (swept before this device saw it complete): ask.
             let request = relay.request_history(self.device_id, group_id, 1, floor, None).await?;
-            if request.status == HistoryStatus::Unfillable {
-                events.push(Event::Unfillable);
-                let head = self.store.group(group_id).map_or(0, |g| g.head_seq);
-                return self.become_holder(relay, group_id, head, floor, events).await;
+            match request.status {
+                HistoryStatus::Unfillable => {
+                    events.push(Event::Unfillable);
+                    let head = self.store.group(group_id).map_or(0, |g| g.head_seq);
+                    return self.become_holder(relay, group_id, head, floor, events).await;
+                }
+                HistoryStatus::Complete => {
+                    // The window holds the range already: a restore for
+                    // another device landed and no eviction has reached it.
+                    // Page it from the cursor like a complete request's
+                    // rows, with nothing to wait for.
+                    (through_seq, complete) = (floor, true);
+                    self.store.set_phase(group_id, Phase::CatchingUp { request_id: None, floor, through_seq, complete });
+                    events.push(Event::HistoryPresent);
+                }
+                _ => {
+                    self.store.set_phase(group_id, Phase::CatchingUp { request_id: Some(request.id), floor, through_seq: 0, complete: false });
+                    events.push(Event::HistoryRequested { request_id: request.id });
+                    return Ok(());
+                }
             }
-            self.store.set_phase(group_id, Phase::CatchingUp { request_id: Some(request.id), floor, through_seq: 0, complete: false });
-            events.push(Event::HistoryRequested { request_id: request.id });
-            return Ok(());
         }
         let mut acked = self.store.group(group_id).map_or(0, |g| g.acked_seq);
         let mut since = acked;
@@ -506,9 +519,12 @@ impl Syncer<'_> {
             let target = since.min(through_seq);
             if target > acked {
                 if !self.ack(relay, group_id, target).await? {
+                    // The row went while the device caught up: the next
+                    // sync joins again (as `become_holder` does; the join
+                    // comes through here, so it cannot be called from here).
                     self.store.start_over(group_id);
                     events.push(Event::StartedOver);
-                    return self.join(relay, group_id, events).await;
+                    return Ok(());
                 }
                 acked = target;
             }

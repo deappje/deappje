@@ -21,6 +21,9 @@ pub const DEFAULT_PAGE: i32 = 500;
 pub const MAX_PAGE: i32 = 2000;
 /// A claim this old without `complete` is abandoned.
 pub const CLAIM_TAKEOVER_MS: i64 = 5 * 60 * 1000;
+/// After a complete restore from seq 1, eviction by ack leaves the group
+/// alone this long (`RESTORE_GRACE`).
+pub const RESTORE_GRACE_MS: i64 = 30 * 60 * 1000;
 /// The window: how long a row stays at most, and how long a device may
 /// stay away without starting over.
 pub const WINDOW_MS: i64 = 672 * 60 * 60 * 1000;
@@ -53,12 +56,11 @@ pub enum Wakeup {
         /// The group.
         group_id: Uuid,
     },
-    /// A holder pushed history for this device's request.
+    /// A holder pushed history for this device's request. Like the real
+    /// push (`device`'s `push.rs`), it names no group.
     HistoryReady {
         /// The request.
         request_id: Uuid,
-        /// The group.
-        group_id: Uuid,
         /// The last seq pushed so far.
         through_seq: i64,
         /// Whether the request is complete.
@@ -79,6 +81,10 @@ struct Object {
 struct HeadRow {
     head_seq: i64,
     evicted_through_seq: i64,
+    /// The restore witness (`group_head.restored_through_seq`).
+    restored_through_seq: i64,
+    /// When it was last set (`group_head.restored_at`).
+    restored_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,8 +181,41 @@ impl Inner {
         head.evicted_through_seq
     }
 
-    fn request_msg(&self, id: Uuid, r: &RequestRow, status: HistoryStatus) -> HistoryRequest {
-        HistoryRequest { id, group_id: r.group_id, requester_device: r.requester_device, from_seq: r.from_seq, to_seq: r.to_seq, object_id: r.object_id, claimed_by: r.claimed_by, through_seq: r.through_seq, status }
+    /// `clear_restored`: an eviction reached the restored rows.
+    fn clear_restored(&mut self, group_id: Uuid) {
+        if let Some(head) = self.heads.get_mut(&group_id) {
+            head.restored_through_seq = 0;
+            head.restored_at = None;
+        }
+    }
+
+    /// `covering_request_exists`: an open whole-range request of the group
+    /// reaches `to_seq`, so a new one it covers is not announced.
+    fn covering_request_exists(&self, group_id: Uuid, to_seq: i64) -> bool {
+        self.requests.values().any(|c| c.group_id == group_id && c.completed_at.is_none() && c.from_seq == 1 && c.object_id.is_none() && c.to_seq >= to_seq)
+    }
+
+    /// The `NOT EXISTS` of `claimable_requests`: an older open whole-range
+    /// request of the group reaches this one's `to_seq`.
+    fn covered_by_older(&self, group_id: Uuid, to_seq: i64, created_at: i64, id: Uuid) -> bool {
+        self.requests.iter().any(|(cid, c)| {
+            c.group_id == group_id && *cid != id && c.completed_at.is_none() && c.from_seq == 1 && c.object_id.is_none() && c.to_seq >= to_seq && (c.created_at, *cid) < (created_at, id)
+        })
+    }
+
+    /// `history_msg` in the handlers: the claimer is named only to itself.
+    fn request_msg(&self, id: Uuid, r: &RequestRow, device_id: Uuid, status: HistoryStatus) -> HistoryRequest {
+        HistoryRequest {
+            id,
+            group_id: r.group_id,
+            requester_device: r.requester_device,
+            from_seq: r.from_seq,
+            to_seq: r.to_seq,
+            object_id: r.object_id,
+            claimed_by: r.claimed_by.filter(|d| *d == device_id),
+            through_seq: r.through_seq,
+            status,
+        }
     }
 
     /// `status_of` in the handlers: where a stored request stands for the
@@ -273,35 +312,48 @@ impl RelayModel {
     /// `evict_objects`: by ack, then by age.
     pub fn evict(&self) {
         let mut inner = self.inner.lock().expect("no poison");
+        let now = inner.now_ms;
         let groups: Vec<Uuid> = inner.heads.keys().copied().collect();
         for group_id in groups {
+            if inner.head(group_id).restored_at.is_some_and(|t| t > now - RESTORE_GRACE_MS) {
+                // A restore just landed: the rows stay for the grace.
+                continue;
+            }
             if let Some(min) = inner.min_acked(group_id) {
                 inner.objects.retain(|_, o| !(o.group_id == group_id && o.seq <= min));
                 inner.raise_floor(group_id, min);
+                if min >= 1 {
+                    inner.clear_restored(group_id);
+                }
             }
         }
-        let cutoff = inner.now_ms - WINDOW_MS;
-        let mut highest: BTreeMap<Uuid, i64> = BTreeMap::new();
+        let cutoff = now - WINDOW_MS;
+        let mut taken: BTreeMap<Uuid, (i64, i64)> = BTreeMap::new(); // (lowest, highest) seq per group
         inner.objects.retain(|_, o| {
             if o.uploaded_at < cutoff {
-                let h = highest.entry(o.group_id).or_insert(o.seq);
-                *h = (*h).max(o.seq);
+                let t = taken.entry(o.group_id).or_insert((o.seq, o.seq));
+                t.0 = t.0.min(o.seq);
+                t.1 = t.1.max(o.seq);
                 false
             } else {
                 true
             }
         });
-        for (group_id, seq) in highest {
-            let floor = inner.raise_floor(group_id, seq);
+        for (group_id, (lowest, highest)) in taken {
+            let floor = inner.raise_floor(group_id, highest);
             inner.devices.retain(|(g, _), d| !(*g == group_id && d.acked_seq < floor && d.updated_at < cutoff));
+            if lowest <= inner.head(group_id).restored_through_seq {
+                inner.clear_restored(group_id);
+            }
         }
     }
 
-    /// `expire_history_requests`.
+    /// `expire_history_requests`: an open request a window after it was
+    /// made, a complete one a window after it completed.
     pub fn expire_requests(&self) {
         let mut inner = self.inner.lock().expect("no poison");
         let cutoff = inner.now_ms - WINDOW_MS;
-        inner.requests.retain(|_, r| r.created_at >= cutoff);
+        inner.requests.retain(|_, r| r.completed_at.unwrap_or(r.created_at) >= cutoff);
     }
 
     fn call(&self) -> Result<std::sync::MutexGuard<'_, Inner>, ApiError> {
@@ -442,17 +494,26 @@ impl Relay for RelayModel {
         if from_seq < 1 || to_seq < from_seq {
             return Err(err(Code::InvalidArgument, "from_seq is at least 1 and to_seq at least from_seq"));
         }
-        let floor = inner.head(group_id).evicted_through_seq;
-        let holders = inner.holders_except(group_id, floor, device_id);
+        let head = inner.head(group_id);
+        let floor = head.evicted_through_seq;
+        let whole_range = from_seq == 1 && object_id.is_none();
         let row = RequestRow { group_id, requester_device: device_id, from_seq, to_seq, object_id, claimed_by: None, claimed_at: None, through_seq: from_seq - 1, completed_at: None, created_at: inner.now_ms };
+        if whole_range && to_seq <= head.restored_through_seq {
+            // The window holds the range already: nothing stored, nobody woken.
+            return Ok(inner.request_msg(Uuid::nil(), &RequestRow { through_seq: to_seq, ..row }, device_id, HistoryStatus::Complete));
+        }
+        let holders = inner.holders_except(group_id, floor, device_id);
         if holders.is_empty() {
-            return Ok(inner.request_msg(Uuid::nil(), &row, HistoryStatus::Unfillable));
+            return Ok(inner.request_msg(Uuid::nil(), &row, device_id, HistoryStatus::Unfillable));
         }
         let id = crate::ids::random(&mut self.rng.lock().expect("no poison"));
-        let msg = inner.request_msg(id, &row, HistoryStatus::Open);
+        let covered = whole_range && inner.covering_request_exists(group_id, to_seq);
+        let msg = inner.request_msg(id, &row, device_id, HistoryStatus::Open);
         inner.requests.insert(id, row);
-        for d in holders {
-            inner.wake(d, Wakeup::HistoryRequested { request_id: id, group_id });
+        if !covered {
+            for d in holders {
+                inner.wake(d, Wakeup::HistoryRequested { request_id: id, group_id });
+            }
         }
         Ok(msg)
     }
@@ -461,7 +522,7 @@ impl Relay for RelayModel {
         let inner = self.call()?;
         let row = inner.requests.get(&request_id).cloned().ok_or_else(|| err(Code::NotFound, "history request not found (expired)"))?;
         inner.require_member(device_id, row.group_id)?;
-        Ok(inner.request_msg(request_id, &row, inner.status_of(&row, device_id)))
+        Ok(inner.request_msg(request_id, &row, device_id, inner.status_of(&row, device_id)))
     }
 
     async fn list_history_requests(&self, device_id: Uuid, group_id: Uuid) -> Result<Vec<HistoryRequest>, ApiError> {
@@ -471,8 +532,13 @@ impl Relay for RelayModel {
         Ok(inner
             .requests
             .iter()
-            .filter(|(_, r)| r.group_id == group_id && r.completed_at.is_none() && r.claimed_at.is_none_or(|t| t < abandoned_before))
-            .map(|(id, r)| inner.request_msg(*id, r, HistoryStatus::Open))
+            .filter(|(id, r)| {
+                r.group_id == group_id
+                    && r.completed_at.is_none()
+                    && r.claimed_at.is_none_or(|t| t < abandoned_before)
+                    && !(r.from_seq == 1 && r.object_id.is_none() && inner.covered_by_older(group_id, r.to_seq, r.created_at, **id))
+            })
+            .map(|(id, r)| inner.request_msg(*id, r, device_id, HistoryStatus::Open))
             .collect())
     }
 
@@ -494,14 +560,15 @@ impl Relay for RelayModel {
         let now = inner.now_ms;
         let takeover = now - CLAIM_TAKEOVER_MS;
         let row = inner.requests.get_mut(&request_id).expect("read above");
-        if row.claimed_by.is_none() || row.claimed_at.is_some_and(|t| t < takeover) {
+        // `claim_request`: unclaimed, already the caller's, or abandoned.
+        if row.claimed_by.is_none() || row.claimed_by == Some(device_id) || row.claimed_at.is_some_and(|t| t < takeover) {
             row.claimed_by = Some(device_id);
             row.claimed_at = Some(now);
             let row = row.clone();
-            Ok(inner.request_msg(request_id, &row, HistoryStatus::Claimed))
+            Ok(inner.request_msg(request_id, &row, device_id, HistoryStatus::Claimed))
         } else {
             let row = row.clone();
-            Ok(inner.request_msg(request_id, &row, HistoryStatus::Taken))
+            Ok(inner.request_msg(request_id, &row, device_id, inner.status_of(&row, device_id)))
         }
     }
 
@@ -560,7 +627,26 @@ impl Relay for RelayModel {
         if complete {
             row.completed_at = Some(now);
         }
-        inner.wake(request.requester_device, Wakeup::HistoryReady { request_id, group_id: request.group_id, through_seq, complete });
+        inner.wake(request.requester_device, Wakeup::HistoryReady { request_id, through_seq, complete });
+        if complete && request.from_seq == 1 && request.object_id.is_none() {
+            // The witness, and the whole-range requests this one covers
+            // complete with it: one upload serves them all.
+            let head = inner.heads.entry(request.group_id).or_default();
+            head.restored_through_seq = head.restored_through_seq.max(request.to_seq);
+            head.restored_at = Some(now);
+            let covered: Vec<(Uuid, Uuid, i64)> = inner
+                .requests
+                .iter()
+                .filter(|(id, r)| **id != request_id && r.group_id == request.group_id && r.completed_at.is_none() && r.from_seq == 1 && r.object_id.is_none() && r.to_seq <= request.to_seq)
+                .map(|(id, r)| (*id, r.requester_device, r.to_seq))
+                .collect();
+            for (id, requester, to_seq) in covered {
+                let r = inner.requests.get_mut(&id).expect("listed above");
+                r.through_seq = to_seq;
+                r.completed_at = Some(now);
+                inner.wake(requester, Wakeup::HistoryReady { request_id: id, through_seq: to_seq, complete: true });
+            }
+        }
         Ok(PushHistoryResult { inserted, skipped, through_seq, complete })
     }
 }
@@ -649,11 +735,14 @@ mod tests {
         assert_eq!(m.take_wakeups(d), vec![Wakeup::HistoryRequested { request_id: req.id, group_id: g }]);
         assert_eq!(block_on(m.claim_history(d3, req.id)).unwrap_err().code, Code::InvalidArgument, "not its own");
         assert_eq!(block_on(m.claim_history(d, req.id)).unwrap().status, HistoryStatus::Claimed);
-        assert_eq!(block_on(m.claim_history(d2, req.id)).unwrap().status, HistoryStatus::Taken);
+        let again = block_on(m.claim_history(d, req.id)).unwrap();
+        assert_eq!((again.status, again.claimed_by), (HistoryStatus::Claimed, Some(d)), "the claimer again, as after a lost answer");
+        let lost = block_on(m.claim_history(d2, req.id)).unwrap();
+        assert_eq!((lost.status, lost.claimed_by), (HistoryStatus::Taken, None), "the claimer is named only to itself");
         assert_eq!(block_on(m.push_history(d2, req.id, vec![], true)).unwrap_err().code, Code::PermissionDenied);
         let r = block_on(m.push_history(d, req.id, vec![Entry { id: Uuid::from_u128(10), value: Some(vec![10]), seq: 1, deleted: false }], true)).unwrap();
         assert_eq!((r.inserted, r.skipped, r.through_seq), (1, 0, 1));
-        assert_eq!(m.take_wakeups(d3), vec![Wakeup::HistoryReady { request_id: req.id, group_id: g, through_seq: 1, complete: true }]);
+        assert_eq!(m.take_wakeups(d3), vec![Wakeup::HistoryReady { request_id: req.id, through_seq: 1, complete: true }]);
         assert_eq!(m.open_requests(g), 0);
         assert_eq!(m.log(g).len(), 1, "restored at its seq");
         let none = block_on(m.request_history(Uuid::from_u128(6), g, 1, 1, None));

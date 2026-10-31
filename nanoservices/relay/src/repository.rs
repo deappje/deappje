@@ -12,6 +12,7 @@ use crate::model;
 
 const OBJECT_COLUMNS: &str = "id, group_id, value, seq, deleted, uploaded_at";
 const REQUEST_COLUMNS: &str = "id, group_id, requester_device, from_seq, to_seq, object_id, claimed_by, claimed_at, through_seq, completed_at, created_at";
+const HEAD_COLUMNS: &str = "group_id, head_seq, evicted_through_seq, restored_through_seq, restored_at";
 
 // --- group_head: the counter row ---
 
@@ -19,18 +20,18 @@ const REQUEST_COLUMNS: &str = "id, group_id, requester_device, from_seq, to_seq,
 /// sight. Every write to a group's log and every move of its floor takes
 /// this lock first (the Directive §7).
 pub(crate) async fn lock_head(tx: &mut sqlx::PgConnection, group_id: Uuid) -> Result<model::GroupHead, sqlx::Error> {
-    sqlx::query("INSERT INTO group_head (group_id, head_seq, evicted_through_seq) VALUES ($1, 0, 0) ON CONFLICT DO NOTHING")
+    sqlx::query("INSERT INTO group_head (group_id, head_seq, evicted_through_seq, restored_through_seq) VALUES ($1, 0, 0, 0) ON CONFLICT DO NOTHING")
         .bind(group_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query_as::<_, model::GroupHead>("SELECT group_id, head_seq, evicted_through_seq FROM group_head WHERE group_id = $1 FOR UPDATE")
+    sqlx::query_as::<_, model::GroupHead>(&format!("SELECT {HEAD_COLUMNS} FROM group_head WHERE group_id = $1 FOR UPDATE"))
         .bind(group_id)
         .fetch_one(&mut *tx)
         .await
 }
 
 pub(crate) async fn get_head<'e>(e: impl PgExecutor<'e>, group_id: Uuid) -> Result<Option<model::GroupHead>, sqlx::Error> {
-    sqlx::query_as::<_, model::GroupHead>("SELECT group_id, head_seq, evicted_through_seq FROM group_head WHERE group_id = $1")
+    sqlx::query_as::<_, model::GroupHead>(&format!("SELECT {HEAD_COLUMNS} FROM group_head WHERE group_id = $1"))
         .bind(group_id)
         .fetch_optional(e)
         .await
@@ -56,6 +57,27 @@ pub(crate) async fn raise_floor<'e>(e: impl PgExecutor<'e>, group_id: Uuid, to: 
     .bind(to)
     .fetch_one(e)
     .await
+}
+
+/// The restore witness after a complete restore from seq 1: as far as any
+/// restore got, and when the last one landed (the grace runs from it).
+pub(crate) async fn set_restored<'e>(e: impl PgExecutor<'e>, group_id: Uuid, through_seq: i64, at: DateTime<Utc>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE group_head SET restored_through_seq = GREATEST(restored_through_seq, $2), restored_at = $3, updated_at = clock_timestamp() WHERE group_id = $1")
+        .bind(group_id)
+        .bind(through_seq)
+        .bind(at)
+        .execute(e)
+        .await?;
+    Ok(())
+}
+
+/// An eviction reached the restored rows: the witness no longer holds.
+pub(crate) async fn clear_restored<'e>(e: impl PgExecutor<'e>, group_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE group_head SET restored_through_seq = 0, restored_at = NULL, updated_at = clock_timestamp() WHERE group_id = $1 AND restored_through_seq > 0")
+        .bind(group_id)
+        .execute(e)
+        .await?;
+    Ok(())
 }
 
 pub(crate) async fn delete_head<'e>(e: impl PgExecutor<'e>, group_id: Uuid) -> Result<bool, sqlx::Error> {
@@ -276,15 +298,36 @@ pub(crate) async fn get_history_request<'e>(e: impl PgExecutor<'e>, id: Uuid) ->
         .await
 }
 
-/// The group's requests a holder may claim: not complete, and unclaimed or
-/// claimed before `abandoned_before`.
+/// The group's requests a holder may claim: not complete, unclaimed or
+/// claimed before `abandoned_before`, and not a whole-range request that an
+/// older open whole-range request reaches: that one completes with it
+/// (`complete_covered_requests`), so one upload serves both.
 pub(crate) async fn claimable_requests<'e>(e: impl PgExecutor<'e>, group_id: Uuid, abandoned_before: DateTime<Utc>) -> Result<Vec<model::HistoryRequest>, sqlx::Error> {
     sqlx::query_as::<_, model::HistoryRequest>(&format!(
-        "SELECT {REQUEST_COLUMNS} FROM history_request WHERE group_id = $1 AND completed_at IS NULL AND (claimed_by IS NULL OR claimed_at < $2) ORDER BY created_at, id"
+        "SELECT {REQUEST_COLUMNS} FROM history_request r \
+         WHERE r.group_id = $1 AND r.completed_at IS NULL AND (r.claimed_by IS NULL OR r.claimed_at < $2) \
+         AND NOT (r.from_seq = 1 AND r.object_id IS NULL AND EXISTS ( \
+             SELECT 1 FROM history_request c \
+             WHERE c.group_id = r.group_id AND c.id <> r.id AND c.completed_at IS NULL \
+             AND c.from_seq = 1 AND c.object_id IS NULL AND c.to_seq >= r.to_seq \
+             AND (c.created_at, c.id) < (r.created_at, r.id))) \
+         ORDER BY r.created_at, r.id"
     ))
     .bind(group_id)
     .bind(abandoned_before)
     .fetch_all(e)
+    .await
+}
+
+/// Whether an open whole-range request of the group reaches `to_seq`: a
+/// new whole-range request it covers is stored but not announced.
+pub(crate) async fn covering_request_exists<'e>(e: impl PgExecutor<'e>, group_id: Uuid, to_seq: i64) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM history_request WHERE group_id = $1 AND completed_at IS NULL AND from_seq = 1 AND object_id IS NULL AND to_seq >= $2)",
+    )
+    .bind(group_id)
+    .bind(to_seq)
+    .fetch_one(e)
     .await
 }
 
@@ -318,8 +361,28 @@ pub(crate) async fn record_history_push<'e>(e: impl PgExecutor<'e>, id: Uuid, th
     Ok(())
 }
 
+/// A complete restore from seq 1 through `to_seq` completes every other
+/// open whole-range request of the group it reaches: the rows are in.
+/// Answers them, for their wake-ups.
+pub(crate) async fn complete_covered_requests<'e>(e: impl PgExecutor<'e>, group_id: Uuid, to_seq: i64, except: Uuid, at: DateTime<Utc>) -> Result<Vec<model::HistoryRequest>, sqlx::Error> {
+    sqlx::query_as::<_, model::HistoryRequest>(&format!(
+        "UPDATE history_request SET through_seq = to_seq, completed_at = $4, updated_at = clock_timestamp() \
+         WHERE group_id = $1 AND id <> $3 AND completed_at IS NULL AND from_seq = 1 AND object_id IS NULL AND to_seq <= $2 \
+         RETURNING {REQUEST_COLUMNS}"
+    ))
+    .bind(group_id)
+    .bind(to_seq)
+    .bind(except)
+    .bind(at)
+    .fetch_all(e)
+    .await
+}
+
+/// The sweep: an open request goes a window after it was made, a complete
+/// one a window after it completed, so a requester that completes late
+/// still has the whole window to read `complete`.
 pub(crate) async fn delete_history_requests_older_than<'e>(e: impl PgExecutor<'e>, cutoff: DateTime<Utc>) -> Result<u64, sqlx::Error> {
-    let done = sqlx::query("DELETE FROM history_request WHERE created_at < $1").bind(cutoff).execute(e).await?;
+    let done = sqlx::query("DELETE FROM history_request WHERE COALESCE(completed_at, created_at) < $1").bind(cutoff).execute(e).await?;
     Ok(done.rows_affected())
 }
 

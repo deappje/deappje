@@ -30,6 +30,10 @@ pub const MAX_PAGE: i32 = 2000;
 /// A claim this old without `complete` is abandoned: the next claimer
 /// takes over.
 pub const CLAIM_TAKEOVER: Duration = Duration::minutes(5);
+/// After a complete restore from seq 1, eviction by ack leaves the group
+/// alone this long, so a device joining a little after the one that asked
+/// finds its history in the window and no holder uploads it again.
+pub const RESTORE_GRACE: Duration = Duration::minutes(30);
 /// A purge deletes this many rows per call.
 const PURGE_BATCH: i64 = 10_000;
 
@@ -41,7 +45,11 @@ fn entry(o: &model::Object) -> Entry {
     Entry { id: o.id, value: o.value.clone(), seq: o.seq, deleted: o.deleted }
 }
 
-fn history_msg(r: &model::HistoryRequest, status: HistoryStatus) -> messages::HistoryRequest {
+/// A request as the calling device sees it. The claimer is named only to
+/// itself: a device id is the caller's word (`02-relay.md`), so the
+/// claimer's id in another member's hands would let it push as the
+/// claimer.
+fn history_msg(r: &model::HistoryRequest, device_id: Uuid, status: HistoryStatus) -> messages::HistoryRequest {
     messages::HistoryRequest {
         id: r.id,
         group_id: r.group_id,
@@ -49,7 +57,7 @@ fn history_msg(r: &model::HistoryRequest, status: HistoryStatus) -> messages::Hi
         from_seq: r.from_seq,
         to_seq: r.to_seq,
         object_id: r.object_id,
-        claimed_by: r.claimed_by,
+        claimed_by: r.claimed_by.filter(|d| *d == device_id),
         claimed_at: r.claimed_at,
         created_at: r.created_at,
         through_seq: r.through_seq,
@@ -317,7 +325,8 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
         let now = Utc::now();
         let head = repo::get_head(&*self.pool, msg.group_id).await.map_err(db("head"))?;
         let floor = head.as_ref().map_or(0, |h| h.evicted_through_seq);
-        let holders = repo::holders_except(&*self.pool, msg.group_id, floor, msg.device_id).await.map_err(db("holders"))?;
+        let restored_through = head.as_ref().map_or(0, |h| h.restored_through_seq);
+        let whole_range = msg.from_seq == 1 && msg.object_id.is_none();
         let row = model::HistoryRequest {
             id: Uuid::new_v4(),
             group_id: msg.group_id,
@@ -331,26 +340,41 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
             completed_at: None,
             created_at: now,
         };
+        if whole_range && msg.to_seq <= restored_through {
+            // The window holds the range already: a restore for another
+            // device landed and no eviction has reached it since (the
+            // witness). Nothing is stored and nobody is woken; the
+            // requester pages what its pull gave it.
+            return Ok(history_msg(&model::HistoryRequest { id: Uuid::nil(), through_seq: msg.to_seq, ..row }, msg.device_id, HistoryStatus::Complete));
+        }
+        let holders = repo::holders_except(&*self.pool, msg.group_id, floor, msg.device_id).await.map_err(db("holders"))?;
         if holders.is_empty() {
             // Nobody holds anything older than the window: the window is
             // the history, and nothing is stored.
-            return Ok(history_msg(&model::HistoryRequest { id: Uuid::nil(), ..row }, HistoryStatus::Unfillable));
+            return Ok(history_msg(&model::HistoryRequest { id: Uuid::nil(), ..row }, msg.device_id, HistoryStatus::Unfillable));
         }
+        // A whole-range request an open one already reaches rides along: it
+        // is stored, not announced, holders do not list it, and it
+        // completes with the one that covers it (push_history), so one
+        // upload serves both.
+        let covered = whole_range && repo::covering_request_exists(&*self.pool, msg.group_id, msg.to_seq).await.map_err(db("covering request"))?;
         repo::insert_history_request(&*self.pool, &row).await.map_err(db("insert request"))?;
-        s.send_history_requested(
-            ctx,
-            HistoryRequested {
-                request_id: row.id,
-                group_id: msg.group_id,
-                requester_device: msg.device_id,
-                from_seq: msg.from_seq,
-                to_seq: msg.to_seq,
-                object_id: msg.object_id,
-                devices: holders,
-            },
-        )
-        .await;
-        Ok(history_msg(&row, HistoryStatus::Open))
+        if !covered {
+            s.send_history_requested(
+                ctx,
+                HistoryRequested {
+                    request_id: row.id,
+                    group_id: msg.group_id,
+                    requester_device: msg.device_id,
+                    from_seq: msg.from_seq,
+                    to_seq: msg.to_seq,
+                    object_id: msg.object_id,
+                    devices: holders,
+                },
+            )
+            .await;
+        }
+        Ok(history_msg(&row, msg.device_id, HistoryStatus::Open))
     }
 
     async fn handle_get_history_request_request(&self, ctx: &Ctx, msg: messages::GetHistoryRequestRequest, s: RelaySender<'_, R>) -> Result<messages::HistoryRequest, AppError> {
@@ -359,14 +383,14 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
             .map_err(db("request"))?
             .ok_or_else(|| AppError::not_found("history request not found (expired)"))?;
         self.require_member(ctx, &s, msg.caller, request.group_id).await?;
-        Ok(history_msg(&request, status_of(&request, msg.device_id, Utc::now() - CLAIM_TAKEOVER)))
+        Ok(history_msg(&request, msg.device_id, status_of(&request, msg.device_id, Utc::now() - CLAIM_TAKEOVER)))
     }
 
     async fn handle_list_history_requests_request(&self, ctx: &Ctx, msg: messages::ListHistoryRequestsRequest, s: RelaySender<'_, R>) -> Result<messages::HistoryRequestList, AppError> {
         self.require_member(ctx, &s, msg.caller, msg.group_id).await?;
         let abandoned_before = Utc::now() - CLAIM_TAKEOVER;
         let rows = repo::claimable_requests(&*self.pool, msg.group_id, abandoned_before).await.map_err(db("requests"))?;
-        Ok(messages::HistoryRequestList { requests: rows.iter().map(|r| history_msg(r, HistoryStatus::Open)).collect() })
+        Ok(messages::HistoryRequestList { requests: rows.iter().map(|r| history_msg(r, msg.device_id, HistoryStatus::Open)).collect() })
     }
 
     async fn handle_claim_history_request(&self, ctx: &Ctx, msg: messages::ClaimHistoryRequest, s: RelaySender<'_, R>) -> Result<messages::HistoryRequest, AppError> {
@@ -384,13 +408,15 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
         }
         let now = Utc::now();
         match repo::claim_request(&*self.pool, request.id, msg.device_id, now, now - CLAIM_TAKEOVER).await.map_err(db("claim"))? {
-            Some(claimed) => Ok(history_msg(&claimed, HistoryStatus::Claimed)),
+            Some(claimed) => Ok(history_msg(&claimed, msg.device_id, HistoryStatus::Claimed)),
             None => {
-                let taken = repo::get_history_request(&*self.pool, request.id)
+                // Another device holds it, or it completed since the read
+                // above: the row as it stands now says which.
+                let now_row = repo::get_history_request(&*self.pool, request.id)
                     .await
                     .map_err(db("request"))?
-                    .ok_or_else(|| AppError::not_found("history request not found"))?;
-                Ok(history_msg(&taken, HistoryStatus::Taken))
+                    .ok_or_else(|| AppError::not_found("history request not found (expired)"))?;
+                Ok(history_msg(&now_row, msg.device_id, status_of(&now_row, msg.device_id, now - CLAIM_TAKEOVER)))
             }
         }
     }
@@ -436,12 +462,24 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
         // wake-up below arrives.
         let through_seq = if msg.complete { request.to_seq } else { msg.entries.last().map_or(request.through_seq, |e| e.seq) };
         repo::record_history_push(&mut *tx, request.id, through_seq, msg.complete.then_some(now)).await.map_err(db("record push"))?;
+        // A complete restore of the whole range leaves the witness on the
+        // group head (every row at or below `to_seq` any holder has is in
+        // the log, until an eviction reaches it: worker.rs) and completes
+        // the whole-range requests it covers: one upload serves them all.
+        let mut covered = Vec::new();
+        if msg.complete && request.from_seq == 1 && request.object_id.is_none() {
+            repo::set_restored(&mut *tx, request.group_id, request.to_seq, now).await.map_err(db("restored"))?;
+            covered = repo::complete_covered_requests(&mut *tx, request.group_id, request.to_seq, request.id, now).await.map_err(db("covered requests"))?;
+        }
         tx.commit().await.map_err(db("commit"))?;
         s.send_history_ready(
             ctx,
             HistoryReady { request_id: request.id, requester_device: request.requester_device, through_seq, complete: msg.complete },
         )
         .await;
+        for r in covered {
+            s.send_history_ready(ctx, HistoryReady { request_id: r.id, requester_device: r.requester_device, through_seq: r.to_seq, complete: true }).await;
+        }
         Ok(messages::PushHistoryResult { inserted, skipped, through_seq, complete: msg.complete })
     }
 

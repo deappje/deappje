@@ -20,6 +20,13 @@ pub struct GroupHead {
     pub group_id: uuid::Uuid,
     pub head_seq: i64,
     pub evicted_through_seq: i64,
+    /// The restore witness: every row at or below this seq that any holder
+    /// has is in the log (0: none). Set by a complete restore from seq 1,
+    /// cleared by an eviction that reaches it.
+    pub restored_through_seq: i64,
+    /// When the witness was last set; eviction by ack skips the group for
+    /// the grace after it.
+    pub restored_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A row of `nano_relay.group_device`.

@@ -14,7 +14,7 @@ use basable_testkit::TestDb;
 use chrono::{Duration, Utc};
 use interfaces::{RelayHandler, RelaySender, source};
 use messages::*;
-use relay::handlers::{MAX_VALUE_BYTES, WINDOW};
+use relay::handlers::{MAX_VALUE_BYTES, RESTORE_GRACE, WINDOW};
 use relay::{Relay, Schema};
 use uuid::Uuid;
 
@@ -228,10 +228,30 @@ impl Fx {
             .unwrap();
     }
 
+    async fn age_restore(&self, group_id: Uuid) {
+        sqlx::query("UPDATE nano_relay.group_head SET restored_at = $2 WHERE group_id = $1")
+            .bind(group_id)
+            .bind(Utc::now() - RESTORE_GRACE - Duration::minutes(1))
+            .execute(self.db.superuser())
+            .await
+            .unwrap();
+    }
+
     async fn age_claim(&self, request_id: Uuid) {
         sqlx::query("UPDATE nano_relay.history_request SET claimed_at = $2 WHERE id = $1")
             .bind(request_id)
             .bind(Utc::now() - Duration::minutes(6))
+            .execute(self.db.superuser())
+            .await
+            .unwrap();
+    }
+
+    /// Moves a request's `created_at` or `completed_at` a window and an
+    /// hour back.
+    async fn age_request(&self, column: &str, request_id: Uuid) {
+        sqlx::query(&format!("UPDATE nano_relay.history_request SET {column} = $2 WHERE id = $1"))
+            .bind(request_id)
+            .bind(Utc::now() - WINDOW - Duration::hours(1))
             .execute(self.db.superuser())
             .await
             .unwrap();
@@ -430,8 +450,11 @@ async fn history_is_served_by_one_claiming_holder_at_the_original_seqs() {
     let other = if claimer == a1 { a2 } else { a1 };
     assert_eq!(fx.claim(a, claimer, req.id).await.unwrap().status, HistoryStatus::Claimed, "the claimer again");
     assert!(fx.claimable(a, a1, g).await.is_empty(), "claimed: not listed");
-    assert_eq!(fx.get(b, b1, req.id).await.unwrap().status, HistoryStatus::Taken, "claimed by another, as the requester sees it");
-    assert_eq!(fx.get(a, claimer, req.id).await.unwrap().status, HistoryStatus::Claimed, "and as the claimer sees it");
+    let seen = fx.get(b, b1, req.id).await.unwrap();
+    assert_eq!((seen.status, seen.claimed_by), (HistoryStatus::Taken, None), "claimed by another, as the requester sees it: the claimer unnamed");
+    assert_eq!(fx.claim(a, other, req.id).await.unwrap().claimed_by, None, "nor named to a holder that lost the claim");
+    let mine = fx.get(a, claimer, req.id).await.unwrap();
+    assert_eq!((mine.status, mine.claimed_by), (HistoryStatus::Claimed, Some(claimer)), "and as the claimer sees it");
 
     // Only the claimer pushes, oldest first, inside the range; rows land at
     // their original seqs, the tombstone as a tombstone, the head stays.
@@ -476,8 +499,13 @@ async fn history_is_served_by_one_claiming_holder_at_the_original_seqs() {
     assert!(none.id.is_nil());
     assert_eq!(fx.router.requested.lock().unwrap().len(), 1, "nothing asked, nothing stored");
 
-    // An abandoned claim is taken over after five minutes.
+    // The restore left the witness, so the same range would be complete on
+    // the spot; past the grace, eviction clears it and a request is open
+    // again. An abandoned claim is taken over after five minutes.
+    fx.age_restore(g).await;
+    fx.evict().await;
     let again = fx.request_history(b, b1, g, 1, 5).await.unwrap();
+    assert_eq!(again.status, HistoryStatus::Open, "the witness went with the rows");
     assert_eq!(fx.claim(a, a1, again.id).await.unwrap().status, HistoryStatus::Claimed);
     assert_eq!(fx.claim(a, a2, again.id).await.unwrap().status, HistoryStatus::Taken);
     assert!(fx.claimable(a, a2, g).await.is_empty());
@@ -485,6 +513,93 @@ async fn history_is_served_by_one_claiming_holder_at_the_original_seqs() {
     assert_eq!(fx.claimable(a, a2, g).await, vec![again.id], "abandoned: listed again");
     assert_eq!(fx.claim(a, a2, again.id).await.unwrap().status, HistoryStatus::Claimed);
     assert_eq!(code_of(&fx.push_history(a, a1, again.id, vec![], true).await.unwrap_err()), Code::PermissionDenied, "the first claimer lost it");
+    fx.finish().await;
+}
+
+#[tokio::test]
+async fn a_restore_leaves_a_witness_for_the_next_joiner_and_a_grace_on_eviction() {
+    let Some(fx) = fx().await else { return };
+    let (a, b, c, d, g) = (user(), user(), user(), user(), Uuid::new_v4());
+    for u in [a, b, c, d] {
+        fx.router.member(u, g, Role::Member);
+    }
+    let (a1, b1, c1, d1) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    fx.ack(a, a1, g, 0).await.unwrap();
+    let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+    fx.push_ok(a, a1, g, ids.iter().map(|id| live(*id, 0, 7)).collect()).await; // seqs 1..=3
+    fx.ack(a, a1, g, 3).await.unwrap();
+    fx.evict().await;
+    assert!(fx.rows(g).await.is_empty());
+    let entries: Vec<Entry> = ids.iter().enumerate().map(|(i, id)| Entry { id: *id, value: Some(vec![7; 4]), seq: i as i64 + 1, deleted: false }).collect();
+
+    // b1 joins and is served; the restore leaves the witness.
+    fx.ack(b, b1, g, 0).await.unwrap();
+    let req = fx.request_history(b, b1, g, 1, 3).await.unwrap();
+    assert_eq!(fx.claim(a, a1, req.id).await.unwrap().status, HistoryStatus::Claimed);
+    fx.push_history(a, a1, req.id, entries, true).await.unwrap();
+    fx.ack(b, b1, g, 3).await.unwrap();
+    let announced = fx.router.requested.lock().unwrap().len();
+
+    // c1 joins within the grace: the range is in the window, so its request
+    // is complete on the spot, nothing stored, nobody woken.
+    fx.ack(c, c1, g, 0).await.unwrap();
+    let at_once = fx.request_history(c, c1, g, 1, 3).await.unwrap();
+    assert_eq!((at_once.status, at_once.through_seq), (HistoryStatus::Complete, 3));
+    assert!(at_once.id.is_nil(), "nothing stored");
+    assert_eq!(fx.router.requested.lock().unwrap().len(), announced, "nobody woken");
+    assert_eq!(fx.pull(c, c1, g, 0, 0).await.entries.len(), 3, "the rows are there to page");
+    fx.ack(c, c1, g, 3).await.unwrap();
+
+    // Every device has acked the restored rows, but the grace keeps them;
+    // past it the ack rule applies and the witness goes with the rows.
+    fx.evict().await;
+    assert_eq!(fx.rows(g).await.len(), 3, "within the grace");
+    fx.age_restore(g).await;
+    fx.evict().await;
+    assert!(fx.rows(g).await.is_empty(), "past the grace");
+    fx.ack(d, d1, g, 0).await.unwrap();
+    let later = fx.request_history(d, d1, g, 1, 3).await.unwrap();
+    assert_eq!(later.status, HistoryStatus::Open, "the next joiner needs a holder again");
+    assert_eq!(fx.router.requested.lock().unwrap().len(), announced + 1);
+    fx.finish().await;
+}
+
+#[tokio::test]
+async fn two_joiners_at_once_are_served_by_one_upload() {
+    let Some(fx) = fx().await else { return };
+    let (a, b, c, g) = (user(), user(), user(), Uuid::new_v4());
+    for u in [a, b, c] {
+        fx.router.member(u, g, Role::Member);
+    }
+    let (a1, b1, c1) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    fx.ack(a, a1, g, 0).await.unwrap();
+    let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+    fx.push_ok(a, a1, g, ids.iter().map(|id| live(*id, 0, 7)).collect()).await;
+    fx.ack(a, a1, g, 3).await.unwrap();
+    fx.evict().await;
+
+    // Two requests for the same range: the second is stored but neither
+    // announced nor listed; it completes with the first.
+    fx.ack(b, b1, g, 0).await.unwrap();
+    fx.ack(c, c1, g, 0).await.unwrap();
+    let first = fx.request_history(b, b1, g, 1, 3).await.unwrap();
+    let announced = fx.router.requested.lock().unwrap().len();
+    let second = fx.request_history(c, c1, g, 1, 3).await.unwrap();
+    assert_eq!(second.status, HistoryStatus::Open);
+    assert_eq!(fx.router.requested.lock().unwrap().len(), announced, "a covered request is not announced");
+    assert_eq!(fx.claimable(a, a1, g).await, vec![first.id], "nor listed");
+
+    assert_eq!(fx.claim(a, a1, first.id).await.unwrap().status, HistoryStatus::Claimed);
+    let entries: Vec<Entry> = ids.iter().enumerate().map(|(i, id)| Entry { id: *id, value: Some(vec![7; 4]), seq: i as i64 + 1, deleted: false }).collect();
+    fx.push_history(a, a1, first.id, entries, true).await.unwrap();
+    let mut woken: Vec<Uuid> = fx.router.ready.lock().unwrap().iter().filter(|r| r.complete).map(|r| r.requester_device).collect();
+    woken.sort();
+    let mut both = vec![b1, c1];
+    both.sort();
+    assert_eq!(woken, both, "both requesters hear complete");
+    let done = fx.get(c, c1, second.id).await.unwrap();
+    assert_eq!((done.status, done.through_seq), (HistoryStatus::Complete, 3), "the covered request completed with the covering one");
+    assert!(fx.claimable(a, a1, g).await.is_empty());
     fx.finish().await;
 }
 
@@ -558,15 +673,22 @@ async fn old_history_requests_expire() {
     fx.ack(a, a1, g, 1).await.unwrap();
     fx.ack(b, b1, g, 0).await.unwrap();
     let req = fx.request_history(b, b1, g, 1, 1).await.unwrap();
-    sqlx::query("UPDATE nano_relay.history_request SET created_at = $2 WHERE id = $1")
-        .bind(req.id)
-        .bind(Utc::now() - WINDOW - Duration::hours(1))
-        .execute(fx.db.superuser())
-        .await
-        .unwrap();
+    fx.age_request("created_at", req.id).await;
     fx.relay.tick_expire_history_requests(&fx.ctx, fx.sender()).await.unwrap();
     assert!(fx.claimable(a, a1, g).await.is_empty());
     assert_eq!(code_of(&fx.claim(a, a1, req.id).await.unwrap_err()), Code::NotFound);
     assert_eq!(code_of(&fx.get(b, b1, req.id).await.unwrap_err()), Code::NotFound, "swept: the requester asks again");
+
+    // A request completed late keeps a window from its completion, so the
+    // requester still reads `complete`.
+    let late = fx.request_history(b, b1, g, 1, 1).await.unwrap();
+    assert_eq!(fx.claim(a, a1, late.id).await.unwrap().status, HistoryStatus::Claimed);
+    fx.push_history(a, a1, late.id, vec![], true).await.unwrap();
+    fx.age_request("created_at", late.id).await;
+    fx.relay.tick_expire_history_requests(&fx.ctx, fx.sender()).await.unwrap();
+    assert_eq!(fx.get(b, b1, late.id).await.unwrap().status, HistoryStatus::Complete, "made a window ago, completed just now: kept");
+    fx.age_request("completed_at", late.id).await;
+    fx.relay.tick_expire_history_requests(&fx.ctx, fx.sender()).await.unwrap();
+    assert_eq!(code_of(&fx.get(b, b1, late.id).await.unwrap_err()), Code::NotFound, "completed a window ago: swept");
     fx.finish().await;
 }

@@ -124,12 +124,15 @@ fn code_of(name: &str, status: u16) -> Code {
         "permission_denied" | "unauthenticated" => Code::PermissionDenied,
         "not_found" => Code::NotFound,
         "unavailable" | "deadline_exceeded" | "canceled" => Code::Unavailable,
+        // No Connect body: a proxy or a router answered, not a handler. A
+        // bare 404 is a route the server does not have (yet: a client
+        // newer than the server mid-deploy), never a request that is gone,
+        // so nothing was decided and the engine waits it out.
         "" => match status {
             400 => Code::InvalidArgument,
             401 | 403 => Code::PermissionDenied,
-            404 => Code::NotFound,
             412 | 409 => Code::FailedPrecondition,
-            502..=504 => Code::Unavailable,
+            404 | 502..=504 => Code::Unavailable,
             _ => Code::Internal,
         },
         _ => Code::Internal,
@@ -527,12 +530,16 @@ pub(crate) mod tests {
         t.answer(403, "application/json", br#"{"code":"permission_denied","message":"not a member of this group"}"#.to_vec());
         t.answer(412, "application/json", br#"{"code":"failed_precondition","message":"ack above the head"}"#.to_vec());
         t.answer(502, "text/html", b"<html>bad gateway</html>".to_vec());
+        t.answer(404, "application/json", br#"{"code":"not_found","message":"history request not found (expired)"}"#.to_vec());
+        t.answer(404, "text/plain", b"404 page not found".to_vec());
         t.fail("offline");
         let c = Connect::new(t, "https://app.example");
         let (d, g) = (Uuid::from_u128(1), Uuid::from_u128(2));
         assert_eq!(block_on(c.ack_seq(d, g, 1)).unwrap_err(), ApiError::new(Code::PermissionDenied, "not a member of this group"));
         assert_eq!(block_on(c.ack_seq(d, g, 1)).unwrap_err(), ApiError::new(Code::FailedPrecondition, "ack above the head"));
         assert_eq!(block_on(c.ack_seq(d, g, 1)).unwrap_err(), ApiError::new(Code::Unavailable, "HTTP 502"));
+        assert_eq!(block_on(c.get_history_request(d, g)).unwrap_err().code, Code::NotFound, "the handler says gone");
+        assert_eq!(block_on(c.get_history_request(d, g)).unwrap_err(), ApiError::new(Code::Unavailable, "HTTP 404"), "a route the server lacks is not a request that is gone");
         assert_eq!(block_on(c.ack_seq(d, g, 1)).unwrap_err().code, Code::Unavailable);
     }
 
