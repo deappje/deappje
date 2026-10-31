@@ -10,13 +10,21 @@ load("@rules_apple//apple:ios.bzl", "ios_unit_test")
 load("@rules_swift//swift:swift.bzl", "swift_library")
 load("//:environments.bzl", "base_url")
 
-# Every target under ios/ is built for an iOS platform (rules_apple's rule
-# transition puts an ios_application and an ios_unit_test themselves in the
-# iOS configuration, not only their deps), and only behind --//:apps: with
-# the flag off, `bazel test //...` skips all of it, which is how the
+# Every library under ios/ and the ios_application are built for an iOS
+# platform (rules_apple's rule transition puts the application itself in
+# the iOS configuration, not only its deps), and only behind --//:apps:
+# with the flag off, `bazel test //...` skips all of it, which is how the
 # scaffold's verify.sh and build.yaml stay free of Xcode.
 IOS_ONLY = select({
     "//:apps_on": ["@platforms//os:ios"],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+# An ios_unit_test target is the test runner on the Mac: it stays in the
+# host configuration and transitions only its bundle to iOS, so its gate
+# is macOS (05-deployment.md, "The flag"). Behind --//:apps as well.
+TEST_HOST_ONLY = select({
+    "//:apps_on": ["@platforms//os:macos"],
     "//conditions:default": ["@platforms//:incompatible"],
 })
 
@@ -90,7 +98,7 @@ def ios_test(name, srcs, deps = [], **kwargs):
     ios_unit_test(
         name = name,
         minimum_os_version = MINIMUM_OS_VERSION,
-        target_compatible_with = IOS_ONLY,
+        target_compatible_with = TEST_HOST_ONLY,
         deps = [":" + name + "_lib"],
         **kwargs
     )

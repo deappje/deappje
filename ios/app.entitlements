@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- The simulator's Keychain answers only a process whose entitlements name
+     an application identifier (errSecMissingEntitlement, -34018, otherwise);
+     rules_apple embeds this file into the simulator binary. The team prefix
+     is a placeholder: a device build has a provisioning profile and writes
+     $(AppIdentifierPrefix) here instead, with aps-environment beside it
+     (ios/README.md, "Still manual"). -->
+<dict>
+	<key>application-identifier</key>
+	<string>DEAPPJE000.nl.deappje.app</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>DEAPPJE000.nl.deappje.app</string>
+	</array>
+</dict>
+</plist>

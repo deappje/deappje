@@ -10,6 +10,7 @@ ios_application(
     name = "app",
     bundle_id = "nl.deappje.app",
     bundle_name = "deappje",
+    entitlements = "app.entitlements",
     families = [
         "iphone",
         "ipad",
