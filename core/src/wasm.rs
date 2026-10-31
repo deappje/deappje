@@ -122,6 +122,8 @@ export interface GroupView {
     holds_keys: boolean;
     /** Where the device stands in the group's log. */
     phase: "new" | "catching_up" | "holder";
+    /** The caller's role in it; empty when the server did not say. */
+    role: "admin" | "member" | "viewer" | "";
 }
 
 export interface Membership {
@@ -164,6 +166,12 @@ export interface PinAlert {
     offered: string;
 }
 
+/** An edit dropped at sync: its object was deleted meanwhile. */
+export interface DroppedEdit {
+    group_id: string;
+    object_id: string;
+}
+
 /** What a sync did. */
 export interface SyncReport {
     /** Groups whose rows changed: re-read them. */
@@ -174,6 +182,10 @@ export interface SyncReport {
     pin_alerts: PinAlert[];
     /** Groups where a sync failed, with why; the rest went on. */
     failed: string[];
+    /** History requests this device served, one upload each. */
+    history_served: number;
+    /** Edits dropped because their object was deleted meanwhile. */
+    edits_dropped: DroppedEdit[];
 }
 
 /** A file in the bucket, inside its object's value. Byte fields cross as number arrays. */
@@ -213,7 +225,7 @@ export interface ObjectView {
 
 /** How a Core method fails: `kind` is the core's error variant, `code` the server's answer for an `api` one. */
 export interface CoreError extends Error {
-    kind: "api" | "not_signed_in" | "no_key" | "invalid" | "unknown" | "login" | "link" | "crypto" | "pin";
+    kind: "api" | "not_signed_in" | "no_key" | "invalid" | "forbidden" | "unknown" | "login" | "link" | "crypto" | "pin";
     code?: string;
 }
 "#;
@@ -433,7 +445,7 @@ fn login_start_from_js(v: &JsValue) -> Result<LoginStart, JsValue> {
 }
 
 fn group_to_js(g: &GroupView) -> JsValue {
-    Obj::new().id("id", g.id).opt_id("parent_group_id", g.parent_group_id).set("holds_keys", g.holds_keys).set("phase", g.phase.as_str()).done()
+    Obj::new().id("id", g.id).opt_id("parent_group_id", g.parent_group_id).set("holds_keys", g.holds_keys).set("phase", g.phase.as_str()).set("role", g.role.as_str()).done()
 }
 
 fn membership_to_js(m: &Membership) -> JsValue {
@@ -460,7 +472,17 @@ fn pending_to_js(p: &PendingRequestView) -> JsValue {
 fn report_to_js(r: &SyncReport) -> JsValue {
     let invalid: Array = r.invalid.iter().map(|w| Obj::new().id("group_id", w.group_id).id("object_id", w.object_id).set("reason", w.reason.as_str()).done()).collect();
     let pins: Array = r.pin_alerts.iter().map(|p| Obj::new().id("device_id", p.device_id).set("pinned", p.pinned.as_str()).set("offered", p.offered.as_str()).done()).collect();
-    Obj::new().ids("changed", &r.changed).ids("keys_received", &r.keys_received).ids("started_over", &r.started_over).set("invalid", invalid).set("pin_alerts", pins).strings("failed", &r.failed).done()
+    let dropped: Array = r.edits_dropped.iter().map(|d| Obj::new().id("group_id", d.group_id).id("object_id", d.object_id).done()).collect();
+    Obj::new()
+        .ids("changed", &r.changed)
+        .ids("keys_received", &r.keys_received)
+        .ids("started_over", &r.started_over)
+        .set("invalid", invalid)
+        .set("pin_alerts", pins)
+        .strings("failed", &r.failed)
+        .set("history_served", f64::from(r.history_served))
+        .set("edits_dropped", dropped)
+        .done()
 }
 
 fn list<T>(items: &[T], one: impl Fn(&T) -> JsValue) -> JsValue {
@@ -477,6 +499,7 @@ fn js_error(e: CoreError) -> JsValue {
         CoreError::NotSignedIn => ("not_signed_in", None),
         CoreError::NoKey { .. } => ("no_key", None),
         CoreError::Invalid { .. } => ("invalid", None),
+        CoreError::Forbidden { .. } => ("forbidden", None),
         CoreError::Unknown { .. } => ("unknown", None),
         CoreError::Login { .. } => ("login", None),
         CoreError::Link => ("link", None),

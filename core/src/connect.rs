@@ -33,6 +33,9 @@ pub struct Group {
     pub created_at_ms: i64,
     /// Set once a deletion was accepted.
     pub deleted_at_ms: Option<i64>,
+    /// The caller's role in it (`admin`, `member`, `viewer`); empty when
+    /// the server did not say (an older server, a deletion's answer).
+    pub role: String,
 }
 
 /// One user's membership of one group.
@@ -291,7 +294,7 @@ impl<T: Transport> Connect<T> {
 }
 
 fn group_of(g: proto::Group) -> Result<Group, ApiError> {
-    Ok(Group { id: uuid(&g.id)?, parent_group_id: uuid_opt(&g.parent_group_id)?, created_by: uuid(&g.created_by)?, created_at_ms: g.created_at_ms, deleted_at_ms: (g.deleted_at_ms != 0).then_some(g.deleted_at_ms) })
+    Ok(Group { id: uuid(&g.id)?, parent_group_id: uuid_opt(&g.parent_group_id)?, created_by: uuid(&g.created_by)?, created_at_ms: g.created_at_ms, deleted_at_ms: (g.deleted_at_ms != 0).then_some(g.deleted_at_ms), role: g.role })
 }
 
 fn membership_of(m: proto::Membership) -> Result<Membership, ApiError> {
@@ -573,13 +576,13 @@ pub(crate) mod tests {
     fn the_group_and_key_messages_convert() {
         let t = FakeTransport::default();
         let (g, u, d, i) = (Uuid::from_u128(2), Uuid::from_u128(4), Uuid::from_u128(5), Uuid::from_u128(6));
-        t.proto(&proto::CreateGroupResponse { group: Some(proto::Group { id: g.to_string(), parent_group_id: String::new(), created_by: u.to_string(), created_at_ms: 10, deleted_at_ms: 0 }) });
+        t.proto(&proto::CreateGroupResponse { group: Some(proto::Group { id: g.to_string(), parent_group_id: String::new(), created_by: u.to_string(), created_at_ms: 10, deleted_at_ms: 0, role: "admin".to_owned() }) });
         t.proto(&proto::CreateInviteResponse { invite: Some(proto::Invite { id: i.to_string(), group_id: g.to_string(), code: "abcdefghjk".into(), role: "member".into(), created_by: u.to_string(), expires_at_ms: 99, max_uses: 0, uses: 0, revoked: false }) });
         t.proto(&proto::GetWrappedKeysResponse { keys: vec![proto::WrappedKey { id: i.to_string(), group_id: g.to_string(), key_id: 2, device_id: d.to_string(), wrapped: vec![1], wrapped_by_device: d.to_string(), created_at_ms: 1, wrapped_by_public_key: vec![9; 32] }] });
         t.proto(&proto::GetGroupResponse { group: None });
         let c = Connect::new(t, "https://app.example");
         let group = block_on(c.create_group(None)).unwrap();
-        assert_eq!(group, Group { id: g, parent_group_id: None, created_by: u, created_at_ms: 10, deleted_at_ms: None });
+        assert_eq!(group, Group { id: g, parent_group_id: None, created_by: u, created_at_ms: 10, deleted_at_ms: None, role: "admin".to_owned() });
         let invite = block_on(c.create_invite(g, "member", 99, 0)).unwrap();
         assert_eq!((invite.code.as_str(), invite.role.as_str(), invite.max_uses), ("abcdefghjk", "member", 0));
         let keys = block_on(c.get_wrapped_keys(d, Some(g))).unwrap();

@@ -797,6 +797,9 @@ pub struct Group {
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// The caller's role, where the caller is a member (ListGroups,
+    /// GetGroup, CreateGroup); none in a deletion's answer.
+    pub role: Option<Role>,
 }
 
 /// The live groups of one user, with their parent ids.

@@ -64,26 +64,34 @@ rust_shared_library(
     crate_name = "deappje_core",
     deps = all_crate_deps(normal = True),
     proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
 )
 
+# The library the generator reads is a HOST artifact, so it is a tool: in
+# `srcs` an app's platform transition (android_binary's split, rules_apple's)
+# would rebuild it for the phone and collide with the phone library.
 genrule(
     name = "bindings_kotlin",
-    srcs = [":core_host"],
     outs = ["bindings/kotlin/uniffi/deappje_core/deappje_core.kt"],
     cmd = "$(location //core/tools/bindgen:uniffi-bindgen) generate --library $(location :core_host) --language kotlin --no-format --out-dir $(RULEDIR)/bindings/kotlin",
-    tools = ["//core/tools/bindgen:uniffi-bindgen"],
+    tools = [
+        ":core_host",
+        "//core/tools/bindgen:uniffi-bindgen",
+    ],
     visibility = ["//visibility:public"],
 )
 
 genrule(
     name = "bindings_swift",
-    srcs = [":core_host"],
     outs = [
         "bindings/swift/deappje_core.swift",
         "bindings/swift/deappje_coreFFI.h",
         "bindings/swift/deappje_coreFFI.modulemap",
     ],
     cmd = "$(location //core/tools/bindgen:uniffi-bindgen) generate --library $(location :core_host) --language swift --no-format --out-dir $(RULEDIR)/bindings/swift",
-    tools = ["//core/tools/bindgen:uniffi-bindgen"],
+    tools = [
+        ":core_host",
+        "//core/tools/bindgen:uniffi-bindgen",
+    ],
     visibility = ["//visibility:public"],
 )

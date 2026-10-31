@@ -47,9 +47,9 @@ pub(crate) async fn lock_group<'e>(e: impl PgExecutor<'e>, id: Uuid) -> Result<O
 }
 
 /// The live groups a user is a member of, oldest first.
-pub(crate) async fn groups_of_user<'e>(e: impl PgExecutor<'e>, user_id: Uuid) -> Result<Vec<model::Groups>, sqlx::Error> {
-    sqlx::query_as::<_, model::Groups>(
-        "SELECT g.id, g.parent_group_id, g.created_by, g.created_at, g.deleted_at \
+pub(crate) async fn groups_of_user<'e>(e: impl PgExecutor<'e>, user_id: Uuid) -> Result<Vec<model::GroupOfUser>, sqlx::Error> {
+    sqlx::query_as::<_, model::GroupOfUser>(
+        "SELECT g.id, g.parent_group_id, g.created_by, g.created_at, g.deleted_at, m.role \
          FROM groups g JOIN membership m ON m.group_id = g.id \
          WHERE m.user_id = $1 AND g.deleted_at IS NULL \
          ORDER BY g.created_at, g.id",

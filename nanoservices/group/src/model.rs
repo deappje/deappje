@@ -13,6 +13,14 @@ pub struct Groups {
     pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// A group with the caller's membership role (`groups_of_user`).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct GroupOfUser {
+    #[sqlx(flatten)]
+    pub group: Groups,
+    pub role: String,
+}
+
 /// A row of `nano_group.membership`.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Membership {

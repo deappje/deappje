@@ -127,8 +127,9 @@ device to see something syncs it first.
 - F07 join by invite: A `createInvite`, B `join(link)`; A's `pendingKeyRequests` shows B with
   `invite_verified` true and B's fingerprint; A approves; B syncs, `keys_received`, reads A's
   post.
-- F08 roles: a viewer's `createObject` is refused (`api` / `permission_denied`) and the outbox
-  is empty afterwards; after `setMemberRole(member)` the same write lands.
+- F08 roles: a viewer's `createObject` is refused with `forbidden` before anything enters the
+  outbox (the core knows the caller's role from `listGroups`, `GroupView.role`); after
+  `setMemberRole(member)` and a sync the same write lands.
 - F09 removal and rotation: A `removeMember(B)`, `rotateKeys`; a post A writes after is not in
   B's `listObjects` after B syncs (B's sync reports the group gone or no key); A2 receives the
   new generation.
@@ -139,56 +140,63 @@ device to see something syncs it first.
 
 **A second device, history and the window**
 - F13 own device: A2 signs in as A's user, registers, syncs; A's `pendingKeyRequests` shows it
-  with `invite_verified` false and its fingerprint; A approves; A2 holds every row.
+  with `invite_verified` absent (no invite) and its fingerprint; A approves; A2 holds every row.
 - F14 catch-up after eviction: A posts, every device syncs, `advance(window + 1h)` and `sweep`
   empty the server; B joins; A syncs (serves history); B becomes a holder with every post.
 - F15 no wake-up: the same with no `historyReady` call at all: B's next sync completes.
-- F16 joiners together: B and C join within the grace; one `sync` of A serves both (A's
-  `SyncReport` shows one request served); both hold everything.
+- F16 joiners together: B and C join within the grace; one `sync` of A serves both
+  (`SyncReport.history_served` is 1); both hold everything.
 - F17 start over: B edits offline, `advance(window + 1h)`, `sweep`; B's sync reports
   `started_over`, then B catches up and its offline edit lands rebased (or is dropped with
   `EditDropped` when the object was deleted meanwhile).
 
 **Object types** (one scenario per type, each: create, `readObject`, `listObjects` by type,
 edit where the strategy allows, delete, and the other device sees each step)
-- F20 post: text; only the author's devices edit; a comment and a photo under it go with its
-  delete (cascade).
+- F20 post: text; another member's `editObject` is refused with `forbidden` (only the author's
+  devices edit; others add children); a comment and a photo under it go with its delete
+  (cascade).
 - F21 comment: under a post, a photo, a venue; `parent_id` kept; deleted with the parent.
-- F22 reaction: `createObjectWithId` at UUIDv5(parent, user); a second reaction by the same
-  user is an edit of the same id; two users' reactions are two objects.
+- F22 reaction: `createObject` derives the id UUIDv5(parent, user); a second `createObject` by
+  the same user edits the same object (one reaction per user per target); two users' reactions
+  are two objects.
 - F23 photo: `uploadFile` of bytes under slot `full` (`hasBlob` true for the derived key),
   thumbnail bytes in the value, `downloadFile` round trip on the other device; the file is gone
-  from the bucket after the photo's delete.
+  from the bucket once the photo's tombstone is pushed (`storage` on `ObjectDeleted`, which the
+  in-memory server models).
 - F24 album: title and cover; photos as children; cover change by another member is a rebase.
 - F25 todo list and items: `pos` ordering; two devices tick and untick the same item offline,
   later push wins; a move (`pos` edit) never duplicates.
 - F26 note: `saveNote` on two devices offline with different insertions, `readNote` on both
   gives the same text; a title edit is a rebase; the note's delete cascades to its updates.
-- F27 expense pool, expense, settlement: the general pool singleton (`generalPoolId`); an
-  expense with participants (`equal`, `weights`, `exact`), edited by two devices (one the
-  amount, one a participant) with both kept; a settlement is append-only (edit refused, delete
-  allowed); a ticket kind expense.
+- F27 expense pool, expense, settlement: the general pool singleton (`generalPoolId`, created
+  again = edited); an expense with participants (`equal`, `weights`, `exact`), edited by two
+  devices (one the amount, one a participant) with both kept; a settlement is append-only (edit
+  refused with `forbidden`, delete allowed); a ticket kind expense.
 - F28 ticket share: holder and status; a transfer edits holder; its file through `uploadFile`.
 - F29 event: start and end; an edit that crosses them is reported `invalid` and not pushed;
   `yearly`.
-- F30 poll and vote: a `choice` and a `dates` poll; votes at UUIDv5(poll, user); a changed
-  vote is an edit; an option edit by the author never fights a vote.
+- F30 poll and vote: a `choice` and a `dates` poll; `createObject` derives a vote's id
+  UUIDv5(poll, user) and a second one edits it; an option edit by the author never fights a
+  vote.
 - F31 message: a thread (`reply_to`), photos as children, edit, delete.
 - F32 venue: fields and a comment and reaction under it.
-- F33 member profile: display name, birthday; the singleton id (`memberProfileId`); only its
-  user edits it.
-- F34 invite secret: created by `createInvite`, readable by every holder, never edited.
-- F35 unknown field: an object written with a newer schema version is shown and not rewritten
-  (the shell's edit refuses or passes the unknown bytes through unchanged).
+- F33 member profile: display name, birthday; the singleton id (`memberProfileId`); another
+  member's edit is refused with `forbidden`.
+- F34 invite secret: created by `createInvite`, readable by every holder; an edit is refused
+  with `forbidden` (append-only).
+- F35 unknown field: an object written with a newer schema version is shown and not rewritten.
+  The core's conformance vectors cover this; a shell skips it until the in-memory server can
+  hand out a newer version.
 
 **Conflicts**
 - F40 different fields: two devices edit different fields of one object offline; both kept.
 - F41 same field: the later push wins; the loser's local view updates on its next sync.
-- F42 edit vs delete: an edit against a tombstone is dropped and reported (`EditDropped`).
+- F42 edit vs delete: an edit against a tombstone is dropped and reported
+  (`SyncReport.edits_dropped` names the object).
 - F43 invalid rebase: a rebase result that fails validation is parked and reported
   (`invalid` in the `SyncReport`), never pushed; fixing the object clears it.
 
-**Wake-ups (the shell's dispatcher, a unit test)**
+**Wake-ups (the shell's dispatcher, a unit test; the phones only, the browser gets no push)**
 - F50 reasons `head`, `keys`, `rotate`, `history` call `sync`; `key_request` refreshes the
   pending list; `history_ready` calls `historyReady(requestId, throughSeq, complete)` then
   `sync`; an unknown reason is ignored; a malformed payload is ignored and logged.

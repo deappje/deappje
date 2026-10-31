@@ -401,6 +401,7 @@ message! {
         3 => created_by: String,
         4 => created_at_ms: i64,
         5 => deleted_at_ms: i64,
+        6 => role: String,
     }
 }
 

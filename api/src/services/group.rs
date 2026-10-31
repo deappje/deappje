@@ -34,6 +34,7 @@ fn group(g: messages::Group) -> Group {
         created_by: g.created_by.to_string(),
         created_at_ms: millis(g.created_at),
         deleted_at_ms: optional_millis(g.deleted_at),
+        role: g.role.map(|r| r.as_str().to_owned()).unwrap_or_default(),
         ..Default::default()
     }
 }

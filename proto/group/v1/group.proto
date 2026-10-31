@@ -32,6 +32,11 @@ message Group {
   string created_by = 3;
   int64 created_at_ms = 4;
   int64 deleted_at_ms = 5;
+  // The caller's role in it ("admin", "member", "viewer"), set where the
+  // caller is a member: ListGroups, GetGroup, CreateGroup. Empty in a
+  // deletion's answer. A client refuses a viewer's writes before they reach
+  // its outbox, with the answer the server would give at the push.
+  string role = 6;
 }
 
 // One user's membership of one group.

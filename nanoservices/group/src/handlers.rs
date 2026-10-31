@@ -45,13 +45,16 @@ pub(crate) fn role_of(m: &model::Membership) -> Result<Role, AppError> {
     Role::from_str(&m.role).map_err(|e| AppError::wrap(Code::Internal, format!("group: membership {} carries an unknown role", m.id), e))
 }
 
-fn group_msg(g: &model::Groups) -> messages::Group {
+/// A group as the caller sees it: with the caller's role where the caller
+/// is a member, none in a deletion's answer.
+fn group_msg(g: &model::Groups, role: Option<Role>) -> messages::Group {
     messages::Group {
         id: g.id,
         parent_group_id: g.parent_group_id,
         created_by: g.created_by,
         created_at: g.created_at,
         deleted_at: g.deleted_at,
+        role,
     }
 }
 
@@ -201,20 +204,20 @@ impl<R: GroupRoutes> GroupHandler<R> for Group {
         repo::insert_group(&mut *tx, &group).await.map_err(db("insert group"))?;
         repo::insert_membership(&mut *tx, &admin).await.map_err(db("insert membership"))?;
         tx.commit().await.map_err(db("commit"))?;
-        Ok(group_msg(&group))
+        Ok(group_msg(&group, Some(Role::Admin)))
     }
 
     async fn handle_get_group_request(&self, _ctx: &Ctx, msg: messages::GetGroupRequest, _s: GroupSender<'_, R>) -> Result<messages::Group, AppError> {
         self.refuse_deleting_account(msg.caller).await?;
         let group = live(repo::get_group(&*self.pool, msg.group_id).await.map_err(db("group"))?)?;
-        require_member(&*self.pool, &group, msg.caller).await?;
-        Ok(group_msg(&group))
+        let membership = require_member(&*self.pool, &group, msg.caller).await?;
+        Ok(group_msg(&group, membership.role.parse().ok()))
     }
 
     async fn handle_list_groups_request(&self, _ctx: &Ctx, msg: messages::ListGroupsRequest, _s: GroupSender<'_, R>) -> Result<messages::GroupList, AppError> {
         self.refuse_deleting_account(msg.caller).await?;
         let groups = repo::groups_of_user(&*self.pool, msg.caller).await.map_err(db("groups of user"))?;
-        Ok(messages::GroupList { groups: groups.iter().map(group_msg).collect() })
+        Ok(messages::GroupList { groups: groups.iter().map(|g| group_msg(&g.group, g.role.parse().ok())).collect() })
     }
 
     async fn handle_create_invite_request(&self, _ctx: &Ctx, msg: messages::CreateInviteRequest, _s: GroupSender<'_, R>) -> Result<messages::Invite, AppError> {
@@ -429,7 +432,7 @@ impl<R: GroupRoutes> GroupHandler<R> for Group {
         tx.commit().await.map_err(db("commit"))?;
         Ok(messages::Group {
             deleted_at: Some(group.deleted_at.unwrap_or(now)),
-            ..group_msg(&group)
+            ..group_msg(&group, None)
         })
     }
 

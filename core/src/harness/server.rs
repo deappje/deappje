@@ -181,8 +181,17 @@ impl ModelServer {
         self.groups.lock().unwrap().members.get(&(group_id, user_id)).map(|m| m.1).ok_or_else(|| err(Code::PermissionDenied, "not a member of this group"))
     }
 
-    fn group_msg(&self, id: Uuid, g: &GroupRow) -> proto::Group {
-        proto::Group { id: id.to_string(), parent_group_id: g.parent.map(|p| p.to_string()).unwrap_or_default(), created_by: g.created_by.to_string(), created_at_ms: g.created_at_ms, deleted_at_ms: 0 }
+    /// A group as the caller sees it, with the caller's role where it is a
+    /// member (`group_msg` in the handlers).
+    fn group_msg(&self, id: Uuid, g: &GroupRow, role: Option<Role>) -> proto::Group {
+        proto::Group {
+            id: id.to_string(),
+            parent_group_id: g.parent.map(|p| p.to_string()).unwrap_or_default(),
+            created_by: g.created_by.to_string(),
+            created_at_ms: g.created_at_ms,
+            deleted_at_ms: 0,
+            role: role.map(|r| role_name(r).to_owned()).unwrap_or_default(),
+        }
     }
 
     fn invite_msg(&self, id: Uuid, i: &InviteRow) -> proto::Invite {
@@ -210,19 +219,22 @@ impl ModelServer {
                 };
                 self.set_member(id, user, Role::Admin, now);
                 let g = self.groups.lock().unwrap().groups[&id].clone();
-                proto::CreateGroupResponse { group: Some(self.group_msg(id, &g)) }.encode()
+                proto::CreateGroupResponse { group: Some(self.group_msg(id, &g, Some(Role::Admin))) }.encode()
             }
             "ListGroups" => {
                 let g = self.groups.lock().unwrap();
-                let groups = g.groups.iter().filter(|(id, _)| g.members.contains_key(&(**id, user))).map(|(id, row)| self.group_msg(*id, row)).collect();
+                let groups = g.groups.iter().filter_map(|(id, row)| g.members.get(&(*id, user)).map(|m| self.group_msg(*id, row, Some(m.1)))).collect();
                 proto::ListGroupsResponse { groups }.encode()
             }
             "GetGroup" => {
                 let r = proto::GetGroupRequest::decode(body).map_err(decode)?;
                 let id = uuid(&r.group_id, "group_id")?;
                 self.require_role(id, user)?;
-                let g = self.groups.lock().unwrap().groups.get(&id).cloned().ok_or_else(|| err(Code::NotFound, "group not found"))?;
-                proto::GetGroupResponse { group: Some(self.group_msg(id, &g)) }.encode()
+                let (g, role) = {
+                    let groups = self.groups.lock().unwrap();
+                    (groups.groups.get(&id).cloned().ok_or_else(|| err(Code::NotFound, "group not found"))?, groups.members.get(&(id, user)).map(|m| m.1))
+                };
+                proto::GetGroupResponse { group: Some(self.group_msg(id, &g, role)) }.encode()
             }
             "CreateInvite" => {
                 let r = proto::CreateInviteRequest::decode(body).map_err(decode)?;
@@ -314,15 +326,26 @@ impl ModelServer {
             "PushObjects" => {
                 let r = proto::PushObjectsRequest::decode(body).map_err(decode)?;
                 let objects = r.objects.into_iter().map(|o| Ok(crate::relay::PushEntry { id: uuid(&o.id, "id")?, value: if o.deleted || o.value.is_empty() { None } else { Some(o.value) }, base_seq: o.base_seq, deleted: o.deleted })).collect::<Result<Vec<_>, ApiError>>()?;
-                match self.relay.push_objects(uuid(&r.device_id, "device_id")?, uuid(&r.group_id, "group_id")?, objects).await? {
+                let group_id = uuid(&r.group_id, "group_id")?;
+                let tombstones: Vec<Uuid> = objects.iter().filter(|o| o.deleted).map(|o| o.id).collect();
+                match self.relay.push_objects(uuid(&r.device_id, "device_id")?, group_id, objects).await? {
                     crate::relay::PushResult::BehindFloor { evicted_through_seq } => proto::PushObjectsResponse { behind_floor: true, evicted_through_seq, ..Default::default() }.encode(),
-                    crate::relay::PushResult::Accepted { accepted, conflicts, head_seq } => proto::PushObjectsResponse {
+                    crate::relay::PushResult::Accepted { accepted, conflicts, head_seq } => {
+                        // `storage` on `ObjectDeleted`: a tombstone's files go.
+                        let mut bucket = self.bucket.lock().unwrap();
+                        for a in accepted.iter().filter(|a| tombstones.contains(&a.id)) {
+                            let prefix = format!("g/{group_id}/o/{}/", a.id);
+                            bucket.retain(|k, _| !k.starts_with(&prefix));
+                        }
+                        drop(bucket);
+                        proto::PushObjectsResponse {
                         accepted: accepted.into_iter().map(|a| proto::Accepted { id: a.id.to_string(), seq: a.seq }).collect(),
                         conflicts: conflicts.into_iter().map(|c| proto::Conflict { id: c.id.to_string(), current: Some(entry_to(c.current)) }).collect(),
                         head_seq,
                         ..Default::default()
                     }
-                    .encode(),
+                    .encode()
+                    }
                 }
             }
             "PullChanges" => {

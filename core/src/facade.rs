@@ -49,7 +49,7 @@ pub enum CoreError {
         /// The code, lowercase as the protocol names it.
         code: String,
         /// The message.
-        message: String,
+        detail: String,
     },
     /// No session: sign in first.
     NotSignedIn,
@@ -68,17 +68,25 @@ pub enum CoreError {
         /// The object.
         id: Uuid,
     },
+    /// A write this user may not make: a viewer's, an edit of an
+    /// append-only object, an edit of another member's post, comment,
+    /// message or per-user singleton. Refused before the outbox, with the
+    /// answer the server would give at the push.
+    Forbidden {
+        /// Why.
+        reason: String,
+    },
     /// Signing in failed.
     Login {
         /// What Kratos said.
-        message: String,
+        detail: String,
     },
     /// A link that is not an invite link.
     Link,
     /// A cryptographic check failed.
     Crypto {
         /// Which.
-        message: String,
+        detail: String,
     },
     /// A known device offered another key.
     Pin {
@@ -90,14 +98,15 @@ pub enum CoreError {
 impl fmt::Display for CoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CoreError::Api { code, message } => write!(f, "{code}: {message}"),
+            CoreError::Api { code, detail } => write!(f, "{code}: {detail}"),
             CoreError::NotSignedIn => f.write_str("not signed in"),
             CoreError::NoKey { group_id } => write!(f, "no key of group {group_id}"),
             CoreError::Invalid { reason } => write!(f, "{reason}"),
+            CoreError::Forbidden { reason } => write!(f, "{reason}"),
             CoreError::Unknown { id } => write!(f, "object {id} is not held"),
-            CoreError::Login { message } => write!(f, "sign-in: {message}"),
+            CoreError::Login { detail } => write!(f, "sign-in: {detail}"),
             CoreError::Link => f.write_str("not an invite link"),
-            CoreError::Crypto { message } => write!(f, "{message}"),
+            CoreError::Crypto { detail } => write!(f, "{detail}"),
             CoreError::Pin { device_id } => write!(f, "device {device_id} offers another key"),
         }
     }
@@ -118,7 +127,7 @@ fn code_name(code: Code) -> &'static str {
 
 impl From<ApiError> for CoreError {
     fn from(e: ApiError) -> Self {
-        CoreError::Api { code: code_name(e.code).to_owned(), message: e.message }
+        CoreError::Api { code: code_name(e.code).to_owned(), detail: e.message }
     }
 }
 
@@ -126,7 +135,7 @@ impl From<KratosError> for CoreError {
     fn from(e: KratosError) -> Self {
         match e {
             KratosError::Unauthenticated => CoreError::NotSignedIn,
-            other => CoreError::Login { message: other.to_string() },
+            other => CoreError::Login { detail: other.to_string() },
         }
     }
 }
@@ -136,8 +145,8 @@ impl From<SyncError> for CoreError {
         match e {
             SyncError::Relay(e) => e.into(),
             SyncError::NoKey { group_id, .. } | SyncError::NoGroupKey { group_id } => CoreError::NoKey { group_id },
-            SyncError::Crypto(e) => CoreError::Crypto { message: e.to_string() },
-            SyncError::Envelope(e) => CoreError::Crypto { message: e.to_string() },
+            SyncError::Crypto(e) => CoreError::Crypto { detail: e.to_string() },
+            SyncError::Envelope(e) => CoreError::Crypto { detail: e.to_string() },
             SyncError::Unknown { id } => CoreError::Unknown { id },
         }
     }
@@ -149,7 +158,7 @@ impl From<KeyError> for CoreError {
             KeyError::Api(e) => e.into(),
             KeyError::Pin(m) => CoreError::Pin { device_id: m.device_id },
             KeyError::NoKey { group_id } => CoreError::NoKey { group_id },
-            KeyError::PublicKey { .. } | KeyError::Crypto(_) => CoreError::Crypto { message: e.to_string() },
+            KeyError::PublicKey { .. } | KeyError::Crypto(_) => CoreError::Crypto { detail: e.to_string() },
         }
     }
 }
@@ -162,7 +171,7 @@ impl From<SchemaError> for CoreError {
 
 impl From<CryptoError> for CoreError {
     fn from(e: CryptoError) -> Self {
-        CoreError::Crypto { message: e.to_string() }
+        CoreError::Crypto { detail: e.to_string() }
     }
 }
 
@@ -250,6 +259,9 @@ pub struct GroupView {
     /// `new`, `catching_up` or `holder`: where the device stands in the
     /// group's log.
     pub phase: String,
+    /// The caller's role in it: `admin`, `member` or `viewer`; empty when
+    /// the server did not say (an older server).
+    pub role: String,
 }
 
 /// What joining through a link did.
@@ -297,6 +309,16 @@ pub struct InvalidWrite {
     pub reason: String,
 }
 
+/// An edit dropped at sync: its object was deleted meanwhile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
+pub struct DroppedEdit {
+    /// The group.
+    pub group_id: Uuid,
+    /// The object.
+    pub object_id: Uuid,
+}
+
 /// A known device offering another public key: shown, never adopted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
@@ -325,6 +347,10 @@ pub struct SyncReport {
     pub pin_alerts: Vec<PinAlert>,
     /// Groups where a sync failed, with why; the rest went on.
     pub failed: Vec<String>,
+    /// History requests this device served, one upload each.
+    pub history_served: u32,
+    /// Edits dropped because their object was deleted meanwhile.
+    pub edits_dropped: Vec<DroppedEdit>,
 }
 
 /// A file stored in the bucket, as [`FileRef`] in its object.
@@ -352,6 +378,9 @@ struct Inner {
     pins: crate::trust::Pins,
     rng: CoreRng,
     connect: Connect<Arc<dyn Transport>>,
+    /// The caller's role per group, as the server last said (`list_groups`,
+    /// `create_group`, `join`): what refuses a viewer's write locally.
+    roles: std::collections::BTreeMap<Uuid, String>,
 }
 
 fn key_path(group_id: Uuid, key_id: u32) -> String {
@@ -427,6 +456,25 @@ impl Inner {
         out
     }
 
+    /// Keeps what the server said about the caller's role in each group.
+    fn remember_roles(&mut self, groups: &[crate::connect::Group]) {
+        for g in groups {
+            if !g.role.is_empty() {
+                self.roles.insert(g.id, g.role.clone());
+            }
+        }
+    }
+
+    /// A viewer reads only: its write is refused here, before the outbox,
+    /// with the answer the server would give at the push. A role the server
+    /// has not told (an older server) refuses nothing.
+    fn may_write(&self, group_id: Uuid) -> Result<(), CoreError> {
+        match self.roles.get(&group_id).map(String::as_str) {
+            Some("viewer") => Err(CoreError::Forbidden { reason: "a viewer reads only".into() }),
+            _ => Ok(()),
+        }
+    }
+
     fn view(&self, group_id: Uuid, id: Uuid) -> Option<ObjectView> {
         let row = self.store.row(group_id, id)?;
         if row.deleted {
@@ -482,7 +530,7 @@ impl Core {
         let mut keyring = Keyring::new();
         let mut pins = crate::trust::Pins::new();
         Inner::load_trust(&*storage, &mut keyring, &mut pins);
-        Arc::new(Core { inner: Mutex::new(Inner { device_id, user_id: None, device_key, clock, secrets, storage, store, keyring, pins, rng, connect }) })
+        Arc::new(Core { inner: Mutex::new(Inner { device_id, user_id: None, device_key, clock, secrets, storage, store, keyring, pins, rng, connect, roles: std::collections::BTreeMap::new() }) })
     }
 
     /// This device's id.
@@ -585,13 +633,15 @@ impl Core {
 
     /// The groups the user is in, with whether this device can read them.
     pub async fn list_groups(&self) -> Result<Vec<GroupView>, CoreError> {
-        let inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().await;
         let groups = inner.connect.list_groups().await?;
+        inner.remember_roles(&groups);
         Ok(groups
             .into_iter()
             .map(|g| GroupView {
                 id: g.id,
                 parent_group_id: g.parent_group_id,
+                role: g.role,
                 holds_keys: inner.keyring.holds(g.id),
                 phase: match inner.store.group(g.id).map(|s| &s.phase) {
                     Some(Phase::Holder) => "holder",
@@ -613,6 +663,7 @@ impl Core {
         kx.create_group_key(&inner.connect, group.id).await?;
         inner.persist_trust(Some(group.id));
         inner.store.ensure(group.id);
+        inner.roles.insert(group.id, "admin".to_owned());
         Ok(group.id)
     }
 
@@ -667,6 +718,7 @@ impl Core {
         let (code, secret) = parse_join_link(&link).ok_or(CoreError::Link)?;
         let (membership, invite) = inner.connect.accept_invite(&code).await?;
         inner.store.ensure(membership.group_id);
+        inner.roles.insert(membership.group_id, membership.role.clone());
         let inner = &mut *inner;
         let mut kx = KeyExchange { device_id: inner.device_id, device_key: &*inner.device_key, keyring: &mut inner.keyring, pins: &mut inner.pins, rng: &mut inner.rng };
         let request = kx.request_keys(&inner.connect, membership.group_id, Some((invite.id, &secret))).await?;
@@ -699,7 +751,7 @@ impl Core {
         let mut inner = self.inner.lock().await;
         let inner = &mut *inner;
         let requests = crate::keys::Devices::list_key_requests(&inner.connect, inner.device_id).await?;
-        let request = requests.into_iter().find(|r| r.id == request_id).ok_or(CoreError::Api { code: "not_found".into(), message: "the request is gone".into() })?;
+        let request = requests.into_iter().find(|r| r.id == request_id).ok_or(CoreError::Api { code: "not_found".into(), detail: "the request is gone".into() })?;
         let mut kx = KeyExchange { device_id: inner.device_id, device_key: &*inner.device_key, keyring: &mut inner.keyring, pins: &mut inner.pins, rng: &mut inner.rng };
         kx.approve(&inner.connect, &request).await?;
         inner.persist_trust(Some(request.group_id));
@@ -735,6 +787,7 @@ impl Core {
         let inner = &mut *inner;
         let mut report = SyncReport::default();
         let groups = inner.connect.list_groups().await?;
+        inner.remember_roles(&groups);
         let mut kx = KeyExchange { device_id: inner.device_id, device_key: &*inner.device_key, keyring: &mut inner.keyring, pins: &mut inner.pins, rng: &mut inner.rng };
         for event in kx.receive(&inner.connect, None).await? {
             match event {
@@ -763,7 +816,11 @@ impl Core {
                     let mut changed = false;
                     for e in events {
                         match e {
-                            SyncEvent::Applied { .. } | SyncEvent::Accepted { .. } | SyncEvent::EditDropped { .. } | SyncEvent::BecameHolder => changed = true,
+                            SyncEvent::Applied { .. } | SyncEvent::Accepted { .. } | SyncEvent::BecameHolder => changed = true,
+                            SyncEvent::EditDropped { id } => {
+                                report.edits_dropped.push(DroppedEdit { group_id: g.id, object_id: id });
+                                changed = true;
+                            }
                             SyncEvent::Invalid { id, reason } => report.invalid.push(InvalidWrite { group_id: g.id, object_id: id, reason }),
                             SyncEvent::StartedOver => {
                                 report.started_over.push(g.id);
@@ -779,8 +836,9 @@ impl Core {
                 Err(e) => report.failed.push(format!("{}: {e}", g.id)),
             }
             let mut syncer = Syncer { device_id: inner.device_id, store: &mut inner.store, keyring: &inner.keyring, rng: &mut inner.rng };
-            if let Err(e) = syncer.serve_history(&inner.connect, g.id).await {
-                report.failed.push(format!("{}: history: {e}", g.id));
+            match syncer.serve_history(&inner.connect, g.id).await {
+                Ok(events) => report.history_served += events.iter().filter(|e| matches!(e, SyncEvent::HistoryServed { .. })).count() as u32,
+                Err(e) => report.failed.push(format!("{}: history: {e}", g.id)),
             }
         }
         Ok(report)
@@ -806,6 +864,7 @@ impl Core {
     pub async fn create_object(&self, group_id: Uuid, parent_id: Option<Uuid>, body: ObjectBody) -> Result<Uuid, CoreError> {
         let mut inner = self.inner.lock().await;
         let user = inner.user()?;
+        inner.may_write(group_id)?;
         let object_type = body.object_type();
         let id = match (object_type, parent_id) {
             (ObjectType::GroupProfile, _) => ids::group_profile(group_id),
@@ -814,37 +873,42 @@ impl Core {
             (ObjectType::Vote, Some(parent)) => ids::vote(parent, user),
             _ => ids::random(&mut inner.rng),
         };
-        self.create_with_id(&mut inner, group_id, id, parent_id, body)?;
+        // A singleton that exists is edited, not replaced: a second reaction
+        // by the same user changes the first.
+        if inner.view(group_id, id).is_some() {
+            Self::edit_in(&mut inner, group_id, id, body)?;
+        } else {
+            self.create_with_id(&mut inner, group_id, id, parent_id, body)?;
+        }
         Ok(id)
     }
 
     /// A new object with a chosen id (the general expense pool,
-    /// `general_pool_id`).
+    /// `general_pool_id`); one that exists is edited.
     pub async fn create_object_with_id(&self, group_id: Uuid, id: Uuid, parent_id: Option<Uuid>, body: ObjectBody) -> Result<(), CoreError> {
         let mut inner = self.inner.lock().await;
+        inner.may_write(group_id)?;
+        if inner.view(group_id, id).is_some() {
+            return Self::edit_in(&mut inner, group_id, id, body);
+        }
         self.create_with_id(&mut inner, group_id, id, parent_id, body)
     }
 
     /// Replaces an object's body; the common fields stay, the edit time
-    /// moves.
+    /// moves. Refused (`Forbidden`) for a viewer, for an append-only type,
+    /// and for another member's post, comment, message or per-user
+    /// singleton (`06-object-types.md`, the strategy table).
     pub async fn edit_object(&self, group_id: Uuid, id: Uuid, body: ObjectBody) -> Result<(), CoreError> {
         let mut inner = self.inner.lock().await;
-        let current = inner.view(group_id, id).ok_or(CoreError::Unknown { id })?;
-        if current.body.object_type() != body.object_type() {
-            return Err(CoreError::Invalid { reason: "an object keeps its type".into() });
-        }
-        body.validate().map_err(|e| CoreError::Invalid { reason: e.to_string() })?;
-        let now = inner.now();
-        let meta = Meta { parent_id: current.parent_id, author: current.author, authored_at: current.authored_at_ms, edited_at: now.max(current.authored_at_ms) };
-        let mut fields = meta.to_fields();
-        fields.extend(body.body_fields());
-        inner.syncer().edit(group_id, id, crate::wire::encode(&fields))?;
-        Ok(())
+        Self::edit_in(&mut inner, group_id, id, body)
     }
 
-    /// Deletes an object and the children this device holds.
+    /// Deletes an object and the children this device holds. Refused for a
+    /// viewer; any member may delete (moderation is the group's).
     pub async fn delete_object(&self, group_id: Uuid, id: Uuid) -> Result<(), CoreError> {
-        Ok(self.inner.lock().await.syncer().delete(group_id, id)?)
+        let mut inner = self.inner.lock().await;
+        inner.may_write(group_id)?;
+        Ok(inner.syncer().delete(group_id, id)?)
     }
 
     /// The group profile's id.
@@ -897,9 +961,9 @@ impl Core {
             .transport()
             .send(Request { method: "PUT".to_owned(), url: grant.url, headers: vec![Header::new("content-type", "application/octet-stream")], body: stored.clone() })
             .await
-            .map_err(|e| CoreError::Api { code: "unavailable".into(), message: e.to_string() })?;
+            .map_err(|e| CoreError::Api { code: "unavailable".into(), detail: e.to_string() })?;
         if !(200..300).contains(&response.status) {
-            return Err(CoreError::Api { code: "unavailable".into(), message: format!("upload: HTTP {}", response.status) });
+            return Err(CoreError::Api { code: "unavailable".into(), detail: format!("upload: HTTP {}", response.status) });
         }
         Ok(FileRef { slot, sha256: sha256(&stored).to_vec(), size: stored.len() as i64, content_key: content_key.to_vec() })
     }
@@ -914,16 +978,16 @@ impl Core {
             .transport()
             .send(Request { method: "GET".to_owned(), url: grant.url, headers: Vec::new(), body: Vec::new() })
             .await
-            .map_err(|e| CoreError::Api { code: "unavailable".into(), message: e.to_string() })?;
+            .map_err(|e| CoreError::Api { code: "unavailable".into(), detail: e.to_string() })?;
         if response.status != 200 {
-            return Err(CoreError::Api { code: "not_found".into(), message: format!("download: HTTP {}", response.status) });
+            return Err(CoreError::Api { code: "not_found".into(), detail: format!("download: HTTP {}", response.status) });
         }
         if sha256(&response.body).as_slice() != file.sha256.as_slice() {
-            return Err(CoreError::Crypto { message: "the file's bytes are not the ones the object names".into() });
+            return Err(CoreError::Crypto { detail: "the file's bytes are not the ones the object names".into() });
         }
-        let content_key: [u8; 32] = file.content_key.as_slice().try_into().map_err(|_| CoreError::Crypto { message: "a file key is 32 bytes".into() })?;
+        let content_key: [u8; 32] = file.content_key.as_slice().try_into().map_err(|_| CoreError::Crypto { detail: "a file key is 32 bytes".into() })?;
         if response.body.len() < 24 {
-            return Err(CoreError::Crypto { message: "the file is too short to be one".into() });
+            return Err(CoreError::Crypto { detail: "the file is too short to be one".into() });
         }
         let (nonce, ciphertext) = response.body.split_at(24);
         let nonce: [u8; 24] = nonce.try_into().expect("24 bytes");
@@ -949,6 +1013,37 @@ impl Core {
         inner.syncer().create(group_id, id, object_type, crate::wire::encode(&fields))?;
         Ok(())
     }
+
+    /// The edit behind `edit_object`, and a singleton's second create.
+    fn edit_in(inner: &mut Inner, group_id: Uuid, id: Uuid, body: ObjectBody) -> Result<(), CoreError> {
+        let user = inner.user()?;
+        inner.may_write(group_id)?;
+        let current = inner.view(group_id, id).ok_or(CoreError::Unknown { id })?;
+        let object_type = current.body.object_type();
+        if object_type != body.object_type() {
+            return Err(CoreError::Invalid { reason: "an object keeps its type".into() });
+        }
+        if matches!(object_type.strategy(), crate::schema::Strategy::AppendOnly) {
+            return Err(CoreError::Forbidden { reason: format!("a {object_type:?} is append-only: delete it and make another") });
+        }
+        if author_owned(object_type) && current.author != user {
+            return Err(CoreError::Forbidden { reason: format!("only its author edits a {object_type:?}") });
+        }
+        body.validate().map_err(|e| CoreError::Invalid { reason: e.to_string() })?;
+        let now = inner.now();
+        let meta = Meta { parent_id: current.parent_id, author: current.author, authored_at: current.authored_at_ms, edited_at: now.max(current.authored_at_ms) };
+        let mut fields = meta.to_fields();
+        fields.extend(body.body_fields());
+        inner.syncer().edit(group_id, id, crate::wire::encode(&fields))?;
+        Ok(())
+    }
+}
+
+/// Types only their author edits: posts, comments and messages (other
+/// members add children), and every per-user singleton
+/// (`06-object-types.md`, "Merge strategy per type").
+fn author_owned(object_type: ObjectType) -> bool {
+    matches!(object_type, ObjectType::Post | ObjectType::Comment | ObjectType::Message) || matches!(object_type.strategy(), crate::schema::Strategy::PerUserSingleton)
 }
 
 
@@ -973,6 +1068,84 @@ mod tests {
         assert_eq!(identity.id, user.to_string());
         block_on(core.register_device(if n.is_multiple_of(2) { "ios".to_owned() } else { "android".to_owned() })).unwrap();
         core
+    }
+
+    #[test]
+    fn the_rules_the_shells_rely_on() {
+        let server = Arc::new(ModelServer::new("https://app.example", [3; 32]));
+        let (ua, ub) = (Uuid::from_u128(11), Uuid::from_u128(12));
+        let a = phone(&server, 1, ua);
+        let b = phone(&server, 2, ub);
+        let g = block_on(a.create_group(None)).unwrap();
+        assert_eq!(block_on(a.list_groups()).unwrap()[0].role, "admin");
+        let post = block_on(a.create_object(g, None, ObjectBody::Post(Post { text: "hi".into() }))).unwrap();
+        block_on(a.sync()).unwrap();
+
+        // A viewer reads only: refused before the outbox, and writing once
+        // promoted.
+        let link = block_on(a.create_invite(g, "viewer".into(), 0, 0)).unwrap();
+        block_on(a.sync()).unwrap();
+        block_on(b.join(link)).unwrap();
+        let pending = block_on(a.pending_key_requests()).unwrap();
+        block_on(a.approve_key_request(pending[0].request_id)).unwrap();
+        block_on(b.sync()).unwrap();
+        assert_eq!(block_on(b.list_groups()).unwrap()[0].role, "viewer");
+        assert!(matches!(block_on(b.create_object(g, None, ObjectBody::Post(Post { text: "no".into() }))), Err(CoreError::Forbidden { .. })));
+        assert!(matches!(block_on(b.delete_object(g, post)), Err(CoreError::Forbidden { .. })));
+        let held = block_on(b.list_objects(g));
+        assert!(held.iter().all(|o| !o.pending), "nothing entered the outbox: {held:?}");
+        block_on(a.set_member_role(g, ub, "member".into())).unwrap();
+        block_on(b.sync()).unwrap();
+        assert_eq!(block_on(b.list_groups()).unwrap()[0].role, "member");
+        let reply = block_on(b.create_object(g, Some(post), ObjectBody::Comment(Comment { text: "yes".into() }))).unwrap();
+        block_on(b.sync()).unwrap();
+        block_on(a.sync()).unwrap();
+
+        // Append-only and author-owned types.
+        let pool = a.general_pool_id(g);
+        block_on(a.create_object_with_id(g, pool, None, ObjectBody::ExpensePool(ExpensePool { title: "General".into(), archived: false }))).unwrap();
+        let settlement = block_on(a.create_object(g, Some(pool), ObjectBody::Settlement(Settlement { from: ua, to: ub, amount: 500, currency: "EUR".into(), date: 0 }))).unwrap();
+        assert!(matches!(block_on(a.edit_object(g, settlement, ObjectBody::Settlement(Settlement { from: ua, to: ub, amount: 600, currency: "EUR".into(), date: 0 }))), Err(CoreError::Forbidden { .. })));
+        assert!(matches!(block_on(a.edit_object(g, reply, ObjectBody::Comment(Comment { text: "edited".into() }))), Err(CoreError::Forbidden { .. })), "another member's comment");
+        block_on(b.edit_object(g, reply, ObjectBody::Comment(Comment { text: "edited".into() }))).unwrap();
+
+        // A singleton created again is an edit: one reaction per user per
+        // target, the general pool created once more is renamed.
+        let first = block_on(b.create_object(g, Some(post), ObjectBody::Reaction(Reaction { emoji: "x".into() }))).unwrap();
+        let again = block_on(b.create_object(g, Some(post), ObjectBody::Reaction(Reaction { emoji: "y".into() }))).unwrap();
+        assert_eq!(first, again);
+        block_on(b.sync()).unwrap();
+        block_on(a.sync()).unwrap();
+        let reactions: Vec<ObjectView> = block_on(a.list_objects(g)).into_iter().filter(|o| matches!(o.body, ObjectBody::Reaction(_))).collect();
+        assert_eq!(reactions.len(), 1);
+        assert!(matches!(&reactions[0].body, ObjectBody::Reaction(Reaction { emoji }) if emoji == "y"));
+        block_on(a.create_object_with_id(g, pool, None, ObjectBody::ExpensePool(ExpensePool { title: "Shared".into(), archived: false }))).unwrap();
+        assert!(matches!(&block_on(a.read_object(g, pool)).unwrap().body, ObjectBody::ExpensePool(ExpensePool { title, .. }) if title == "Shared"));
+
+        // A tombstone's files go from the bucket; a dropped edit and a served
+        // history request are in the report.
+        let photo = block_on(a.create_object(g, Some(post), ObjectBody::Photo(Photo { width: 1, height: 1, ..Default::default() }))).unwrap();
+        block_on(a.upload_file(g, photo, "full".into(), vec![1; 10])).unwrap();
+        assert!(server.bucket_has(&blob_key(g, photo, "full")));
+        block_on(a.sync()).unwrap();
+        block_on(b.sync()).unwrap();
+        block_on(b.edit_object(g, reply, ObjectBody::Comment(Comment { text: "late".into() }))).unwrap();
+        block_on(a.delete_object(g, post)).unwrap();
+        block_on(a.sync()).unwrap();
+        assert!(!server.bucket_has(&blob_key(g, photo, "full")), "the photo's file went with the post");
+        let report = block_on(b.sync()).unwrap();
+        assert_eq!(report.edits_dropped, vec![DroppedEdit { group_id: g, object_id: reply }], "{report:?}");
+        server.relay.advance(crate::harness::WINDOW_MS + 3_600_000);
+        server.relay.evict();
+        let a2 = phone(&server, 4, ua);
+        block_on(a2.sync()).unwrap();
+        let pending = block_on(a.pending_key_requests()).unwrap();
+        block_on(a.approve_key_request(pending[0].request_id)).unwrap();
+        block_on(a2.sync()).unwrap();
+        let report = block_on(a.sync()).unwrap();
+        assert_eq!(report.history_served, 1, "{report:?}");
+        block_on(a2.sync()).unwrap();
+        assert_eq!(block_on(a2.list_groups()).unwrap()[0].phase, "holder");
     }
 
     #[test]
@@ -1018,10 +1191,11 @@ mod tests {
         block_on(a.sync()).unwrap();
         let seen = block_on(a.read_object(g, post)).unwrap();
         assert_eq!((seen.author, seen.pending, seen.seq > 0), (ub, false, true));
-        block_on(a.edit_object(g, post, ObjectBody::Post(Post { text: "hello!".into() }))).unwrap();
-        block_on(a.sync()).unwrap();
+        assert!(matches!(block_on(a.edit_object(g, post, ObjectBody::Post(Post { text: "hello!".into() }))), Err(CoreError::Forbidden { .. })), "another member's post");
+        block_on(b.edit_object(g, post, ObjectBody::Post(Post { text: "hello!".into() }))).unwrap();
         block_on(b.sync()).unwrap();
-        assert!(matches!(block_on(b.read_object(g, post)).unwrap().body, ObjectBody::Post(Post { ref text }) if text == "hello!"));
+        block_on(a.sync()).unwrap();
+        assert!(matches!(block_on(a.read_object(g, post)).unwrap().body, ObjectBody::Post(Post { ref text }) if text == "hello!"));
         assert!(matches!(block_on(a.create_object(g, None, ObjectBody::Comment(Comment { text: "x".into() }))), Err(CoreError::Invalid { .. })), "a comment needs a parent");
 
         // Notes.
