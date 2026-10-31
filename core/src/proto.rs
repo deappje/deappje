@@ -131,6 +131,7 @@ message! {
         8 => claimed_at_ms: i64,
         9 => created_at_ms: i64,
         10 => status: String,
+        11 => through_seq: i64,
     }
 }
 
@@ -146,6 +147,19 @@ message! {
 
 message! {
     RequestHistoryResponse {
+        1 => request: Option<HistoryRequest>,
+    }
+}
+
+message! {
+    GetHistoryRequestRequest {
+        1 => device_id: String,
+        2 => request_id: String,
+    }
+}
+
+message! {
+    GetHistoryRequestResponse {
         1 => request: Option<HistoryRequest>,
     }
 }

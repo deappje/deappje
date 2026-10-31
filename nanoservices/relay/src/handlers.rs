@@ -52,7 +52,23 @@ fn history_msg(r: &model::HistoryRequest, status: HistoryStatus) -> messages::Hi
         claimed_by: r.claimed_by,
         claimed_at: r.claimed_at,
         created_at: r.created_at,
+        through_seq: r.through_seq,
         status,
+    }
+}
+
+/// Where a stored request stands for the calling device: complete once
+/// the claimer's last call landed; else open when unclaimed or abandoned,
+/// claimed when the caller holds it, taken when another device does.
+fn status_of(r: &model::HistoryRequest, device_id: Uuid, abandoned_before: DateTime<Utc>) -> HistoryStatus {
+    if r.completed_at.is_some() {
+        return HistoryStatus::Complete;
+    }
+    match r.claimed_by {
+        None => HistoryStatus::Open,
+        Some(d) if d == device_id => HistoryStatus::Claimed,
+        Some(_) if r.claimed_at.is_some_and(|t| t < abandoned_before) => HistoryStatus::Open,
+        Some(_) => HistoryStatus::Taken,
     }
 }
 
@@ -311,6 +327,8 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
             object_id: msg.object_id,
             claimed_by: None,
             claimed_at: None,
+            through_seq: msg.from_seq - 1,
+            completed_at: None,
             created_at: now,
         };
         if holders.is_empty() {
@@ -335,6 +353,15 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
         Ok(history_msg(&row, HistoryStatus::Open))
     }
 
+    async fn handle_get_history_request_request(&self, ctx: &Ctx, msg: messages::GetHistoryRequestRequest, s: RelaySender<'_, R>) -> Result<messages::HistoryRequest, AppError> {
+        let request = repo::get_history_request(&*self.pool, msg.request_id)
+            .await
+            .map_err(db("request"))?
+            .ok_or_else(|| AppError::not_found("history request not found (expired)"))?;
+        self.require_member(ctx, &s, msg.caller, request.group_id).await?;
+        Ok(history_msg(&request, status_of(&request, msg.device_id, Utc::now() - CLAIM_TAKEOVER)))
+    }
+
     async fn handle_list_history_requests_request(&self, ctx: &Ctx, msg: messages::ListHistoryRequestsRequest, s: RelaySender<'_, R>) -> Result<messages::HistoryRequestList, AppError> {
         self.require_member(ctx, &s, msg.caller, msg.group_id).await?;
         let abandoned_before = Utc::now() - CLAIM_TAKEOVER;
@@ -346,7 +373,8 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
         let request = repo::get_history_request(&*self.pool, msg.request_id)
             .await
             .map_err(db("request"))?
-            .ok_or_else(|| AppError::not_found("history request not found"))?;
+            .filter(|r| r.completed_at.is_none())
+            .ok_or_else(|| AppError::not_found("history request not found (completed or expired)"))?;
         self.require_member(ctx, &s, msg.caller, request.group_id).await?;
         if request.requester_device == msg.device_id {
             return Err(AppError::invalid_argument("a device does not answer its own request"));
@@ -371,6 +399,7 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
         let request = repo::get_history_request(&*self.pool, msg.request_id)
             .await
             .map_err(db("request"))?
+            .filter(|r| r.completed_at.is_none())
             .ok_or_else(|| AppError::not_found("history request not found (completed or expired)"))?;
         // Serving history is reading: any role answers.
         self.require_member(ctx, &s, msg.caller, request.group_id).await?;
@@ -401,11 +430,13 @@ impl<R: RelayRoutes> RelayHandler<R> for Relay {
                 skipped += 1;
             }
         }
-        if msg.complete {
-            repo::delete_history_request(&mut *tx, request.id).await.map_err(db("delete request"))?;
-        }
+        // Complete is the whole range, whatever the last entry's seq: the
+        // range may end in rows nobody holds any more. The row stays, marked,
+        // so the requester reads it on its next sync whether or not the
+        // wake-up below arrives.
+        let through_seq = if msg.complete { request.to_seq } else { msg.entries.last().map_or(request.through_seq, |e| e.seq) };
+        repo::record_history_push(&mut *tx, request.id, through_seq, msg.complete.then_some(now)).await.map_err(db("record push"))?;
         tx.commit().await.map_err(db("commit"))?;
-        let through_seq = msg.entries.last().map_or(if msg.complete { request.to_seq } else { request.from_seq - 1 }, |e| e.seq);
         s.send_history_ready(
             ctx,
             HistoryReady { request_id: request.id, requester_device: request.requester_device, through_seq, complete: msg.complete },
@@ -505,6 +536,8 @@ mod tests {
             object_id: None,
             claimed_by: None,
             claimed_at: None,
+            through_seq: 0,
+            completed_at: None,
             created_at: Utc::now(),
         };
         let e = |seq: i64| Entry { id: Uuid::new_v4(), value: Some(vec![1]), seq, deleted: false };

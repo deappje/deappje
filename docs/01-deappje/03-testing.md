@@ -42,7 +42,8 @@ definitive rejection is classified as such.
   history has arrived and its ack has reached the floor; a device that falls behind starts over
   and ends with no object that was deleted while it was away.
 - **History**: a joining device acks 0, pulls the window, asks for everything up to the floor,
-  pages and acks the restored rows as they land, and acks the head; its ack 0 pins the minimum
+  pages and acks the restored rows as they land, following its request through the relay with or
+  without the wake-up, and acks the head; its ack 0 pins the minimum
   so nothing is evicted by ack from under it, and the restored rows go as it acks past them;
   two simulated holders claim and exactly one wins; it pushes the rows back oldest first,
   tombstones included; they land at their original seqs, the head does not move, an id with a

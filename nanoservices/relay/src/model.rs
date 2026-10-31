@@ -42,5 +42,7 @@ pub struct HistoryRequest {
     pub object_id: Option<uuid::Uuid>,
     pub claimed_by: Option<uuid::Uuid>,
     pub claimed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub through_seq: i64,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }

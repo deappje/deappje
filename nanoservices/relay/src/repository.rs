@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::model;
 
 const OBJECT_COLUMNS: &str = "id, group_id, value, seq, deleted, uploaded_at";
-const REQUEST_COLUMNS: &str = "id, group_id, requester_device, from_seq, to_seq, object_id, claimed_by, claimed_at, created_at";
+const REQUEST_COLUMNS: &str = "id, group_id, requester_device, from_seq, to_seq, object_id, claimed_by, claimed_at, through_seq, completed_at, created_at";
 
 // --- group_head: the counter row ---
 
@@ -250,8 +250,8 @@ pub(crate) async fn group_minimums<'e>(e: impl PgExecutor<'e>) -> Result<Vec<(Uu
 
 pub(crate) async fn insert_history_request<'e>(e: impl PgExecutor<'e>, row: &model::HistoryRequest) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO history_request (id, group_id, requester_device, from_seq, to_seq, object_id, claimed_by, claimed_at, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "INSERT INTO history_request (id, group_id, requester_device, from_seq, to_seq, object_id, claimed_by, claimed_at, through_seq, completed_at, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(row.id)
     .bind(row.group_id)
@@ -261,6 +261,8 @@ pub(crate) async fn insert_history_request<'e>(e: impl PgExecutor<'e>, row: &mod
     .bind(row.object_id)
     .bind(row.claimed_by)
     .bind(row.claimed_at)
+    .bind(row.through_seq)
+    .bind(row.completed_at)
     .bind(row.created_at)
     .execute(e)
     .await?;
@@ -274,11 +276,11 @@ pub(crate) async fn get_history_request<'e>(e: impl PgExecutor<'e>, id: Uuid) ->
         .await
 }
 
-/// The group's requests a holder may claim: unclaimed, or claimed before
-/// `abandoned_before` and not completed since.
+/// The group's requests a holder may claim: not complete, and unclaimed or
+/// claimed before `abandoned_before`.
 pub(crate) async fn claimable_requests<'e>(e: impl PgExecutor<'e>, group_id: Uuid, abandoned_before: DateTime<Utc>) -> Result<Vec<model::HistoryRequest>, sqlx::Error> {
     sqlx::query_as::<_, model::HistoryRequest>(&format!(
-        "SELECT {REQUEST_COLUMNS} FROM history_request WHERE group_id = $1 AND (claimed_by IS NULL OR claimed_at < $2) ORDER BY created_at, id"
+        "SELECT {REQUEST_COLUMNS} FROM history_request WHERE group_id = $1 AND completed_at IS NULL AND (claimed_by IS NULL OR claimed_at < $2) ORDER BY created_at, id"
     ))
     .bind(group_id)
     .bind(abandoned_before)
@@ -287,12 +289,12 @@ pub(crate) async fn claimable_requests<'e>(e: impl PgExecutor<'e>, group_id: Uui
 }
 
 /// The one conditional update of a claim: taken when unclaimed, already
-/// the caller's, or abandoned; the row after, or nothing when another
-/// device holds it.
+/// the caller's, or abandoned, and not complete; the row after, or nothing
+/// when another device holds it or it is complete.
 pub(crate) async fn claim_request<'e>(e: impl PgExecutor<'e>, id: Uuid, device_id: Uuid, at: DateTime<Utc>, abandoned_before: DateTime<Utc>) -> Result<Option<model::HistoryRequest>, sqlx::Error> {
     sqlx::query_as::<_, model::HistoryRequest>(&format!(
         "UPDATE history_request SET claimed_by = $2, claimed_at = $3, updated_at = clock_timestamp() \
-         WHERE id = $1 AND (claimed_by IS NULL OR claimed_by = $2 OR claimed_at < $4) \
+         WHERE id = $1 AND completed_at IS NULL AND (claimed_by IS NULL OR claimed_by = $2 OR claimed_at < $4) \
          RETURNING {REQUEST_COLUMNS}"
     ))
     .bind(id)
@@ -303,9 +305,17 @@ pub(crate) async fn claim_request<'e>(e: impl PgExecutor<'e>, id: Uuid, device_i
     .await
 }
 
-pub(crate) async fn delete_history_request<'e>(e: impl PgExecutor<'e>, id: Uuid) -> Result<bool, sqlx::Error> {
-    let done = sqlx::query("DELETE FROM history_request WHERE id = $1").bind(id).execute(e).await?;
-    Ok(done.rows_affected() > 0)
+/// What a history push leaves on its request: `through_seq` as far as any
+/// call got, and the completion mark on the last one. The row stays for
+/// the requester to read until the sweep drops it.
+pub(crate) async fn record_history_push<'e>(e: impl PgExecutor<'e>, id: Uuid, through_seq: i64, completed_at: Option<DateTime<Utc>>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE history_request SET through_seq = GREATEST(through_seq, $2), completed_at = COALESCE(completed_at, $3), updated_at = clock_timestamp() WHERE id = $1")
+        .bind(id)
+        .bind(through_seq)
+        .bind(completed_at)
+        .execute(e)
+        .await?;
+    Ok(())
 }
 
 pub(crate) async fn delete_history_requests_older_than<'e>(e: impl PgExecutor<'e>, cutoff: DateTime<Utc>) -> Result<u64, sqlx::Error> {

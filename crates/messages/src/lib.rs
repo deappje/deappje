@@ -658,6 +658,9 @@ pub enum HistoryStatus {
     Taken,
     /// Nobody holds anything older than the window: nothing was stored.
     Unfillable,
+    /// The claimer pushed its last call: every row of the range any
+    /// holder has is in. The row stays until the sweep drops it.
+    Complete,
 }
 
 impl HistoryStatus {
@@ -667,6 +670,7 @@ impl HistoryStatus {
             HistoryStatus::Claimed => "claimed",
             HistoryStatus::Taken => "taken",
             HistoryStatus::Unfillable => "unfillable",
+            HistoryStatus::Complete => "complete",
         }
     }
 }
@@ -684,7 +688,21 @@ pub struct HistoryRequest {
     pub claimed_by: Option<Uuid>,
     pub claimed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// The last seq a holder pushed back so far: `from_seq - 1` before
+    /// any, `to_seq` once complete. The requester acks no further.
+    pub through_seq: i64,
     pub status: HistoryStatus,
+}
+
+/// `GetHistoryRequestRequest` — answered with `HistoryRequest`: the request
+/// by id with its status and `through_seq` for the calling device, which is
+/// how the requester follows its own request without depending on the
+/// `history_ready` wake-up. Not found once the sweep dropped it: ask again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetHistoryRequestRequest {
+    pub caller: Uuid,
+    pub device_id: Uuid,
+    pub request_id: Uuid,
 }
 
 /// `ListHistoryRequestsRequest` — answered with `HistoryRequestList`: the

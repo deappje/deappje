@@ -313,6 +313,7 @@ fn history_request_of(r: proto::HistoryRequest) -> Result<HistoryRequest, ApiErr
         "claimed" => HistoryStatus::Claimed,
         "taken" => HistoryStatus::Taken,
         "unfillable" => HistoryStatus::Unfillable,
+        "complete" => HistoryStatus::Complete,
         other => return Err(ApiError::new(Code::Internal, format!("a history request status the core does not know: {other:?}"))),
     };
     Ok(HistoryRequest {
@@ -323,6 +324,7 @@ fn history_request_of(r: proto::HistoryRequest) -> Result<HistoryRequest, ApiErr
         to_seq: r.to_seq,
         object_id: uuid_opt(&r.object_id)?,
         claimed_by: uuid_opt(&r.claimed_by)?,
+        through_seq: r.through_seq,
         status,
     })
 }
@@ -371,6 +373,11 @@ impl<T: Transport> Relay for Connect<T> {
         let r: proto::RequestHistoryResponse = self
             .unary("relay.v1.RelayService", "RequestHistory", &proto::RequestHistoryRequest { device_id: device_id.to_string(), group_id: group_id.to_string(), from_seq, to_seq, object_id: object_id.map(|o| o.to_string()).unwrap_or_default() })
             .await?;
+        history_request_of(present(r.request, "request")?)
+    }
+
+    async fn get_history_request(&self, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, ApiError> {
+        let r: proto::GetHistoryRequestResponse = self.unary("relay.v1.RelayService", "GetHistoryRequest", &proto::GetHistoryRequestRequest { device_id: device_id.to_string(), request_id: request_id.to_string() }).await?;
         history_request_of(present(r.request, "request")?)
     }
 

@@ -96,6 +96,8 @@ struct RequestRow {
     object_id: Option<Uuid>,
     claimed_by: Option<Uuid>,
     claimed_at: Option<i64>,
+    through_seq: i64,
+    completed_at: Option<i64>,
     created_at: i64,
 }
 
@@ -174,7 +176,21 @@ impl Inner {
     }
 
     fn request_msg(&self, id: Uuid, r: &RequestRow, status: HistoryStatus) -> HistoryRequest {
-        HistoryRequest { id, group_id: r.group_id, requester_device: r.requester_device, from_seq: r.from_seq, to_seq: r.to_seq, object_id: r.object_id, claimed_by: r.claimed_by, status }
+        HistoryRequest { id, group_id: r.group_id, requester_device: r.requester_device, from_seq: r.from_seq, to_seq: r.to_seq, object_id: r.object_id, claimed_by: r.claimed_by, through_seq: r.through_seq, status }
+    }
+
+    /// `status_of` in the handlers: where a stored request stands for the
+    /// calling device.
+    fn status_of(&self, r: &RequestRow, device_id: Uuid) -> HistoryStatus {
+        if r.completed_at.is_some() {
+            return HistoryStatus::Complete;
+        }
+        match r.claimed_by {
+            None => HistoryStatus::Open,
+            Some(d) if d == device_id => HistoryStatus::Claimed,
+            Some(_) if r.claimed_at.is_some_and(|t| t < self.now_ms - CLAIM_TAKEOVER_MS) => HistoryStatus::Open,
+            Some(_) => HistoryStatus::Taken,
+        }
     }
 }
 
@@ -251,7 +267,7 @@ impl RelayModel {
 
     /// The open history requests of a group.
     pub fn open_requests(&self, group_id: Uuid) -> usize {
-        self.inner.lock().expect("no poison").requests.values().filter(|r| r.group_id == group_id).count()
+        self.inner.lock().expect("no poison").requests.values().filter(|r| r.group_id == group_id && r.completed_at.is_none()).count()
     }
 
     /// `evict_objects`: by ack, then by age.
@@ -428,7 +444,7 @@ impl Relay for RelayModel {
         }
         let floor = inner.head(group_id).evicted_through_seq;
         let holders = inner.holders_except(group_id, floor, device_id);
-        let row = RequestRow { group_id, requester_device: device_id, from_seq, to_seq, object_id, claimed_by: None, claimed_at: None, created_at: inner.now_ms };
+        let row = RequestRow { group_id, requester_device: device_id, from_seq, to_seq, object_id, claimed_by: None, claimed_at: None, through_seq: from_seq - 1, completed_at: None, created_at: inner.now_ms };
         if holders.is_empty() {
             return Ok(inner.request_msg(Uuid::nil(), &row, HistoryStatus::Unfillable));
         }
@@ -441,6 +457,13 @@ impl Relay for RelayModel {
         Ok(msg)
     }
 
+    async fn get_history_request(&self, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, ApiError> {
+        let inner = self.call()?;
+        let row = inner.requests.get(&request_id).cloned().ok_or_else(|| err(Code::NotFound, "history request not found (expired)"))?;
+        inner.require_member(device_id, row.group_id)?;
+        Ok(inner.request_msg(request_id, &row, inner.status_of(&row, device_id)))
+    }
+
     async fn list_history_requests(&self, device_id: Uuid, group_id: Uuid) -> Result<Vec<HistoryRequest>, ApiError> {
         let inner = self.call()?;
         inner.require_member(device_id, group_id)?;
@@ -448,14 +471,19 @@ impl Relay for RelayModel {
         Ok(inner
             .requests
             .iter()
-            .filter(|(_, r)| r.group_id == group_id && r.claimed_at.is_none_or(|t| t < abandoned_before))
+            .filter(|(_, r)| r.group_id == group_id && r.completed_at.is_none() && r.claimed_at.is_none_or(|t| t < abandoned_before))
             .map(|(id, r)| inner.request_msg(*id, r, HistoryStatus::Open))
             .collect())
     }
 
     async fn claim_history(&self, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, ApiError> {
         let mut inner = self.call()?;
-        let request = inner.requests.get(&request_id).cloned().ok_or_else(|| err(Code::NotFound, "history request not found"))?;
+        let request = inner
+            .requests
+            .get(&request_id)
+            .filter(|r| r.completed_at.is_none())
+            .cloned()
+            .ok_or_else(|| err(Code::NotFound, "history request not found (completed or expired)"))?;
         inner.require_member(device_id, request.group_id)?;
         if request.requester_device == device_id {
             return Err(err(Code::InvalidArgument, "a device does not answer its own request"));
@@ -479,7 +507,12 @@ impl Relay for RelayModel {
 
     async fn push_history(&self, device_id: Uuid, request_id: Uuid, entries: Vec<Entry>, complete: bool) -> Result<PushHistoryResult, ApiError> {
         let mut inner = self.call()?;
-        let request = inner.requests.get(&request_id).cloned().ok_or_else(|| err(Code::NotFound, "history request not found (completed or expired)"))?;
+        let request = inner
+            .requests
+            .get(&request_id)
+            .filter(|r| r.completed_at.is_none())
+            .cloned()
+            .ok_or_else(|| err(Code::NotFound, "history request not found (completed or expired)"))?;
         inner.require_member(device_id, request.group_id)?;
         if request.claimed_by != Some(device_id) {
             return Err(err(Code::PermissionDenied, "the calling device does not hold the claim"));
@@ -519,10 +552,14 @@ impl Relay for RelayModel {
                 }
             }
         }
+        // Complete is the whole range, whatever the last entry's seq; the
+        // row stays, marked, for the requester to read.
+        let through_seq = if complete { request.to_seq } else { entries.last().map_or(request.through_seq, |e| e.seq) };
+        let row = inner.requests.get_mut(&request_id).expect("read above");
+        row.through_seq = row.through_seq.max(through_seq);
         if complete {
-            inner.requests.remove(&request_id);
+            row.completed_at = Some(now);
         }
-        let through_seq = entries.last().map_or(if complete { request.to_seq } else { request.from_seq - 1 }, |e| e.seq);
         inner.wake(request.requester_device, Wakeup::HistoryReady { request_id, group_id: request.group_id, through_seq, complete });
         Ok(PushHistoryResult { inserted, skipped, through_seq, complete })
     }

@@ -13,6 +13,7 @@ service RelayService {
   rpc AckSeq(AckSeqRequest) returns (AckSeqResponse);
   rpc GetHeads(GetHeadsRequest) returns (GetHeadsResponse);
   rpc RequestHistory(RequestHistoryRequest) returns (RequestHistoryResponse);
+  rpc GetHistoryRequest(GetHistoryRequestRequest) returns (GetHistoryRequestResponse);
   rpc ListHistoryRequests(ListHistoryRequestsRequest) returns (ListHistoryRequestsResponse);
   rpc ClaimHistory(ClaimHistoryRequest) returns (ClaimHistoryResponse);
   rpc PushHistory(PushHistoryRequest) returns (PushHistoryResponse);
@@ -121,9 +122,11 @@ message GetHeadsResponse {
 }
 
 // A history request as stored, with its status for the caller: "open",
-// "claimed" (by the calling device), "taken" (by another) or "unfillable"
+// "claimed" (by the calling device), "taken" (by another), "unfillable"
 // (nobody holds anything older than the window; nothing was stored, the
-// id is empty).
+// id is empty) or "complete" (the claimer pushed its last call; the row
+// stays until the sweep). through_seq is the last seq pushed back so far:
+// from_seq - 1 before any, to_seq once complete.
 message HistoryRequest {
   string id = 1;
   string group_id = 2;
@@ -135,6 +138,7 @@ message HistoryRequest {
   int64 claimed_at_ms = 8;
   int64 created_at_ms = 9;
   string status = 10;
+  int64 through_seq = 11;
 }
 
 // Rows in [from_seq, to_seq], or one object, from a holder.
@@ -147,6 +151,18 @@ message RequestHistoryRequest {
 }
 
 message RequestHistoryResponse {
+  HistoryRequest request = 1;
+}
+
+// The request by id, for any member of its group: how the requester
+// follows its own request on every sync, whether or not the history_ready
+// wake-up arrived. Not found once the sweep has dropped it: ask again.
+message GetHistoryRequestRequest {
+  string device_id = 1;
+  string request_id = 2;
+}
+
+message GetHistoryRequestResponse {
   HistoryRequest request = 1;
 }
 

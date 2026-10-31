@@ -6,6 +6,10 @@ SET LOCAL search_path = nano_relay;
 -- nanoservice's role can reach it (the Directive §2).
 -- `created_at` and `updated_at` are added when the plan declares none of
 -- its own; a declared one is the plan's, without the default.
+-- `through_seq` is the last seq a holder pushed back so far (`from_seq - 1`
+-- before any, `to_seq` once complete) and `completed_at` marks a complete
+-- request: the row stays for the requester to read until the sweep drops
+-- it, so a lost wake-up costs nothing (docs/01-deappje/02-relay.md).
 CREATE TABLE history_request (
     id UUID NOT NULL PRIMARY KEY,
     group_id UUID NOT NULL,
@@ -15,6 +19,8 @@ CREATE TABLE history_request (
     object_id UUID,
     claimed_by UUID,
     claimed_at TIMESTAMPTZ,
+    through_seq BIGINT NOT NULL,
+    completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );

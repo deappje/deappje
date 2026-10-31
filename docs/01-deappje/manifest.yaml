@@ -220,6 +220,7 @@ nanoservices:
       - { message: AckSeqRequest, response: AckResult }
       - { message: GetHeadsRequest, response: HeadList }
       - { message: RequestHistoryRequest, response: HistoryRequest }
+      - { message: GetHistoryRequestRequest, response: HistoryRequest }
       - { message: ListHistoryRequestsRequest, response: HistoryRequestList }
       - { message: ClaimHistoryRequest, response: HistoryRequest }
       - { message: PushHistoryRequest, response: PushHistoryResult }
@@ -239,6 +240,7 @@ nanoservices:
         - { name: AckSeq, request: AckSeqRequest, response: AckSeqResponse }
         - { name: GetHeads, request: GetHeadsRequest, response: GetHeadsResponse }
         - { name: RequestHistory, request: RequestHistoryRequest, response: RequestHistoryResponse }
+        - { name: GetHistoryRequest, request: GetHistoryRequestRequest, response: GetHistoryRequestResponse }
         - { name: ListHistoryRequests, request: ListHistoryRequestsRequest, response: ListHistoryRequestsResponse }
         - { name: ClaimHistory, request: ClaimHistoryRequest, response: ClaimHistoryResponse }
         - { name: PushHistory, request: PushHistoryRequest, response: PushHistoryResponse }

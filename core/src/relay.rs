@@ -125,6 +125,9 @@ pub enum HistoryStatus {
     Taken,
     /// Nobody holds anything older than the window; nothing was stored.
     Unfillable,
+    /// The claimer's last call landed: every row of the range any holder
+    /// has is in, whatever seq the last page carried.
+    Complete,
 }
 
 /// A history request as the server has it.
@@ -144,6 +147,9 @@ pub struct HistoryRequest {
     pub object_id: Option<Uuid>,
     /// The device holding the claim.
     pub claimed_by: Option<Uuid>,
+    /// The last seq pushed back so far: `from_seq - 1` before any,
+    /// `to_seq` once complete. The requester acks no further.
+    pub through_seq: i64,
     /// Its status for the caller.
     pub status: HistoryStatus,
 }
@@ -176,6 +182,10 @@ pub trait Relay {
     async fn get_heads(&self, device_id: Uuid, group_ids: Vec<Uuid>) -> Result<Vec<Head>, ApiError>;
     /// Rows in the range, or one object, from a holder.
     async fn request_history(&self, device_id: Uuid, group_id: Uuid, from_seq: i64, to_seq: i64, object_id: Option<Uuid>) -> Result<HistoryRequest, ApiError>;
+    /// The request as the server has it, for any member of its group:
+    /// how the requester follows its own without a wake-up. `NotFound`
+    /// once the sweep dropped it.
+    async fn get_history_request(&self, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, ApiError>;
     /// The group's requests a holder may claim.
     async fn list_history_requests(&self, device_id: Uuid, group_id: Uuid) -> Result<Vec<HistoryRequest>, ApiError>;
     /// Takes a request; the first wins.

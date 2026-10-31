@@ -148,7 +148,7 @@ holds all of them.
 | GroupHeadAdvanced | (void) | silent push to every member device except the writer's |
 | MemberRemoved | (void) | delete the wrapped keys and key requests of the user's devices; send `DeviceLeftGroup` per device of the user; push `rotate` to remaining devices |
 | HistoryRequested | (void) | from `relay`: push `history` wake-up (request id, range) to the listed devices, which `relay` chose as the group's holders (every device whose ack is at or above the eviction floor), the requester excluded |
-| HistoryReady | (void) | from `relay`: push `history` wake-up (request id) to the requester device, which pulls |
+| HistoryReady | (void) | from `relay`: push `history_ready` wake-up (request id, `through_seq`, `complete`) to the requester device, which hands it to the core and syncs; a dropped one costs nothing, the core reads its request on every sync |
 | RemoveDeviceRequest | Device | the owner removes one of their devices: delete its `wrapped_key` and `key_request` rows and the device; send `DeviceLeftGroup` per group it held a key for |
 | PurgeGroupKeysRequest | PurgeResult | from `group`'s purge pass: delete every `wrapped_key` and `key_request` row of the group; answer `remaining`. Idempotent. |
 | PurgeUserDevicesRequest | PurgeResult | from `group`'s account purge: delete every `device`, `wrapped_key` and `key_request` row of the user's devices; answer `remaining`. Idempotent. |

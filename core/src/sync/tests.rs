@@ -22,6 +22,9 @@ struct Dev {
     keyring: Keyring,
     rng: CoreRng,
     now: i64,
+    /// Whether the device receives wake-ups; off, it only pulls, as a
+    /// browser does.
+    wakeups: bool,
 }
 
 impl Dev {
@@ -30,7 +33,7 @@ impl Dev {
         model.register_device(id, user);
         let mut keyring = Keyring::new();
         keyring.insert(group, 1, key.clone());
-        Dev { id, user, store: Store::open(Box::new(MemoryStorage::new())), keyring, rng: CoreRng::from_seed([n; 32]), now: 1_000 }
+        Dev { id, user, store: Store::open(Box::new(MemoryStorage::new())), keyring, rng: CoreRng::from_seed([n; 32]), now: 1_000, wakeups: true }
     }
 
     fn syncer(&mut self) -> Syncer<'_> {
@@ -39,14 +42,18 @@ impl Dev {
 
     fn deliver(&mut self, model: &RelayModel) {
         for w in model.take_wakeups(self.id) {
-            if let Wakeup::HistoryReady { request_id, group_id, through_seq, complete } = w {
-                self.syncer().history_ready(group_id, request_id, through_seq, complete);
+            if let Wakeup::HistoryReady { request_id, through_seq, complete, .. } = w {
+                self.syncer().history_ready(request_id, through_seq, complete);
             }
         }
     }
 
     fn try_sync(&mut self, model: &RelayModel, group: Uuid) -> Result<Vec<Event>, SyncError> {
-        self.deliver(model);
+        if self.wakeups {
+            self.deliver(model);
+        } else {
+            model.take_wakeups(self.id);
+        }
         block_on(self.syncer().sync_group(model, group))
     }
 
@@ -362,19 +369,87 @@ fn an_outage_leaves_the_store_consistent_and_the_next_sync_finishes() {
     assert_eq!(a.live(w.group).len(), 2);
 }
 
+/// The `history_ready` wake-up is a hurry-up: a device that never gets it
+/// (a browser, a phone without push, a dropped push) reads its request on
+/// its next sync and finishes the same way.
+#[test]
+fn a_lost_history_ready_wake_up_costs_only_the_next_sync() {
+    let w = World::new(9);
+    let mut a = w.device(1, 1);
+    let posts: Vec<Uuid> = (0..3).map(|i| a.post(w.group, &format!("post {i}"))).collect();
+    a.sync(&w.model, w.group);
+    w.model.evict();
+    assert_eq!(w.model.head(w.group), (3, 3), "the only device acked: the rows went");
+    let mut b = w.device(2, 2);
+    b.wakeups = false;
+    let events = b.sync(&w.model, w.group);
+    assert!(matches!(events.as_slice(), [Event::HistoryRequested { .. }]), "{events:?}");
+    assert_eq!(b.sync(&w.model, w.group), vec![], "open: nothing to page yet");
+    a.serve(&w.model, w.group);
+    assert!(w.model.take_wakeups(b.id).iter().any(|w| matches!(w, Wakeup::HistoryReady { complete: true, .. })), "the wake-up went out, and is dropped here");
+    let events = b.sync(&w.model, w.group);
+    assert!(events.contains(&Event::BecameHolder), "the request itself says complete: {events:?}");
+    assert_eq!(w.model.ack(w.group, b.id), Some(3));
+    for p in &posts {
+        assert!(b.read::<Post>(w.group, *p).is_some());
+    }
+}
+
+/// A request nobody answered within the window is swept; the requester
+/// finds it gone on its next sync and asks again.
+#[test]
+fn a_swept_request_is_asked_again() {
+    let w = World::new(11);
+    let mut a = w.device(1, 1);
+    a.post(w.group, "old");
+    a.sync(&w.model, w.group);
+    w.model.evict();
+    let mut b = w.device(2, 2);
+    let events = b.sync(&w.model, w.group);
+    let first = match events.as_slice() {
+        [Event::HistoryRequested { request_id }] => *request_id,
+        other => panic!("{other:?}"),
+    };
+    w.model.advance(WINDOW_MS + HOUR);
+    w.model.expire_requests();
+    let events = b.sync(&w.model, w.group);
+    let second = match events.as_slice() {
+        [Event::HistoryRequested { request_id }] => *request_id,
+        other => panic!("{other:?}"),
+    };
+    assert_ne!(first, second, "a new request");
+    assert_eq!(b.phase(w.group), Phase::CatchingUp { request_id: Some(second), floor: 1, through_seq: 0, complete: false });
+    a.serve(&w.model, w.group);
+    let events = b.sync(&w.model, w.group);
+    assert!(events.contains(&Event::BecameHolder), "{events:?}");
+}
+
 /// Random push/pull/ack/offline interleavings, with eviction and a holder
 /// serving history, over four devices of two users: every device ends
 /// with the same rows.
 #[test]
 fn the_multi_device_harness_converges() {
     for seed in 10..50u8 {
-        run_harness(seed);
+        run_harness(seed, true);
     }
 }
 
-fn run_harness(seed: u8) {
+/// The same with every wake-up dropped, as a browser or a phone without
+/// push sees the world: a device catching up follows its request through
+/// the relay alone.
+#[test]
+fn the_multi_device_harness_converges_without_wake_ups() {
+    for seed in 50..70u8 {
+        run_harness(seed, false);
+    }
+}
+
+fn run_harness(seed: u8, wakeups: bool) {
     let w = World::new(seed);
     let mut devs = vec![w.device(1, 1), w.device(2, 1), w.device(3, 2), w.device(4, 2)];
+    for dev in &mut devs {
+        dev.wakeups = wakeups;
+    }
     let mut rng = CoreRng::from_seed([seed; 32]);
     let pick = |n: u64, rng: &mut CoreRng| (rand_core::RngCore::next_u64(rng) % n) as usize;
     let mut away: Option<(usize, usize)> = None; // (device, steps left)

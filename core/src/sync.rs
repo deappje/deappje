@@ -5,7 +5,10 @@
 //! conflicts rebased (`crate::rebase`); a device below the floor starts
 //! over and takes the new device's path; a holder serves history. The
 //! shell calls [`Syncer::sync_group`] on a wake-up, a timer or a user's
-//! pull, and [`Syncer::history_ready`] when `device` says a holder pushed.
+//! pull, and [`Syncer::history_ready`] when the `history_ready` wake-up
+//! says a holder pushed; a device catching up reads its request on every
+//! sync as well, so a wake-up that never arrives (a browser gets none)
+//! costs only the wait for the next sync.
 //!
 //! Nothing here waits: every call to the relay is one request, and the
 //! engine returns between them when an outage stops it, with the store
@@ -157,6 +160,16 @@ pub fn read_plain(store: &Store, keyring: &Keyring, group_id: Uuid, id: Uuid) ->
         }
         _ => Ok(None),
     }
+}
+
+/// Where a catch-up stands after a holder's progress report, from the
+/// wake-up or from the request itself. Complete, the whole range is in:
+/// every row at or below the floor that any holder has, whatever the last
+/// pushed seq was (the range may end in rows nobody holds any more). Else
+/// as far as the further of the two reports.
+fn progress(floor: i64, so_far: i64, done: bool, through_seq: i64, complete: bool) -> (i64, bool) {
+    let complete = done || complete;
+    (if complete { floor } else { so_far.max(through_seq) }, complete)
 }
 
 /// The engine, over the device's store and keyring.
@@ -369,17 +382,19 @@ impl Syncer<'_> {
         Ok(events)
     }
 
-    /// `device` said a holder pushed history for the request. Complete, the
-    /// whole range is in: every row at or below the floor that any holder
-    /// has, whatever the last pushed seq was (the range may end in rows
-    /// nobody holds any more).
-    pub fn history_ready(&mut self, group_id: Uuid, request_id: Uuid, through_seq: i64, complete: bool) {
-        if let Some(Phase::CatchingUp { request_id: Some(mine), floor, through_seq: so_far, complete: done }) = self.store.group(group_id).map(|g| g.phase.clone())
-            && mine == request_id
-        {
-            let complete = done || complete;
-            let through_seq = if complete { floor } else { so_far.max(through_seq) };
-            self.store.set_phase(group_id, Phase::CatchingUp { request_id: Some(mine), floor, through_seq, complete });
+    /// The `history_ready` wake-up: a holder pushed history for the
+    /// request. The wake-up names no group, so the group is the one whose
+    /// phase holds the request; a wake-up for a request this device no
+    /// longer waits on is nothing.
+    pub fn history_ready(&mut self, request_id: Uuid, through_seq: i64, complete: bool) {
+        for group_id in self.store.groups() {
+            if let Some(Phase::CatchingUp { request_id: Some(mine), floor, through_seq: so_far, complete: done }) = self.store.group(group_id).map(|g| g.phase.clone())
+                && mine == request_id
+            {
+                let (through_seq, complete) = progress(floor, so_far, done, through_seq, complete);
+                self.store.set_phase(group_id, Phase::CatchingUp { request_id: Some(mine), floor, through_seq, complete });
+                return;
+            }
         }
     }
 
@@ -447,10 +462,29 @@ impl Syncer<'_> {
     /// pushed, acking as it goes; complete and past the floor, the device
     /// holds the group.
     async fn catch_up<R: Relay>(&mut self, relay: &R, group_id: Uuid, events: &mut Vec<Event>) -> Result<(), SyncError> {
-        let Some(Phase::CatchingUp { request_id, floor, through_seq, complete }) = self.store.group(group_id).map(|g| g.phase.clone()) else { return Ok(()) };
+        let Some(Phase::CatchingUp { mut request_id, floor, mut through_seq, mut complete }) = self.store.group(group_id).map(|g| g.phase.clone()) else { return Ok(()) };
+        if let Some(id) = request_id
+            && !complete
+        {
+            // The request as the server has it, so the device follows the
+            // holder's progress whether or not the wake-up arrived. Swept
+            // (not found) is asked again below; a re-push skips what is
+            // there.
+            match relay.get_history_request(self.device_id, id).await {
+                Ok(r) => {
+                    let (t, c) = progress(floor, through_seq, complete, r.through_seq, r.status == HistoryStatus::Complete);
+                    if (t, c) != (through_seq, complete) {
+                        self.store.set_phase(group_id, Phase::CatchingUp { request_id: Some(id), floor, through_seq: t, complete: c });
+                    }
+                    (through_seq, complete) = (t, c);
+                }
+                Err(ApiError { code: crate::api::Code::NotFound, .. }) => request_id = None,
+                Err(e) => return Err(e.into()),
+            }
+        }
         if request_id.is_none() {
-            // The request was lost (expired, or the device was not told):
-            // ask again.
+            // The request is gone (swept before this device saw it
+            // complete, or never stored): ask again.
             let request = relay.request_history(self.device_id, group_id, 1, floor, None).await?;
             if request.status == HistoryStatus::Unfillable {
                 events.push(Event::Unfillable);

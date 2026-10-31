@@ -52,6 +52,7 @@ nanoservices:
       - {message: AckSeqRequest, response: AckResult}
       - {message: GetHeadsRequest, response: HeadList}
       - {message: RequestHistoryRequest, response: HistoryRequest}
+      - {message: GetHistoryRequestRequest, response: HistoryRequest}
       - {message: ListHistoryRequestsRequest, response: HistoryRequestList}
       - {message: ClaimHistoryRequest, response: HistoryRequest}
       - {message: PushHistoryRequest, response: PushHistoryResult}
@@ -105,6 +106,7 @@ nanoservices:
       - {message: AckSeqRequest, response: AckResult}
       - {message: GetHeadsRequest, response: HeadList}
       - {message: RequestHistoryRequest, response: HistoryRequest}
+      - {message: GetHistoryRequestRequest, response: HistoryRequest}
       - {message: ListHistoryRequestsRequest, response: HistoryRequestList}
       - {message: ClaimHistoryRequest, response: HistoryRequest}
       - {message: PushHistoryRequest, response: PushHistoryResult}

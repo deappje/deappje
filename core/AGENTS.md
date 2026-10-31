@@ -51,7 +51,7 @@ from the server's.
 | `src/relay.rs` | The relay's contract as values (`Entry`, `PushEntry`, `PushResult`, `ChangeSet`, `Head`, `HistoryRequest`) and the `Relay` seam (async; Connect for the shells, the model for tests). |
 | `src/keys.rs` | The key exchange over the `Devices` seam (`device`'s contract): `KeyExchange::register`, `create_group_key` (generation 1 wrapped for the minting device), `request_keys` (with the invite's tag), `pending_requests` (fingerprint + whether the invite tag verifies), `approve` (one wrap per generation held, the requester pinned), `receive` (every wrap opened under the pinned wrapper's key: `Received`, `Unopenable`, `Pin` events), `rotate` (next generation for every holder; a lost race adopts). |
 | `src/store.rs` | The local store: per group the rows (envelopes with the type and parent read out of the ones the device can open), the cursor, the `Phase` (New, CatchingUp, Holder), the outbox of `Pending { Op::Create / Edit / Delete }` with the sealed bytes and the base plaintext an edit was made from; written through to `Storage` and read back whole at `open`. |
-| `src/sync.rs` | The engine `Syncer`: `create`/`edit`/`delete` (the cascade over the children held) and `read`; `sync_group` by phase (join: ack 0, the window, a history request; catch up: page and ack as far as `HistoryReady` says, complete = the whole range; holder: pull, ack, drop tombstones every device passed, then push the outbox with conflicts rebased up to three times, a tombstone dropping the edit, an invalid result parked for the user); a device below the floor or refused an ack starts over and keeps its outbox for the replay; `serve_history` for holders; `history_ready` for the wake-up. Its tests (`src/sync/tests.rs`) are the conformance scenarios and the randomised multi-device harness (four devices, outages, eviction, two absences longer than the window), forty seeds. |
+| `src/sync.rs` | The engine `Syncer`: `create`/`edit`/`delete` (the cascade over the children held) and `read`; `sync_group` by phase (join: ack 0, the window, a history request; catch up: read the request, page and ack as far as its `through_seq`, complete = the whole range, swept = asked again, the `history_ready` wake-up only hurries; holder: pull, ack, drop tombstones every device passed, then push the outbox with conflicts rebased up to three times, a tombstone dropping the edit, an invalid result parked for the user); a device below the floor or refused an ack starts over and keeps its outbox for the replay; `serve_history` for holders; `history_ready` for the wake-up. Its tests (`src/sync/tests.rs`) are the conformance scenarios and the randomised multi-device harness (four devices, outages, eviction, two absences longer than the window), forty seeds with wake-ups and twenty without. |
 | `src/notes.rs` | `NoteDoc` over `yrs` (53-bit client id from the generator, byte offsets): `apply` a child's update, `set_text` (only the changed span is deleted and inserted), `session_update` (the delta since the session began), `end_session`; `Syncer::open_note` (every live `note_update` child applied, any order) and `save_note_session` (one child per session). |
 | `src/proto.rs` | The API's messages (`proto/*/v1`) as `message!` structs with the protos' numbers: what the core sends and reads over Connect, no generated code. |
 | `src/transport.rs` | The `Transport` seam: one HTTP request, bytes in and out (`fetch`, `URLSession`, `OkHttp`; a recorder in tests). |
@@ -59,6 +59,24 @@ from the server's.
 | `src/kratos.rs` | The native sign-in over Kratos's API flows under `/.ory/`: `start_login` (a flow with a session token exchange code, the `basable` OpenID method, the browser URL from the 422), `finish_login` (the exchange for the session token), `whoami`, `logout`. |
 | `src/facade.rs` | `Core`, the one object a shell holds, over the seams as `Arc<dyn ...>`: the device id minted and kept in the secrets, `restore_session`/`start_login`/`finish_login`/`logout`, `register_device`, `set_push_token`, groups (`create_group` with the first key, `create_invite` whose secret becomes an `invite_secret` object, `join` with the invite's tag, `pending_key_requests`/`approve_key_request`, `rotate_keys`, members), `sync` (keys received, every held group pulled and pushed, history served, keys asked for where held none) with a `SyncReport`, objects as `ObjectView` with an `ObjectBody` enum (one variant per type; singletons get their derived id), notes (`read_note`, `save_note` = one session), files (`upload_file`/`download_file`: XChaCha20 under a key of the file's own, nonce ‖ ciphertext in the bucket, AAD group ‖ object ‖ slot). One `async_lock::Mutex` around the state. `CoreError` is the bindings' error. |
 | `src/harness/` | `RelayModel` (`relay`'s handlers and sweeps rule for rule in memory with a movable clock, membership and the wake-ups `device` would push), `DevicesModel` (`device`'s key handlers: registration, requests, fulfilment, publishing with the one-publisher rule, a hostile `swap_public_key` for the pin tests) and `ModelServer` (the whole server behind the `Transport` seam: Connect over both models and a group model, the session from the token header, Kratos's whoami, a bucket for the presigned URLs); `block_on` for futures that never wait. Public so the shells' tests can drive them. |
+
+## Wake-ups
+
+A push is a hurry-up, never a message: every reason maps to a `Core` call
+the shell makes anyway on the foreground and on a timer, and the browser,
+which gets no push, makes only then. The payload is a string map with
+`reason` and ids (`nanoservices/device/src/push.rs`).
+
+| reason | the shell calls |
+|---|---|
+| `head`, `keys`, `rotate`, `history` | `sync` |
+| `key_request` | `pending_key_requests`, and shows the approval |
+| `history_ready` | `history_ready(request_id, through_seq, complete)`, then `sync` |
+
+A dropped push loses nothing: `sync` fetches wrapped keys first, reads
+every history request of its own, serves others', and pulls every held
+group; `pending_key_requests` is the approver's list, which the shell asks
+for on every foreground since no sync lists it.
 
 ## Builds
 

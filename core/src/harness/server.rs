@@ -296,6 +296,11 @@ impl ModelServer {
                 let h = self.relay.request_history(uuid(&r.device_id, "device_id")?, uuid(&r.group_id, "group_id")?, r.from_seq, r.to_seq, uuid_opt(&r.object_id, "object_id")?).await?;
                 proto::RequestHistoryResponse { request: Some(history_to(h)) }.encode()
             }
+            "GetHistoryRequest" => {
+                let r = proto::GetHistoryRequestRequest::decode(body).map_err(decode)?;
+                let h = self.relay.get_history_request(uuid(&r.device_id, "device_id")?, uuid(&r.request_id, "request_id")?).await?;
+                proto::GetHistoryRequestResponse { request: Some(history_to(h)) }.encode()
+            }
             "ListHistoryRequests" => {
                 let r = proto::ListHistoryRequestsRequest::decode(body).map_err(decode)?;
                 let list = self.relay.list_history_requests(uuid(&r.device_id, "device_id")?, uuid(&r.group_id, "group_id")?).await?;
@@ -453,6 +458,7 @@ fn history_to(h: crate::relay::HistoryRequest) -> proto::HistoryRequest {
         crate::relay::HistoryStatus::Claimed => "claimed",
         crate::relay::HistoryStatus::Taken => "taken",
         crate::relay::HistoryStatus::Unfillable => "unfillable",
+        crate::relay::HistoryStatus::Complete => "complete",
     };
     proto::HistoryRequest {
         id: if h.id.is_nil() { String::new() } else { h.id.to_string() },
@@ -465,6 +471,7 @@ fn history_to(h: crate::relay::HistoryRequest) -> proto::HistoryRequest {
         claimed_at_ms: 0,
         created_at_ms: 0,
         status: status.to_owned(),
+        through_seq: h.through_seq,
     }
 }
 

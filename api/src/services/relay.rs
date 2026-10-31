@@ -52,6 +52,7 @@ fn history(r: messages::HistoryRequest) -> HistoryRequest {
         claimed_at_ms: optional_millis(r.claimed_at),
         created_at_ms: millis(r.created_at),
         status: r.status.as_str().to_owned(),
+        through_seq: r.through_seq,
         ..Default::default()
     }
 }
@@ -180,6 +181,18 @@ impl<R: ApiRoutes + Send + Sync + 'static> RelayService for RelayServiceImpl<R> 
         };
         let r = self.sender.send_request_history_request(&ctx, msg).await.into_connect()?;
         Ok(Response::new(RequestHistoryResponse { request: Some(history(r)).into(), ..Default::default() }))
+    }
+
+    async fn get_history_request(&self, ctx: RequestContext, request: ServiceRequest<'_, GetHistoryRequestRequest>) -> ServiceResult<GetHistoryRequestResponse> {
+        let ctx = request_ctx(&ctx);
+        let req = request.to_owned_message();
+        let msg = messages::GetHistoryRequestRequest {
+            caller: caller(&ctx).into_connect()?,
+            device_id: uuid_field(&req.device_id, "device_id").into_connect()?,
+            request_id: uuid_field(&req.request_id, "request_id").into_connect()?,
+        };
+        let r = self.sender.send_get_history_request_request(&ctx, msg).await.into_connect()?;
+        Ok(Response::new(GetHistoryRequestResponse { request: Some(history(r)).into(), ..Default::default() }))
     }
 
     async fn list_history_requests(&self, ctx: RequestContext, request: ServiceRequest<'_, ListHistoryRequestsRequest>) -> ServiceResult<ListHistoryRequestsResponse> {

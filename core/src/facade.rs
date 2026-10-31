@@ -718,9 +718,13 @@ impl Core {
 
     // ---- Sync ----
 
-    /// `device` said a holder pushed history for the request.
-    pub async fn history_ready(&self, group_id: Uuid, request_id: Uuid, through_seq: i64, complete: bool) {
-        self.inner.lock().await.syncer().history_ready(group_id, request_id, through_seq, complete);
+    /// The `history_ready` wake-up, with the `request_id`, `through_seq`
+    /// and `complete` of its payload: a holder pushed history for this
+    /// device's request. Call `sync` after it. A wake-up that never arrives
+    /// costs only the wait for the next sync, which reads the request
+    /// itself.
+    pub async fn history_ready(&self, request_id: Uuid, through_seq: i64, complete: bool) {
+        self.inner.lock().await.syncer().history_ready(request_id, through_seq, complete);
     }
 
     /// One sync of everything: keys received, every held group pulled,

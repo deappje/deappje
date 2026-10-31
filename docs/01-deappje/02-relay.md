@@ -2,7 +2,7 @@
 
 Owns the relay: a window of ciphertext rows per group, tombstones included, that some device
 has not yet acked, 672 hours at most; the group's counter; one acked cursor per device; and a
-row per open history request. Plain executor with two hourly sweeps. Member devices are the
+row per history request, open or complete, until the sweep. Plain executor with two hourly sweeps. Member devices are the
 store, each of them holding the whole group; this nanoservice forgets everything after 672
 hours. Directive §2 per table, §7 (counter row under
 `FOR UPDATE`; a boolean or a number is all that crosses) for its messages.
@@ -65,9 +65,13 @@ group's rows, so nothing it has not acked can be evicted by ack from under it.
 | object_id | uuid, nullable | a request for one object instead of a range |
 | claimed_by | uuid, nullable | the holder device answering it |
 | claimed_at | timestamp, nullable | a claim older than 5 minutes without `complete` counts as abandoned |
+| through_seq | int64 | the last seq a holder pushed back so far: `from_seq - 1` before any, `to_seq` once complete; the requester acks no further |
+| completed_at | timestamp, nullable | set by the claimer's last call; the row stays, marked, for the requester to read |
 | created_at | timestamp | |
 
-Index `(group_id)`. A row is an open request and `complete` deletes it. Rows older than 672 hours are dropped by the sweep.
+Index `(group_id)`. A row is a request, open or complete: `complete` marks it rather than deleting
+it, so the requester can read where it stands without depending on a wake-up. Rows older than 672
+hours are dropped by the sweep, complete or not.
 
 ## Push
 
@@ -153,11 +157,12 @@ commit after a higher one and a client that pulled in between misses it forever 
 **The path of a new device**, taken on joining and on starting over: ack 0, which gives it a row
 and pins the group's minimum ack at 0; pull from 0 and apply the window, to have something to
 show, and follow the head from there like any device, without acking; ask a holder for
-everything older with `RequestHistoryRequest { from_seq: 1, to_seq: evicted_through_seq }`; as
-`HistoryReady` comes, page the restored rows from its ack up to the floor it asked for, acking
-each page, which is honest, since the holder pushes oldest first and every row with a seq at or
-below the page's last is then in; when the request is complete and the last page is acked it
-holds everything through the floor and everything after it, and acks the head: it is a holder.
+everything older with `RequestHistoryRequest { from_seq: 1, to_seq: evicted_through_seq }`; on
+every sync while it waits (`HistoryReady` hurries one), read the request (`GetHistoryRequest`)
+and page the restored rows from its ack up to its `through_seq`, acking each page, which is
+honest, since the holder pushes oldest first and every row with a seq at or below `through_seq`
+is then in; when the request is complete and the last page is acked it holds everything through
+the floor and everything after it, and acks the head: it is a holder.
 Then it replays its outbox against the store it just fetched: a create goes as it is; an edit
 or delete goes only if its object is still there, rebased onto the current row with that row's
 seq as its base, and is dropped when the object is gone, since a holder pushing a stale base
@@ -210,15 +215,23 @@ is in it. The handler, under the group's counter lock, re-inserts each entry **w
 seq** and `uploaded_at = now`, skipping any id that already has a row, at any seq, live or
 tombstone: the current row always wins, so a later edit, a delete, or a second holder answering
 the same request cannot be overridden. No new seq is handed out and the head does not move.
-After each call it sends `HistoryReady { request_id, requester_device, through_seq, complete }`
-to `device`, which wakes the requester; `through_seq` is the last seq of the call, so the
-requester knows how far it may page and ack; `complete` deletes the row, and a call
-from a device that does not hold the claim, or for a request that no longer exists, is refused. Any
-role may answer: serving history is reading, not writing. An answer marked complete is
-complete: every holder holds the whole group, so what the claimer lacked no device has.
+After each call it records `through_seq` on the row (the last seq of the call; `to_seq` on the
+complete one, whatever its last entry: the range may end in rows nobody holds) and, on the last
+call, `completed_at`, and sends `HistoryReady { request_id, requester_device, through_seq,
+complete }` to `device`, which wakes the requester. A call from a device that does not hold the
+claim, or for a request that is complete or no longer exists, is refused. Any role may answer:
+serving history is reading, not writing. An answer marked complete is complete: every holder
+holds the whole group, so what the claimer lacked no device has.
 
 The requester pages the restored rows from its ack, which is below them, and acks as it goes;
 every other device's cursor is already past those numbers, so nobody else sees any traffic.
+
+The requester does not depend on the wake-up. `GetHistoryRequestRequest { request_id }` →
+`HistoryRequest` answers any member of the group with the row's `status` (`open`, `claimed`,
+`taken`, `complete`) and `through_seq`, and a device catching up reads it on every sync, so it
+pages and acks as far as `through_seq` and becomes a holder on `complete` whether the wake-up
+came, came late or never came (a browser gets none). A complete row stays until the sweep; `not
+found` means the sweep dropped it, and the requester asks again: a re-push skips what is there.
 Restored rows are ordinary rows: they go by the ack rule as soon as the requester, the last
 device below them, has acked past them, and by age 672 hours after their re-insert if it never
 does.
@@ -227,8 +240,8 @@ A request for one object (`object_id` set) is answered the same way with one ent
 `complete`. If the object's files have expired from the bucket, the holder re-uploads them to
 their derived keys before it reports `complete`, and the requester downloads them directly.
 
-No retries, no timeouts on the server: a requester that hears nothing asks again, and the client
-shows "waiting for a member to come online". A holder that is offline keeps its row, so a
+No retries, no timeouts on the server: a requester whose request was swept asks again, and the
+client shows "waiting for a member to come online" while one is open. A holder that is offline keeps its row, so a
 request waits for it rather than closing. Nothing records who answered: the entries were
 encrypted under the group key, so the answerer was a key holder, and nothing reads it later.
 
@@ -272,6 +285,7 @@ not ack, and starts over.
 | AckSeqRequest | AckResult | api |
 | GetHeadsRequest | HeadList | api |
 | RequestHistoryRequest | HistoryRequest | api |
+| GetHistoryRequestRequest | HistoryRequest | api |
 | ListHistoryRequestsRequest | HistoryRequestList | api |
 | ClaimHistoryRequest | HistoryRequest | api |
 | PushHistoryRequest | PushHistoryResult | api |
@@ -293,7 +307,7 @@ a member" and purges locally. Idempotent.
 
 ## API
 
-`RelayService`: PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory,
+`RelayService`: PushObjects, PullChanges, AckSeq, GetHeads, RequestHistory, GetHistoryRequest,
 ListHistoryRequests, ClaimHistory, PushHistory. The api crate maps the proto entry to the plain Rust struct one to one;
 `value` passes through untouched.
 
@@ -313,15 +327,20 @@ What the code settled beyond the text above (`nanoservices/relay`, 2026-10-30):
 - **History**: the requester cannot claim its own request; a claim by a device below the floor
   is refused; a history push is validated whole before anything is locked (oldest first,
   strictly ascending, inside the range, one object when the request names one, never above the
-  head); `through_seq` is the last entry's seq (`to_seq` on an empty complete). `unfillable`
+  head); `through_seq` is the last entry's seq (`to_seq` on complete). `unfillable`
   answers with a nil id. Any role may answer history, as designed.
+- **A request outlives its completion** (2026-10-31): `complete` marks the row (`completed_at`,
+  `through_seq = to_seq`) instead of deleting it, and `GetHistoryRequest` reads it, so the
+  requester follows its request through the relay and the `history_ready` wake-up is a hurry-up
+  like every other push. Before, the wake-up was the only carrier of `through_seq` and
+  `complete`, and a dropped one left the requester catching up for good.
 - **Eviction by age** raises a group's floor to the highest seq taken in the batch and drops the
   devices below it that have not acked within the window, under the counter lock, batched
   ten thousand rows per statement; a purge deletes ten thousand rows per call and the counter,
   devices and requests with the last batch.
 - **Messages.** `PushResult` is an enum (`Accepted { accepted, conflicts, head_seq }` or
   `BehindFloor { evicted_through_seq }`); `HistoryRequest` carries a `status` (`open`,
-  `claimed`, `taken`, `unfillable`); `ChangeSet`, `AckResult` and `Head` carry `min_acked_seq`
+  `claimed`, `taken`, `unfillable`, `complete`) and `through_seq`; `ChangeSet`, `AckResult` and `Head` carry `min_acked_seq`
   as an option, on the wire a value plus `has_min_acked_seq`. The API maps one to one; `value`
   passes through untouched and an empty value on the wire is none.
 

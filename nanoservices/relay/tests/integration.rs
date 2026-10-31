@@ -153,6 +153,12 @@ impl Fx {
             .await
     }
 
+    async fn get(&self, caller: Uuid, device_id: Uuid, request_id: Uuid) -> Result<HistoryRequest, AppError> {
+        self.relay
+            .handle_get_history_request_request(&self.ctx, GetHistoryRequestRequest { caller, device_id, request_id }, self.sender())
+            .await
+    }
+
     async fn claimable(&self, caller: Uuid, device_id: Uuid, group_id: Uuid) -> Vec<Uuid> {
         self.relay
             .handle_list_history_requests_request(&self.ctx, ListHistoryRequestsRequest { caller, device_id, group_id }, self.sender())
@@ -402,6 +408,9 @@ async fn history_is_served_by_one_claiming_holder_at_the_original_seqs() {
     assert_eq!(code_of(&fx.request_history(b, b1, g, 0, 5).await.unwrap_err()), Code::InvalidArgument);
     let req = fx.request_history(b, b1, g, 1, 5).await.unwrap();
     assert_eq!(req.status, HistoryStatus::Open);
+    assert_eq!(req.through_seq, 0, "nothing pushed yet: from_seq - 1");
+    let seen = fx.get(b, b1, req.id).await.unwrap();
+    assert_eq!((seen.status, seen.through_seq), (HistoryStatus::Open, 0), "the requester reads its own request");
     let asked = fx.router.requested.lock().unwrap().clone();
     assert_eq!(asked.len(), 1);
     let mut devices = asked[0].devices.clone();
@@ -421,6 +430,8 @@ async fn history_is_served_by_one_claiming_holder_at_the_original_seqs() {
     let other = if claimer == a1 { a2 } else { a1 };
     assert_eq!(fx.claim(a, claimer, req.id).await.unwrap().status, HistoryStatus::Claimed, "the claimer again");
     assert!(fx.claimable(a, a1, g).await.is_empty(), "claimed: not listed");
+    assert_eq!(fx.get(b, b1, req.id).await.unwrap().status, HistoryStatus::Taken, "claimed by another, as the requester sees it");
+    assert_eq!(fx.get(a, claimer, req.id).await.unwrap().status, HistoryStatus::Claimed, "and as the claimer sees it");
 
     // Only the claimer pushes, oldest first, inside the range; rows land at
     // their original seqs, the tombstone as a tombstone, the head stays.
@@ -432,6 +443,8 @@ async fn history_is_served_by_one_claiming_holder_at_the_original_seqs() {
     assert_eq!((first.inserted, first.skipped, first.through_seq, first.complete), (2, 0, 3, false));
     let ready = fx.router.ready.lock().unwrap().clone();
     assert_eq!((ready[0].requester_device, ready[0].through_seq, ready[0].complete), (b1, 3, false));
+    let seen = fx.get(b, b1, req.id).await.unwrap();
+    assert_eq!((seen.status, seen.through_seq), (HistoryStatus::Taken, 3), "the page's progress, readable without the wake-up");
 
     // Meanwhile a1 edits object 0 at a new seq: the re-push of its old row is
     // skipped, the current row wins.
@@ -444,7 +457,11 @@ async fn history_is_served_by_one_claiming_holder_at_the_original_seqs() {
     assert_eq!(fx.rows(g).await, vec![(ids[2], 3, false), (ids[3], 4, false), (ids[1], 5, true), (ids[0], 6, false)]);
     let set = fx.pull(b, b1, g, 0, 0).await;
     assert_eq!((set.head_seq, set.evicted_through_seq), (6, 5), "neither head nor floor moved");
-    assert_eq!(code_of(&fx.push_history(a, claimer, req.id, vec![], true).await.unwrap_err()), Code::NotFound, "complete: gone");
+    assert_eq!(code_of(&fx.push_history(a, claimer, req.id, vec![], true).await.unwrap_err()), Code::NotFound, "complete: gone for the claimer");
+    let done = fx.get(b, b1, req.id).await.unwrap();
+    assert_eq!((done.status, done.through_seq), (HistoryStatus::Complete, 5), "complete is the whole range, and the requester reads it");
+    assert_eq!(code_of(&fx.claim(a, other, req.id).await.unwrap_err()), Code::NotFound, "complete: not claimable");
+    assert!(fx.claimable(a, other, g).await.is_empty(), "complete: not listed");
 
     // b1 pages and acks the restored rows past the floor: a holder now.
     fx.ack(b, b1, g, 6).await.unwrap();
@@ -550,5 +567,6 @@ async fn old_history_requests_expire() {
     fx.relay.tick_expire_history_requests(&fx.ctx, fx.sender()).await.unwrap();
     assert!(fx.claimable(a, a1, g).await.is_empty());
     assert_eq!(code_of(&fx.claim(a, a1, req.id).await.unwrap_err()), Code::NotFound);
+    assert_eq!(code_of(&fx.get(b, b1, req.id).await.unwrap_err()), Code::NotFound, "swept: the requester asks again");
     fx.finish().await;
 }
