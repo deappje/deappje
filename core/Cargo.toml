@@ -59,6 +59,13 @@ uniffi = "0.32"
 # and yrs's getrandom would otherwise pull the newest. Raise both together.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.121"
+# The web client's bindings (src/wasm.rs): the seams as JavaScript objects,
+# every Core method a Promise, the records as plain objects. js-sys and
+# wasm-bindgen-futures pin the wasm-bindgen above exactly, so they move with
+# it. None of them draws randomness.
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+serde-wasm-bindgen = "0.6"
 
 # The oracle the HPKE here is checked against: a reference implementation
 # of the same suite, which the production core cannot use because the

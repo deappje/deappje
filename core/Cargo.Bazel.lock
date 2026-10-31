@@ -1,5 +1,5 @@
 {
-  "checksum": "7b37937b8b427b17f3f38508e0344687dc8e5b8db3c50e75eb693001c6b7a7b8",
+  "checksum": "8a52b49ed995d170dc3991941bfbb81f4914d923fcb01bd033dc81136b940f7d",
   "conditions": {
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"
@@ -1766,8 +1766,20 @@
             ],
             "cfg(target_arch = \"wasm32\")": [
               {
+                "id": "js-sys 0.3.98",
+                "target": "js_sys"
+              },
+              {
+                "id": "serde-wasm-bindgen 0.6.5",
+                "target": "serde_wasm_bindgen"
+              },
+              {
                 "id": "wasm-bindgen 0.2.121",
                 "target": "wasm_bindgen"
+              },
+              {
+                "id": "wasm-bindgen-futures 0.4.71",
+                "target": "wasm_bindgen_futures"
               }
             ]
           }
@@ -2202,6 +2214,124 @@
         }
       ],
       "version": "3.3.2"
+    },
+    "futures-core 0.3.34": {
+      "common_attrs": {
+        "crate_features": [
+          "alloc",
+          "std"
+        ],
+        "edition": "2018"
+      },
+      "library_target_name": "futures_core",
+      "license": "MIT OR Apache-2.0",
+      "license_file": "LICENSE-APACHE",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "name": "futures-core",
+      "package_url": "https://github.com/rust-lang/futures-rs",
+      "repository": {
+        "Http": {
+          "sha256": "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e",
+          "url": "https://static.crates.io/crates/futures-core/0.3.34/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "futures_core",
+            "crate_root": "src/lib.rs"
+          }
+        }
+      ],
+      "version": "0.3.34"
+    },
+    "futures-task 0.3.34": {
+      "common_attrs": {
+        "crate_features": [
+          "alloc",
+          "std"
+        ],
+        "edition": "2018"
+      },
+      "library_target_name": "futures_task",
+      "license": "MIT OR Apache-2.0",
+      "license_file": "LICENSE-APACHE",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "name": "futures-task",
+      "package_url": "https://github.com/rust-lang/futures-rs",
+      "repository": {
+        "Http": {
+          "sha256": "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd",
+          "url": "https://static.crates.io/crates/futures-task/0.3.34/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "futures_task",
+            "crate_root": "src/lib.rs"
+          }
+        }
+      ],
+      "version": "0.3.34"
+    },
+    "futures-util 0.3.34": {
+      "common_attrs": {
+        "crate_features": [
+          "alloc",
+          "slab",
+          "std"
+        ],
+        "deps": [
+          {
+            "id": "futures-core 0.3.34",
+            "target": "futures_core"
+          },
+          {
+            "id": "futures-task 0.3.34",
+            "target": "futures_task"
+          },
+          {
+            "id": "pin-project-lite 0.2.17",
+            "target": "pin_project_lite"
+          },
+          {
+            "id": "slab 0.4.12",
+            "target": "slab"
+          }
+        ],
+        "edition": "2018"
+      },
+      "library_target_name": "futures_util",
+      "license": "MIT OR Apache-2.0",
+      "license_file": "LICENSE-APACHE",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "name": "futures-util",
+      "package_url": "https://github.com/rust-lang/futures-rs",
+      "repository": {
+        "Http": {
+          "sha256": "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc",
+          "url": "https://static.crates.io/crates/futures-util/0.3.34/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "futures_util",
+            "crate_root": "src/lib.rs"
+          }
+        }
+      ],
+      "version": "0.3.34"
     },
     "generic-array 0.14.7": {
       "build_script_attrs": {
@@ -2883,10 +3013,19 @@
     },
     "js-sys 0.3.98": {
       "common_attrs": {
+        "crate_features": [
+          "default",
+          "std",
+          "unsafe-eval"
+        ],
         "deps": [
           {
             "id": "cfg-if 1.0.5",
             "target": "cfg_if"
+          },
+          {
+            "id": "futures-util 0.3.34",
+            "target": "futures_util"
           },
           {
             "id": "once_cell 1.21.4",
@@ -4361,6 +4500,48 @@
       ],
       "version": "1.0.229"
     },
+    "serde-wasm-bindgen 0.6.5": {
+      "common_attrs": {
+        "deps": [
+          {
+            "id": "js-sys 0.3.98",
+            "target": "js_sys"
+          },
+          {
+            "id": "serde 1.0.229",
+            "target": "serde"
+          },
+          {
+            "id": "wasm-bindgen 0.2.121",
+            "target": "wasm_bindgen"
+          }
+        ],
+        "edition": "2018"
+      },
+      "library_target_name": "serde_wasm_bindgen",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "license_ids": [
+        "MIT"
+      ],
+      "name": "serde-wasm-bindgen",
+      "package_url": "https://github.com/RReverser/serde-wasm-bindgen",
+      "repository": {
+        "Http": {
+          "sha256": "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b",
+          "url": "https://static.crates.io/crates/serde-wasm-bindgen/0.6.5/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "serde_wasm_bindgen",
+            "crate_root": "src/lib.rs"
+          }
+        }
+      ],
+      "version": "0.6.5"
+    },
     "serde_core 1.0.229": {
       "build_script_attrs": {},
       "common_attrs": {
@@ -4746,6 +4927,37 @@
         }
       ],
       "version": "1.0.4"
+    },
+    "slab 0.4.12": {
+      "common_attrs": {
+        "crate_features": [
+          "std"
+        ],
+        "edition": "2018"
+      },
+      "library_target_name": "slab",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "license_ids": [
+        "MIT"
+      ],
+      "name": "slab",
+      "package_url": "https://github.com/tokio-rs/slab",
+      "repository": {
+        "Http": {
+          "sha256": "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5",
+          "url": "https://static.crates.io/crates/slab/0.4.12/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "slab",
+            "crate_root": "src/lib.rs"
+          }
+        }
+      ],
+      "version": "0.4.12"
     },
     "smallstr 0.3.1": {
       "common_attrs": {
@@ -6140,6 +6352,49 @@
       ],
       "version": "0.2.121"
     },
+    "wasm-bindgen-futures 0.4.71": {
+      "common_attrs": {
+        "crate_features": [
+          "default",
+          "std"
+        ],
+        "deps": [
+          {
+            "id": "js-sys 0.3.98",
+            "target": "js_sys"
+          },
+          {
+            "id": "wasm-bindgen 0.2.121",
+            "target": "wasm_bindgen"
+          }
+        ],
+        "edition": "2021"
+      },
+      "library_target_name": "wasm_bindgen_futures",
+      "license": "MIT OR Apache-2.0",
+      "license_file": "LICENSE-APACHE",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "name": "wasm-bindgen-futures",
+      "package_url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures",
+      "repository": {
+        "Http": {
+          "sha256": "96492d0d3ffba25305a7dc88720d250b1401d7edca02cc3bcd50633b424673b8",
+          "url": "https://static.crates.io/crates/wasm-bindgen-futures/0.4.71/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "wasm_bindgen_futures",
+            "crate_root": "src/lib.rs"
+          }
+        }
+      ],
+      "version": "0.4.71"
+    },
     "wasm-bindgen-macro 0.2.121": {
       "common_attrs": {
         "deps": [
@@ -6765,14 +7020,17 @@
     "chacha20poly1305 0.10.1",
     "hkdf 0.12.4",
     "hmac 0.12.1",
+    "js-sys 0.3.98",
     "rand_chacha 0.3.1",
     "rand_core 0.6.4",
     "serde 1.0.229",
+    "serde-wasm-bindgen 0.6.5",
     "serde_json 1.0.154",
     "sha2 0.10.9",
     "uniffi 0.32.2",
     "uuid 1.29.0",
     "wasm-bindgen 0.2.121",
+    "wasm-bindgen-futures 0.4.71",
     "x25519-dalek 2.0.1",
     "yrs 0.28.0",
     "zeroize 1.9.1"

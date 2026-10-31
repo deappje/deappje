@@ -47,6 +47,7 @@ pub mod sync;
 pub mod transport;
 pub mod trust;
 pub mod types;
+pub mod wasm;
 pub mod wire;
 
 #[cfg(not(target_arch = "wasm32"))]
