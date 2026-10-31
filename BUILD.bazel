@@ -1,7 +1,7 @@
 # Root package: the routing topology every generated crate reads, the one
 # push target the CI runs (the buf lint gate is //proto:lint), and the flag
 # that turns the apps on.
-load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_multirun//:defs.bzl", "multirun")
 
 # The apps (docs/01-deappje/05-deployment.md, "The apps"): off by default,
@@ -22,8 +22,28 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+# Which environment an app build talks to (environments.bzl): `preview` by
+# default, `live` from apps.yaml on main. An app target selects its base URL
+# on `:environment_live` / `//conditions:default`.
+string_flag(
+    name = "environment",
+    build_setting_default = "preview",
+    values = [
+        "preview",
+        "live",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "environment_live",
+    flag_values = {":environment": "live"},
+    visibility = ["//visibility:public"],
+)
+
 exports_files(
     [
+        "environments.bzl",
         "routing.yaml",
         "Cargo.toml",
         "Cargo.lock",

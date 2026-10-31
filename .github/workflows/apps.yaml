@@ -1,0 +1,231 @@
+# The apps (docs/01-deappje/05-deployment.md, "The apps"): the Android and
+# iOS builds, which build.yaml never reaches (they sit behind --//:apps).
+# On pushes to dev, main and the apps/** branches that touch what an app is
+# made of. Job `android` on ubuntu-latest, whose image carries the Android
+# SDK (the NDK and platform are pinned below to what the laptops install);
+# job `ios` on macos-latest, whose image carries Xcode. The repository is
+# public, so neither runner costs minutes. The platform deploys nothing from
+# this workflow: its artifacts are the debug APK and the simulator app.
+name: Apps
+
+on:
+  push:
+    branches: [dev, main, "apps/**"]
+    paths:
+      - "core/**"
+      - "ios/**"
+      - "android/**"
+      - "proto/**"
+      - "Cargo.*"
+      - "MODULE.bazel*"
+      - ".bazelrc"
+      - "BUILD.bazel"
+      - "environments.bzl"
+      - ".github/workflows/apps.yaml"
+  workflow_dispatch:
+
+env:
+  # The same NDK and platform the laptops install (`sdkmanager`); a
+  # different NDK on the runner would be a different toolchain in the cache.
+  ANDROID_NDK_VERSION: 27.3.13750724
+  ANDROID_PLATFORM: android-35
+  ANDROID_BUILD_TOOLS: 35.0.0
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Until the shell exists (it is built up on its own branch), the job
+      # has nothing to build; `bazel test //android/...` with no package
+      # would fail the run for nothing.
+      - name: Is the shell here
+        id: shell
+        run: echo "present=$([ -f android/BUILD.bazel ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Pin the Android SDK components
+        if: steps.shell.outputs.present == 'true'
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" "platforms;$ANDROID_PLATFORM" "build-tools;$ANDROID_BUILD_TOOLS" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      # The two caches build.yaml keeps, under this job's own keys (its
+      # toolchain differs, so nothing it builds would hit build.yaml's).
+      - name: Restore repository cache
+        if: steps.shell.outputs.present == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel-repo
+            ~/.cache/bazelisk
+          key: apps-android-repo-${{ hashFiles('MODULE.bazel.lock', 'Cargo.Bazel.lock', 'core/Cargo.lock') }}
+          restore-keys: |
+            apps-android-repo-
+      - name: Restore disk cache
+        if: steps.shell.outputs.present == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: apps-android-disk-${{ github.sha }}
+          restore-keys: |
+            apps-android-disk-
+      - name: Mark cache epoch
+        if: steps.shell.outputs.present == 'true'
+        run: touch "$RUNNER_TEMP/disk-cache-marker"
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        if: steps.shell.outputs.present == 'true'
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+
+      - name: Test
+        if: steps.shell.outputs.present == 'true'
+        run: bazel test --config=ci --//:apps //android/...
+
+      - name: Build the debug APK
+        if: steps.shell.outputs.present == 'true'
+        run: bazel build --config=ci --//:apps --//:environment=${{ github.ref == 'refs/heads/main' && 'live' || 'preview' }} //android:app
+      - uses: actions/upload-artifact@v4
+        if: steps.shell.outputs.present == 'true'
+        with:
+          name: android-debug-apk
+          path: bazel-bin/android/app.apk
+          retention-days: 14
+
+      # An installed app lives for months: the API changes additively once a
+      # build has shipped, so here the check fails the build (build.yaml's
+      # own step stays the scaffold's).
+      - name: Breaking-change check
+        if: github.ref == 'refs/heads/dev' && steps.shell.outputs.present == 'true'
+        run: bazel run --config=ci @rules_buf_toolchains//:buf -- breaking --against '.git#branch=main'
+
+      - name: Prune disk cache
+        if: success() && steps.shell.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          cache="$HOME/.cache/bazel-disk"
+          [ -d "${cache}" ] || exit 0
+          find "${cache}" -type f ! -newer "$RUNNER_TEMP/disk-cache-marker" -delete
+          find "${cache}" -mindepth 1 -type d -empty -delete
+      - name: Save repository cache
+        if: success() && steps.shell.outputs.present == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel-repo
+            ~/.cache/bazelisk
+          key: apps-android-repo-${{ hashFiles('MODULE.bazel.lock', 'Cargo.Bazel.lock', 'core/Cargo.lock') }}
+      - name: Save disk cache
+        if: success() && steps.shell.outputs.present == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: apps-android-disk-${{ github.sha }}
+      - name: Delete superseded caches
+        if: success() && steps.shell.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          mine="apps-android-disk-${GITHUB_SHA}"
+          gh cache list --ref "${GITHUB_REF}" --key apps-android-disk- --limit 100 --json id,key,createdAt \
+            | jq -r --arg mine "${mine}" '(map(select(.key==$mine))[0].createdAt) as $t
+                | if $t == null then empty else .[] | select(.key != $mine and .createdAt < $t) | "\(.id) \(.key)" end' \
+            | while read -r id key; do gh cache delete "${id}" || echo "::warning::could not delete ${key}"; done
+
+  ios:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Is the shell here
+        id: shell
+        run: echo "present=$([ -f ios/BUILD.bazel ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Restore repository cache
+        if: steps.shell.outputs.present == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel-repo
+            ~/.cache/bazelisk
+          key: apps-ios-repo-${{ hashFiles('MODULE.bazel.lock', 'Cargo.Bazel.lock', 'core/Cargo.lock') }}
+          restore-keys: |
+            apps-ios-repo-
+      - name: Restore disk cache
+        if: steps.shell.outputs.present == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: apps-ios-disk-${{ github.sha }}
+          restore-keys: |
+            apps-ios-disk-
+      - name: Mark cache epoch
+        if: steps.shell.outputs.present == 'true'
+        run: touch "$RUNNER_TEMP/disk-cache-marker"
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        if: steps.shell.outputs.present == 'true'
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+
+      - name: Test
+        if: steps.shell.outputs.present == 'true'
+        run: bazel test --config=ci --//:apps //ios/...
+
+      - name: Build the simulator app
+        if: steps.shell.outputs.present == 'true'
+        run: bazel build --config=ci --//:apps --//:environment=${{ github.ref == 'refs/heads/main' && 'live' || 'preview' }} //ios:app
+      - uses: actions/upload-artifact@v4
+        if: steps.shell.outputs.present == 'true'
+        with:
+          name: ios-simulator-app
+          path: bazel-bin/ios/app.ipa
+          retention-days: 14
+
+      - name: Prune disk cache
+        if: success() && steps.shell.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          cache="$HOME/.cache/bazel-disk"
+          [ -d "${cache}" ] || exit 0
+          find "${cache}" -type f ! -newer "$RUNNER_TEMP/disk-cache-marker" -delete
+          find "${cache}" -mindepth 1 -type d -empty -delete
+      - name: Save repository cache
+        if: success() && steps.shell.outputs.present == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel-repo
+            ~/.cache/bazelisk
+          key: apps-ios-repo-${{ hashFiles('MODULE.bazel.lock', 'Cargo.Bazel.lock', 'core/Cargo.lock') }}
+      - name: Save disk cache
+        if: success() && steps.shell.outputs.present == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: apps-ios-disk-${{ github.sha }}
+      - name: Delete superseded caches
+        if: success() && steps.shell.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          mine="apps-ios-disk-${GITHUB_SHA}"
+          gh cache list --ref "${GITHUB_REF}" --key apps-ios-disk- --limit 100 --json id,key,createdAt \
+            | jq -r --arg mine "${mine}" '(map(select(.key==$mine))[0].createdAt) as $t
+                | if $t == null then empty else .[] | select(.key != $mine and .createdAt < $t) | "\(.id) \(.key)" end' \
+            | while read -r id key; do gh cache delete "${id}" || echo "::warning::could not delete ${key}"; done

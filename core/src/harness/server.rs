@@ -45,7 +45,11 @@ struct Groups {
     next_group: u64,
 }
 
-/// The server.
+/// The server. Off the browser also a UniFFI object that is a
+/// [`Transport`], so a Swift or Kotlin test opens a
+/// [`crate::facade::Core`] over it and drives a whole group without a
+/// network or a sign-in ([`ModelServer::open`]).
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Object))]
 pub struct ModelServer {
     /// The relay.
     pub relay: RelayModel,
@@ -108,6 +112,52 @@ impl ModelServer {
     pub fn bucket_has(&self, key: &str) -> bool {
         self.bucket.lock().unwrap().contains_key(key)
     }
+}
+
+/// The server as the shells' tests hold it, through the bindings.
+#[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
+impl ModelServer {
+    /// A server at the origin, empty, deterministic from the seed (the
+    /// first 32 bytes; shorter is padded with zeros).
+    #[cfg_attr(not(target_arch = "wasm32"), uniffi::constructor)]
+    pub fn open(base_url: String, seed: Vec<u8>) -> std::sync::Arc<ModelServer> {
+        let mut bytes = [0u8; 32];
+        for (slot, b) in bytes.iter_mut().zip(seed.iter()) {
+            *slot = *b;
+        }
+        std::sync::Arc::new(ModelServer::new(&base_url, bytes))
+    }
+
+    /// A session token that signs in as the user: what a test hands to
+    /// `Core::set_session_token` instead of a login.
+    pub fn sign_in(&self, token: String, user_id: Uuid) {
+        self.session(&token, user_id);
+    }
+
+    /// Whether a blob is in the bucket.
+    pub fn has_blob(&self, key: String) -> bool {
+        self.bucket_has(&key)
+    }
+
+    /// Moves the relay's clock forward.
+    pub fn advance(&self, ms: i64) {
+        self.relay.advance(ms);
+    }
+
+    /// Runs the relay's hourly sweeps once: eviction and request expiry.
+    pub fn sweep(&self) {
+        self.relay.evict();
+        self.relay.expire_requests();
+    }
+
+    /// The network is down (every call fails) or back.
+    pub fn set_outage(&self, outage: bool) {
+        self.relay.set_outage(outage);
+        self.devices.set_outage(outage);
+    }
+}
+
+impl ModelServer {
 
     /// The models all learn of a membership.
     fn set_member(&self, group_id: Uuid, user_id: Uuid, role: Role, now: i64) {
@@ -487,6 +537,7 @@ fn wrapped_key_to(k: crate::keys::WrappedKey) -> proto::WrappedKey {
     proto::WrappedKey { id: k.id.to_string(), group_id: k.group_id.to_string(), key_id: k.key_id as i32, device_id: k.device_id.to_string(), wrapped: k.wrapped, wrapped_by_device: k.wrapped_by_device.to_string(), created_at_ms: 0, wrapped_by_public_key: k.wrapped_by_public_key }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl Transport for ModelServer {
