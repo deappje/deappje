@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 import type { Core, ModelServer, ObjectBody, ObjectView, SecretsSeam } from "../wasm/deappje_core.js";
 import { type Client, clientOver } from "./client";
@@ -8,9 +10,14 @@ import { webRandom } from "./seams/random";
 import { memorySecrets } from "./seams/secrets";
 import { memoryStorage } from "./seams/storage";
 
-/** The core for a test under Node: the .wasm read from beside its glue. */
+/**
+ * The core for a test under Node: the .wasm read from beside its glue. The
+ * path is built from `import.meta.url` as a string, since under jsdom
+ * `URL` is jsdom's class, which Node's `readFile` does not take.
+ */
 export function loadCoreForTests(): Promise<CoreModule> {
-  return loadCore(readFile(new URL("../wasm/deappje_core_bg.wasm", import.meta.url)).then((bytes) => new Uint8Array(bytes)));
+  const wasm = join(dirname(fileURLToPath(import.meta.url)), "..", "wasm", "deappje_core_bg.wasm");
+  return loadCore(readFile(wasm).then((bytes) => new Uint8Array(bytes)));
 }
 
 /** Bytes from hex. */
@@ -67,9 +74,10 @@ export interface Browser extends Kept {
   dispose(): void;
 }
 
-/** One model server and the browsers over it. */
+/** One model server and the browsers over it, sharing one clock: every write in a world is later than the one before. */
 export class World {
   readonly server: ModelServer;
+  readonly clock = testClock(1_700_000_000_000);
   private n = 0;
   private u = 0;
 
@@ -94,7 +102,7 @@ export class World {
   async browser(userId: string, kept?: Kept): Promise<Browser> {
     const n = ++this.n;
     const { storage, secrets, deviceSecret } = kept ?? { storage: memoryStorage(), secrets: memorySecrets(), deviceSecret: new Uint8Array(32).fill(n) };
-    const clock = testClock(1_700_000_000_000 + n * 1_000_000);
+    const clock = this.clock;
     const client = clientOver(this.module, { transport: this.server, storage, secrets, deviceKey: softwareDeviceKey(this.module, deviceSecret), random: webRandom, clock, origin: ORIGIN });
     const core = client.core;
     if (!kept) {
@@ -112,7 +120,7 @@ export class World {
   anonymous(): Browser {
     const n = ++this.n;
     const kept: Kept = { storage: memoryStorage(), secrets: memorySecrets(), deviceSecret: new Uint8Array(32).fill(n) };
-    const clock = testClock(1_700_000_000_000 + n * 1_000_000);
+    const clock = this.clock;
     const client = clientOver(this.module, { transport: this.server, ...kept, deviceKey: softwareDeviceKey(this.module, kept.deviceSecret), random: webRandom, clock, origin: ORIGIN });
     return { client, core: client.core, userId: "", clock, ...kept, dispose: () => client.dispose() };
   }

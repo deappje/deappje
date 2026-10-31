@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type Browser, failure, newGroup, post, USER_A, World } from "./core/testing";
+import { failure, newGroup, post, USER_A, World } from "./core/testing";
 
 // Feature suite, "Session and device" (docs/01-deappje/03-testing.md): the
 // shell's client over the wasm ModelServer, every seam in memory.
