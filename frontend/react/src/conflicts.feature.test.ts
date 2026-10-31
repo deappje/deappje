@@ -11,6 +11,10 @@ function event(f: Event): ObjectBody {
   return { type: "Event", fields: f } as ObjectBody;
 }
 
+function album(title: string): ObjectBody {
+  return { type: "Album", fields: { title } } as ObjectBody;
+}
+
 let world: World;
 beforeAll(async () => {
   world = await World.open(15);
@@ -48,51 +52,50 @@ describe("conflicts", () => {
   });
 
   it("F41 same field", async () => {
+    // An album: any member edits it (a post is its author's alone, F20).
     const { a, b, g, done } = await pair("Same field");
-    const p = await post(a, g, "draft");
+    const al = await a.core.createObject(g, undefined, album("Summer"));
     await syncAll(a, b);
-    await a.core.editObject(g, p, { type: "Post", fields: { text: "A's version" } });
-    await b.core.editObject(g, p, { type: "Post", fields: { text: "B's version" } });
+    await a.core.editObject(g, al, album("A's title"));
+    await b.core.editObject(g, al, album("B's title"));
     // A pushes first; B's push is the later one and wins the field.
     await a.core.sync();
-    expect((await a.core.readObject(g, p))?.body).toEqual({ type: "Post", fields: { text: "A's version" } });
+    expect((await a.core.readObject(g, al))?.body).toEqual(album("A's title"));
     const rebased = await b.core.sync();
     expect(rebased.invalid).toEqual([]);
-    expect((await b.core.readObject(g, p))).toMatchObject({ pending: false, body: { type: "Post", fields: { text: "B's version" } } });
+    expect(await b.core.readObject(g, al)).toMatchObject({ pending: false, body: album("B's title") });
     // The loser's local view updates on its next sync.
-    expect((await a.core.readObject(g, p))?.body).toEqual({ type: "Post", fields: { text: "A's version" } });
+    expect((await a.core.readObject(g, al))?.body).toEqual(album("A's title"));
     const caught = await a.core.sync();
     expect(caught.changed).toContain(g);
-    expect((await a.core.readObject(g, p))?.body).toEqual({ type: "Post", fields: { text: "B's version" } });
+    expect((await a.core.readObject(g, al))?.body).toEqual(album("B's title"));
     done();
   });
 
   it("F42 edit vs delete", async () => {
+    // B's own post, which any member may delete.
     const { a, b, g, done } = await pair("Edit vs delete");
-    const p = await post(a, g, "to go");
-    await syncAll(a, b);
+    const p = await post(b, g, "to go");
+    await syncAll(b, a);
     await b.core.editObject(g, p, { type: "Post", fields: { text: "to stay" } });
     expect((await b.core.readObject(g, p))?.pending).toBe(true);
     await a.core.deleteObject(g, p);
     await a.core.sync();
-    // B's edit meets the tombstone: dropped, the group reported changed.
+    // B's edit meets the tombstone: dropped, reported by its object.
     const report = await b.core.sync();
+    expect(report.edits_dropped).toEqual([{ group_id: g, object_id: p }]);
     expect(report.changed).toContain(g);
     expect(report.invalid).toEqual([]);
     expect(report.failed).toEqual([]);
     expect(await b.core.readObject(g, p)).toBeUndefined();
     expect((await b.core.listObjects(g)).map((o) => o.id)).not.toContain(p);
     // Nothing of it comes back: a further sync on either side changes nothing.
-    expect((await b.core.sync()).changed).not.toContain(g);
+    const again = await b.core.sync();
+    expect(again.changed).not.toContain(g);
+    expect(again.edits_dropped).toEqual([]);
     expect((await a.core.sync()).changed).not.toContain(g);
     expect(await a.core.readObject(g, p)).toBeUndefined();
     done();
-  });
-
-  it.skip("F42 edit vs delete: the drop is reported as EditDropped", () => {
-    // The core's EditDropped event is folded into SyncReport.changed by
-    // Core.sync; the report carries no list of dropped edits. The test
-    // above asserts the drop through the rows and `changed`.
   });
 
   it("F43 invalid rebase", async () => {

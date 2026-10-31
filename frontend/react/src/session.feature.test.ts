@@ -67,7 +67,7 @@ describe("session and device", () => {
     expect(await again.core.fingerprint()).toBe(fingerprint);
     expect(again.storage.keys(`k/${g}/`)).toEqual(keys);
     expect(await again.core.listObjects(g)).toEqual(before);
-    expect((await again.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "holder" });
+    expect((await again.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "holder", role: "admin" });
     // And it goes on as that device: a sync changes nothing, a post lands.
     const report = await again.core.sync();
     expect(report).toMatchObject({ keys_received: [], started_over: [], failed: [] });

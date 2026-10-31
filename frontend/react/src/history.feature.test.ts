@@ -33,16 +33,16 @@ describe("a second device, history and the window", () => {
     const asked = await a2.core.sync();
     expect(asked.keys_received).toEqual([]);
     expect(asked.failed).toEqual([]);
-    expect((await a2.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: false, phase: "new" });
+    expect((await a2.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: false, phase: "new", role: "admin" });
     expect(await a2.core.listObjects(g)).toEqual([]);
 
     const pending = (await a.core.pendingKeyRequests()).filter((r) => r.group_id === g);
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ user_id: A, platform: "web", device_id: await a2.core.deviceId(), fingerprint: await a2.core.fingerprint() });
-    // No invite vouches for a device of one's own: the fingerprint decides.
-    // The core answers "none" (the field is absent), not false.
-    expect(pending[0].invite_verified).not.toBe(true);
+    // No invite vouches for a device of one's own: the field is absent and
+    // the fingerprint decides.
     expect(pending[0].invite_verified).toBeUndefined();
+    expect("invite_verified" in pending[0]).toBe(false);
     await a.core.approveKeyRequest(pending[0].request_id);
 
     const report = await a2.core.sync();
@@ -148,12 +148,15 @@ describe("a second device, history and the window", () => {
     expect(await phase(b, g)).toBe("catching_up");
     expect(await phase(c, g)).toBe("catching_up");
 
-    // One sync of A serves both.
+    // One sync of A serves both: the second request is covered by the
+    // first, so one upload is one request served.
     const served = await a.core.sync();
     expect(served.failed).toEqual([]);
+    expect(served.history_served).toBe(1);
     for (const joiner of [b, c]) {
       const done = await joiner.core.sync();
       expect(done.changed).toContain(g);
+      expect(done.history_served).toBe(0);
       expect(await phase(joiner, g)).toBe("holder");
       for (const p of posts) {
         expect(await joiner.core.readObject(g, p)).toMatchObject({ author: A, pending: false });
@@ -165,23 +168,17 @@ describe("a second device, history and the window", () => {
     c.dispose();
   });
 
-  it.skip("F16 joiners together: A's SyncReport shows one request served", () => {
-    // SyncReport has no count of history requests served: the core's
-    // HistoryServed event is not surfaced by Core.sync. The test above
-    // asserts the outcome (both joiners hold everything after one sync of A).
-  });
-
   it("F17 start over", async () => {
     const { A, B } = world.users();
     const a = await world.browser(A);
     const b = await world.browser(B);
     const g = await newGroup(a, "Away");
     await addMember(a, b, g);
-    const p1 = await post(a, g, "old");
-    await syncAll(a, b);
+    const p1 = await post(b, g, "old");
+    await syncAll(b, a);
 
-    // B edits offline and stays away; A writes on, a window passes, A
-    // writes again, and the sweep drops B's row with the old rows.
+    // B edits its post offline and stays away; A writes on, a window
+    // passes, A writes again, and the sweep drops B's row with the old rows.
     await b.core.editObject(g, p1, { type: "Post", fields: { text: "old, edited away" } });
     const p2 = await post(a, g, "meanwhile");
     await a.core.sync();

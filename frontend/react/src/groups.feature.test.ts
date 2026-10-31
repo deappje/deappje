@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { addMember, addOwnDevice, invite, newGroup, ORIGIN, post, profile, syncAll, World } from "./core/testing";
+import { addMember, addOwnDevice, failure, invite, newGroup, ofType, ORIGIN, post, profile, syncAll, World } from "./core/testing";
 
 // Feature suite, "Groups and membership" (docs/01-deappje/03-testing.md).
 
@@ -20,12 +20,12 @@ describe("groups and membership", () => {
     const profileId = await a.core.createObject(g, undefined, profile("Us", "the three of us"));
     expect(profileId).toBe(a.core.groupProfileId(g));
     // Before the sync: the key held, the profile pending.
-    expect((await a.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "new" });
+    expect((await a.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "new", role: "admin" });
     expect(await a.core.readObject(g, profileId)).toMatchObject({ pending: true, seq: 0, author: A, body: profile("Us", "the three of us") });
     const report = await a.core.sync();
     expect(report.changed).toContain(g);
     expect(report.failed).toEqual([]);
-    expect((await a.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "holder" });
+    expect((await a.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "holder", role: "admin" });
     // The creator is an admin, holding key 1.
     const members = await a.core.listMembers(g);
     expect(members).toHaveLength(1);
@@ -53,7 +53,7 @@ describe("groups and membership", () => {
     const joined = await b.core.join(link);
     expect(joined.group_id).toBe(g);
     expect(joined.request_id).toMatch(UUID);
-    expect((await b.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: false, phase: "new" });
+    expect((await b.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: false, phase: "new", role: "member" });
     expect(await b.core.listObjects(g)).toEqual([]);
 
     // A sees B's request, the invite vouching for it, with B's fingerprint.
@@ -77,7 +77,7 @@ describe("groups and membership", () => {
     expect(report.keys_received).toEqual([g]);
     expect(report.changed).toContain(g);
     expect(report.failed).toEqual([]);
-    expect((await b.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "holder" });
+    expect((await b.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "holder", role: "member" });
     const seen = await b.core.readObject(g, p);
     expect(seen).toMatchObject({ id: p, author: A, pending: false, body: { type: "Post", fields: { text: "hello" } } });
     expect(seen!.seq).toBeGreaterThan(0);
@@ -95,24 +95,36 @@ describe("groups and membership", () => {
     const b = await world.browser(B);
     const g = await newGroup(a, "Readers");
     await addMember(a, b, g, "viewer");
+    expect((await b.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: true, phase: "holder", role: "viewer" });
     expect(await b.core.listMembers(g)).toMatchObject([
       { user_id: A, role: "admin" },
       { user_id: B, role: "viewer" },
     ]);
     // A viewer reads.
-    expect((await b.core.readObject(g, b.core.groupProfileId(g)))?.body).toEqual(profile("Readers"));
-    // Its write is refused by the server: the sync reports the group failed
-    // with permission_denied, nothing reaches A.
-    const p = await post(b, g, "a viewer's post");
-    const refused = await b.core.sync();
-    expect(refused.failed).toHaveLength(1);
-    expect(refused.failed[0]).toContain(g);
-    expect(refused.failed[0]).toMatch(/permission_denied|viewer/);
+    const profileId = b.core.groupProfileId(g);
+    expect((await b.core.readObject(g, profileId))?.body).toEqual(profile("Readers"));
+    // Its writes are refused with `forbidden` before anything enters the
+    // outbox: the core knows the caller's role from listGroups.
+    const before = await b.core.listObjects(g);
+    expect(await failure(post(b, g, "a viewer's post"))).toMatchObject({ name: "CoreError", kind: "forbidden" });
+    expect(await failure(b.core.editObject(g, profileId, profile("Readers!")))).toMatchObject({ kind: "forbidden" });
+    expect(await failure(b.core.deleteObject(g, profileId))).toMatchObject({ kind: "forbidden" });
+    expect(await b.core.listObjects(g)).toEqual(before);
+    expect(before.every((o) => !o.pending)).toBe(true);
+    const idle = await b.core.sync();
+    expect(idle.changed).not.toContain(g);
+    expect(idle.failed).toEqual([]);
     await a.core.sync();
-    expect(await a.core.readObject(g, p)).toBeUndefined();
-    expect((await b.core.readObject(g, p))?.pending).toBe(true);
-    // After setMemberRole the same write lands.
+    expect(await ofType(a, g, "Post")).toEqual([]);
+
+    // After setMemberRole and a sync (which tells the device its new role)
+    // the same write lands.
     await a.core.setMemberRole(g, B, "member");
+    expect(await failure(post(b, g, "a viewer's post"))).toMatchObject({ kind: "forbidden" });
+    await b.core.sync();
+    expect((await b.core.listGroups()).find((x) => x.id === g)?.role).toBe("member");
+    const p = await post(b, g, "a viewer's post");
+    expect((await b.core.readObject(g, p))?.pending).toBe(true);
     const landed = await b.core.sync();
     expect(landed.failed).toEqual([]);
     expect(landed.changed).toContain(g);
@@ -121,13 +133,6 @@ describe("groups and membership", () => {
     expect(await a.core.readObject(g, p)).toMatchObject({ author: B, body: { type: "Post", fields: { text: "a viewer's post" } } });
     a.dispose();
     b.dispose();
-  });
-
-  it.skip("F08 roles: a viewer's createObject is refused (api / permission_denied) with the outbox empty afterwards", () => {
-    // The core's createObject checks no role: the write goes into the
-    // outbox and the server refuses the push (SyncReport.failed carries
-    // permission_denied), and the outbox keeps the write until the role
-    // allows it. The test above asserts that behaviour.
   });
 
   it("F09 removal and rotation", async () => {

@@ -85,6 +85,10 @@ describe("object types", () => {
     expect(edited?.body).toEqual({ type: "Post", fields: { text: "hello, edited" } });
     expect(edited!.edited_at_ms).toBeGreaterThan(edited!.authored_at_ms);
     expect(edited!.authored_at_ms).toBe(mine!.authored_at_ms);
+    // Another member's edit is refused: only the author's devices edit a
+    // post; others add children.
+    expect(await failure(b.core.editObject(g, p, { type: "Post", fields: { text: "B's words" } }))).toMatchObject({ name: "CoreError", kind: "forbidden" });
+    expect(await b.core.readObject(g, p)).toMatchObject({ pending: false, body: { type: "Post", fields: { text: "hello, edited" } } });
 
     // A comment and a photo under it, from B; A's delete takes them along.
     const c = await b.core.createObject(g, p, { type: "Comment", fields: { text: "nice" } });
@@ -99,13 +103,6 @@ describe("object types", () => {
     expect(await ofType(b, g, "Post")).toEqual([]);
     expect(await ofType(b, g, "Comment")).toEqual([]);
     done();
-  });
-
-  it.skip("F20 post: only the author's devices edit", () => {
-    // The core's editObject accepts any member's edit of a post (the e2e
-    // test has B editing A's post); the web shell keeps the rule only in
-    // the Timeline screen, which offers Edit and Delete on one's own posts
-    // (F63). Nothing in the client refuses another author's edit.
   });
 
   it("F21 comment", async () => {
@@ -152,11 +149,12 @@ describe("object types", () => {
     await syncAll(a, b);
     expect(await b.core.readObject(g, r1)).toMatchObject({ parent_id: p, author: A, body: { type: "Reaction", fields: { emoji: "👍" } } });
 
-    // A second reaction by the same user is an edit of the same object:
-    // the shell finds its own under the parent and edits it.
-    const mine = (await ofType(a, g, "Reaction")).find((o) => o.parent_id === p && o.author === A);
-    expect(mine?.id).toBe(r1);
-    await a.core.editObject(g, r1, body("Reaction", { emoji: "❤️" }));
+    // A second createObject by the same user edits the same object: one
+    // reaction per user per target; nobody else edits it.
+    expect(await a.core.createObject(g, p, body("Reaction", { emoji: "❤️" }))).toBe(r1);
+    expect((await ofType(a, g, "Reaction")).filter((o) => o.parent_id === p && o.author === A)).toHaveLength(1);
+    expect(fields<{ emoji: string }>(await a.core.readObject(g, r1)).emoji).toBe("❤️");
+    expect(await failure(b.core.editObject(g, r1, body("Reaction", { emoji: "x" })))).toMatchObject({ kind: "forbidden" });
     await syncAll(a, b);
     expect((await ofType(b, g, "Reaction")).filter((o) => o.parent_id === p && o.author === A)).toHaveLength(1);
     expect(fields<{ emoji: string }>(await b.core.readObject(g, r1)).emoji).toBe("❤️");
@@ -210,17 +208,14 @@ describe("object types", () => {
     expect(fields<Photo>(await b.core.readObject(g, ph)).caption).toBe("all of us");
     expect(fields<Photo>(await b.core.readObject(g, ph)).full).toEqual(file);
 
+    // The file goes from the bucket once the tombstone is pushed.
     await b.core.deleteObject(g, ph);
+    expect(world.server.hasBlob(`g/${g}/o/${ph}/full`)).toBe(true);
     await syncAll(b, a);
+    expect(world.server.hasBlob(`g/${g}/o/${ph}/full`)).toBe(false);
     expect(await a.core.readObject(g, ph)).toBeUndefined();
     expect(await ofType(a, g, "Photo")).toEqual([]);
     done();
-  });
-
-  it.skip("F23 photo: the file is gone from the bucket after the photo's delete", () => {
-    // Neither the core nor the ModelServer removes a blob on a tombstone:
-    // hasBlob stays true after the delete. 02-relay.md gives the cleanup to
-    // the storage service, which the model does not have.
   });
 
   it("F24 album", async () => {
@@ -347,6 +342,12 @@ describe("object types", () => {
     expect(poolId).toBe(uuidV5(g, Buffer.from("pool")));
     await a.core.createObjectWithId(g, poolId, undefined, body("ExpensePool", { title: "General", archived: false }));
     expect(await a.core.readObject(g, poolId)).toMatchObject({ id: poolId, body: { type: "ExpensePool", fields: { title: "General", archived: false } } });
+    await syncAll(a, b);
+    // Created again, the singleton is edited, not replaced.
+    await b.core.createObjectWithId(g, poolId, undefined, body("ExpensePool", { title: "Shared", archived: false }));
+    expect(await b.core.readObject(g, poolId)).toMatchObject({ id: poolId, author: A, pending: true, body: { type: "ExpensePool", fields: { title: "Shared", archived: false } } });
+    await syncAll(b, a);
+    expect((await ofType(a, g, "ExpensePool")).map((o) => [o.id, (o.body.fields as { title: string }).title])).toEqual([[poolId, "Shared"]]);
 
     const date = 1_800_000 * 1000;
     const dinner: Expense = { amount: 3000, currency: "EUR", paid_by: A, participants: [{ user_id: A, share: 0 }, { user_id: B, share: 0 }], split: "Equal", kind: "Expense", description: "dinner", date };
@@ -372,12 +373,16 @@ describe("object types", () => {
     expect(fields<Expense>(await a.core.readObject(g, e1))).toEqual(merged);
     expect(fields<Expense>(await b.core.readObject(g, e1))).toEqual(merged);
 
-    // A settlement is append-only: deleted, never edited.
+    // A settlement is append-only: an edit is refused, by its author too;
+    // a delete is allowed.
     const s: Settlement = { from: B, to: A, amount: 1500, currency: "EUR", date };
     const st = await b.core.createObject(g, poolId, body("Settlement", s));
     expect(await failure(b.core.createObject(g, poolId, body("Settlement", { ...s, to: B })))).toMatchObject({ kind: "invalid" });
     await syncAll(b, a);
     expect(await a.core.readObject(g, st)).toMatchObject({ parent_id: poolId, author: B, body: { type: "Settlement", fields: s } });
+    expect(await failure(b.core.editObject(g, st, body("Settlement", { ...s, amount: 1600 })))).toMatchObject({ name: "CoreError", kind: "forbidden" });
+    expect(await failure(a.core.editObject(g, st, body("Settlement", { ...s, amount: 1600 })))).toMatchObject({ kind: "forbidden" });
+    expect(fields<Settlement>(await b.core.readObject(g, st))).toEqual(s);
     await a.core.deleteObject(g, st);
     await syncAll(a, b);
     expect(await b.core.readObject(g, st)).toBeUndefined();
@@ -391,13 +396,6 @@ describe("object types", () => {
     await syncAll(a, b);
     expect((await ofType(b, g, "Expense")).map((o) => o.id).sort()).toEqual([e1, e3, tickets].sort());
     done();
-  });
-
-  it.skip("F27 settlement: an edit is refused", () => {
-    // The core's editObject does not refuse an append-only type: a
-    // settlement (and an invite secret, a note update) can be edited through
-    // it. The strategy lives in the core (Strategy::AppendOnly); the shell
-    // has no edit path for a settlement to refuse in.
   });
 
   it("F28 ticket share", async () => {
@@ -494,7 +492,8 @@ describe("object types", () => {
     expect(await failure(b.core.createObject(g, datePoll, body("Vote", { answers: [{ option_id: d1, answer: "Yes" }, { option_id: d1, answer: "No" }] })))).toMatchObject({ kind: "invalid" });
     await syncAll(b, a);
     expect(await a.core.readObject(g, vote)).toMatchObject({ parent_id: poll, author: B, body: { type: "Vote", fields: { answers: [{ option_id: o1, answer: "Yes" }] } } });
-    await b.core.editObject(g, vote, body("Vote", { answers: [{ option_id: o2, answer: "Yes" }] }));
+    expect(await b.core.createObject(g, poll, body("Vote", { answers: [{ option_id: o2, answer: "Yes" }] }))).toBe(vote);
+    expect(await failure(a.core.editObject(g, vote, body("Vote", { answers: [] })))).toMatchObject({ kind: "forbidden" });
     await syncAll(b, a);
     expect(fields<Vote>(await a.core.readObject(g, vote)).answers).toEqual([{ option_id: o2, answer: "Yes" }]);
     expect((await ofType(a, g, "Vote")).filter((o) => o.parent_id === poll)).toHaveLength(1);
@@ -596,16 +595,18 @@ describe("object types", () => {
     await a.core.editObject(g, mine, body("MemberProfile", withYear));
     await syncAll(a, b);
     expect(fields<MemberProfile>(await b.core.readObject(g, mine))).toEqual(withYear);
+    expect(fields<MemberProfile>(await a.core.readObject(g, mine))).toEqual(withYear);
     await b.core.deleteObject(g, bobs);
     await syncAll(b, a);
     expect(await a.core.readObject(g, bobs)).toBeUndefined();
     done();
   });
 
-  it.skip("F33 member profile: only its user edits it", () => {
-    // The core's editObject does not check the author of a per-user
-    // singleton: another member's edit of a member profile is accepted and
-    // pushed. Nothing in the client refuses it either.
+  it.skip("F33 member profile: another member's edit is refused with forbidden", () => {
+    // The core refuses another author's edit for Post, Comment, Message and
+    // the per-user-singleton types (Reaction, Vote); MemberProfile's
+    // strategy is Rebase (06-object-types.md), so another member's edit of
+    // a member profile is still accepted and pushed.
   });
 
   it("F34 invite secret", async () => {
@@ -630,6 +631,10 @@ describe("object types", () => {
     await a.core.approveKeyRequest(pending[0].request_id);
     await b.core.sync();
     expect(await b.core.readObject(g, secrets[0].id)).toMatchObject({ author: A, body: { type: "InviteSecret", fields: secret } });
+    // Append-only: an edit is refused, the author's too.
+    expect(await failure(a.core.editObject(g, secrets[0].id, body("InviteSecret", secret)))).toMatchObject({ name: "CoreError", kind: "forbidden" });
+    expect(await failure(b.core.editObject(g, secrets[0].id, body("InviteSecret", secret)))).toMatchObject({ kind: "forbidden" });
+    expect((await a.core.readObject(g, secrets[0].id))?.pending).toBe(false);
     // Its delete, like any object's, is seen by the other device.
     await a.core.deleteObject(g, secrets[0].id);
     await syncAll(a, b);
@@ -638,17 +643,9 @@ describe("object types", () => {
     b.dispose();
   });
 
-  it.skip("F34 invite secret: never edited", () => {
-    // Append-only is not enforced by the core's editObject (see F27), and
-    // the shell has no edit path for an invite secret: there is nothing to
-    // refuse and no refusal to assert.
-  });
-
   it.skip("F35 unknown field", () => {
-    // Neither the client nor the ModelServer offers a way to write an
-    // object with a schema version above the client's: the core seals every
-    // value at its own version, and the model server stores bytes it is
-    // handed only through the core. The core's may_write rule is tested in
-    // core/src/schema.rs.
+    // The core's conformance vectors cover this; the shell skips it until
+    // the in-memory server can hand out an object at a newer schema version
+    // (03-testing.md).
   });
 });

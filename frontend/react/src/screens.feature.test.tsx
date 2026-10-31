@@ -95,7 +95,7 @@ describe("screens", () => {
     await screen.findByText("Waiting for a member to approve this browser");
     expect(screen.getByText("no key yet")).toBeDefined();
     expect(screen.getByRole("link", { name: /Waiting for a member/ }).getAttribute("href")).toBe(`/g/${g}`);
-    expect((await b.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: false, phase: "new" });
+    expect((await b.core.listGroups()).find((x) => x.id === g)).toEqual({ id: g, holds_keys: false, phase: "new", role: "member" });
     expect((await a.core.pendingKeyRequests()).filter((r) => r.group_id === g)).toHaveLength(1);
     a.dispose();
     b.dispose();

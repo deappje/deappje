@@ -54,7 +54,7 @@ describe("two browsers share a group through the wasm core", () => {
     const joined = await b.join(ORIGIN + link);
     expect(joined.group_id).toBe(g);
     const groupsOfB = await b.listGroups();
-    expect(groupsOfB).toEqual([{ id: g, holds_keys: false, phase: "new" }]);
+    expect(groupsOfB).toEqual([{ id: g, holds_keys: false, phase: "new", role: "member" }]);
     expect(await b.listObjects(g)).toEqual([]);
 
     // A sees the request, the invite vouching for it, and approves.
@@ -79,11 +79,13 @@ describe("two browsers share a group through the wasm core", () => {
     expect(profileOfB?.body).toEqual({ type: "GroupProfile", fields: { name: "Us", description: "", avatar: [], kind: "Group" } });
     expect(await b.listMembers(g)).toMatchObject([{ user_id: USER_A, role: "admin" }, { user_id: USER_B, role: "member" }]);
 
-    // B edits A's post; A deletes it; both see the end of it.
-    await b.editObject(g, post, { type: "Post", fields: { text: "hello!" } });
-    await b.sync();
+    // Only the author edits a post: B's edit is refused, A's reaches B.
+    // Then A deletes it and both see the end of it.
+    await expect(b.editObject(g, post, { type: "Post", fields: { text: "hello!" } })).rejects.toMatchObject({ name: "CoreError", kind: "forbidden" });
+    await a.editObject(g, post, { type: "Post", fields: { text: "hello!" } });
     await a.sync();
-    expect((await a.readObject(g, post))?.body).toEqual({ type: "Post", fields: { text: "hello!" } });
+    await b.sync();
+    expect((await b.readObject(g, post))?.body).toEqual({ type: "Post", fields: { text: "hello!" } });
     await a.deleteObject(g, post);
     await a.sync();
     await b.sync();
