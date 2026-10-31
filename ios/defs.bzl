@@ -85,6 +85,7 @@ def ios_test(name, srcs, deps = [], **kwargs):
     The module is named after the target in UpperCamelCase ("device_key"
     becomes DeviceKeyTests). Runs on the simulator the default runner
     picks; `--ios_simulator_device` and `--ios_simulator_version` choose.
+    `timeout` is "long" unless given.
     """
     module = "".join([part.capitalize() for part in name.split("_")])
     swift_library(
@@ -95,6 +96,10 @@ def ios_test(name, srcs, deps = [], **kwargs):
         target_compatible_with = IOS_ONLY,
         deps = deps,
     )
+    # A cold simulator boot on a CI runner takes minutes, and every test
+    # waits behind it: Bazel's default of five minutes timed four of eight
+    # out on macos-latest while the same eight passed here.
+    kwargs.setdefault("timeout", "long")
     ios_unit_test(
         name = name,
         minimum_os_version = MINIMUM_OS_VERSION,
