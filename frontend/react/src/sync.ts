@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type Client, describeError, type SyncReport } from "./core";
+import { asCoreError, type Client, describeError, type SyncReport } from "./core";
 
 /** What the periodic sync tells the screens. */
 export interface SyncState {
@@ -8,6 +8,8 @@ export interface SyncState {
   syncing: boolean;
   last: SyncReport | undefined;
   error: string | undefined;
+  /** The last sync could not reach the server at all: the browser is offline, or the server is down. */
+  offline: boolean;
   /** One sync now (after a write, after an approval). */
   syncNow: () => Promise<void>;
 }
@@ -23,6 +25,7 @@ export function useSync(client: Client | undefined, enabled: boolean, periodMs =
   const [syncing, setSyncing] = useState(false);
   const [last, setLast] = useState<SyncReport | undefined>();
   const [error, setError] = useState<string | undefined>();
+  const [offline, setOffline] = useState(false);
   const running = useRef(false);
 
   const syncNow = useCallback(async () => {
@@ -33,8 +36,11 @@ export function useSync(client: Client | undefined, enabled: boolean, periodMs =
       const report = await client.core.sync();
       setLast(report);
       setError(report.failed.length > 0 ? report.failed.join("; ") : undefined);
+      setOffline(false);
     } catch (e) {
       setError(describeError(e));
+      const core = asCoreError(e);
+      setOffline(core?.kind === "api" && core.code === "unavailable");
     } finally {
       running.current = false;
       setSyncing(false);
@@ -58,5 +64,5 @@ export function useSync(client: Client | undefined, enabled: boolean, periodMs =
     };
   }, [client, enabled, periodMs, syncNow]);
 
-  return { tick, syncing, last, error, syncNow };
+  return { tick, syncing, last, error, offline, syncNow };
 }

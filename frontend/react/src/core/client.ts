@@ -1,4 +1,4 @@
-import type { Core } from "../wasm/deappje_core.js";
+import type { ClockSeam, Core, DeviceKeySeam, RandomSeam, SecretsSeam, StorageSeam, TransportSeam } from "../wasm/deappje_core.js";
 import type { CoreModule } from "./load";
 import { systemClock } from "./seams/clock";
 import { type DeviceKeyKind, newDeviceSecret, rememberedDeviceSecret, softwareDeviceKey } from "./seams/deviceKey";
@@ -20,6 +20,44 @@ export interface Client {
   dispose(): void;
 }
 
+/** The six seams the core is opened over, and the origin it talks to. */
+export interface Seams {
+  transport: TransportSeam;
+  storage: StorageSeam;
+  secrets: SecretsSeam;
+  deviceKey: DeviceKeySeam;
+  random: RandomSeam;
+  clock: ClockSeam;
+  origin: string;
+}
+
+/** The persistent store's handle, when the key and the store outlive the tab. */
+export type Kept = Pick<PersistentStorage, "flushed" | "close">;
+
+/**
+ * The core over the given seams: how every client is made, the browser's
+ * (`openClient`) and a test's over the wasm `ModelServer` alike. With
+ * `kept`, the store is the persistent one it names and the client waits
+ * for its writes on `flush`; without, everything lives for the session.
+ */
+export function clientOver(module: CoreModule, seams: Seams, kept?: Kept): Client {
+  const core = new module.Core(seams.transport, seams.storage, seams.secrets, seams.deviceKey, seams.random, seams.clock, seams.origin);
+  if (!kept) {
+    return { core, remember: false, deviceKey: "software-memory", storage: "memory", flush: async () => {}, dispose: () => core.free() };
+  }
+  return {
+    core,
+    remember: true,
+    deviceKey: "software-indexeddb",
+    storage: "indexeddb",
+    flush: () => kept.flushed(),
+    dispose: () => {
+      core.free();
+      kept.close();
+    },
+  };
+}
+
 /**
  * Opens the core as this browser: against the deployment's origin, over
  * `fetch`, the platform's entropy and clock, and, when the browser is
@@ -29,20 +67,8 @@ export interface Client {
 export async function openClient(module: CoreModule, { remember, origin }: { remember: boolean; origin: string }): Promise<Client> {
   const transport = fetchTransport(origin);
   if (!remember) {
-    const core = new module.Core(transport, memoryStorage(), memorySecrets(), softwareDeviceKey(module, newDeviceSecret()), webRandom, systemClock, origin);
-    return { core, remember, deviceKey: "software-memory", storage: "memory", flush: async () => {}, dispose: () => core.free() };
+    return clientOver(module, { transport, storage: memoryStorage(), secrets: memorySecrets(), deviceKey: softwareDeviceKey(module, newDeviceSecret()), random: webRandom, clock: systemClock, origin });
   }
   const [storage, secret]: [PersistentStorage, Uint8Array] = await Promise.all([openIndexedDbStorage(), rememberedDeviceSecret()]);
-  const core = new module.Core(transport, storage, storedSecrets(localStorage), softwareDeviceKey(module, secret), webRandom, systemClock, origin);
-  return {
-    core,
-    remember,
-    deviceKey: "software-indexeddb",
-    storage: "indexeddb",
-    flush: () => storage.flushed(),
-    dispose: () => {
-      core.free();
-      storage.close();
-    },
-  };
+  return clientOver(module, { transport, storage, secrets: storedSecrets(localStorage), deviceKey: softwareDeviceKey(module, secret), random: webRandom, clock: systemClock, origin }, storage);
 }
