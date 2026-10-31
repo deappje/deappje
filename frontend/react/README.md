@@ -19,7 +19,7 @@ sends `/api/` to the app and `/.ory/` to Kratos. No image, no pod.
 | `//frontend/react:build` | the production bundle (`dist/`, the `.wasm` content-hashed under `dist/assets/`), the `static` artifact's content |
 | `//frontend/react:wasm` | the core's glue and `.wasm` from `//core:core_wasm`, as `src/wasm/` (generated, never committed) |
 | `//frontend/react:typecheck` | `tsc` over `src/`, tests included: Vite strips types without checking them, so this test is what fails on a type error |
-| `//frontend/react:test` | vitest under Node: the seams' unit tests and the end-to-end test of two browsers over the core's in-memory `ModelServer` |
+| `//frontend/react:test` | vitest: the seams' unit tests, the end-to-end test of two browsers over the core's in-memory `ModelServer`, and the feature suite (`src/*.feature.test.ts`, F01-F64 of `docs/01-deappje/03-testing.md`; the screens under jsdom) |
 | `//frontend/react:start` | the dev server (`ibazel run //frontend/react:start`), `/api` proxied to an app on localhost:8080 and `/.ory` to a Kratos on localhost:4433 |
 
 ```sh
@@ -38,7 +38,9 @@ src/
     client.ts      opens a Core over the seams, remembered or for the session
     session.ts     how the cookie session reaches the core; "remember this browser"
     seams/         random, clock, secrets, deviceKey, storage, transport
+    testing.ts     the tests' world: browsers over the wasm ModelServer
     e2e.test.ts    two browsers over the wasm ModelServer
+  *.feature.test.ts(x)  the feature suite, one file per block of 03-testing.md
   App.tsx          opens the client, routes, syncs
   router.ts        in-app navigation (no reload: a session-only key would be lost)
   sync.ts          sync on load, on focus and every 30 s while visible

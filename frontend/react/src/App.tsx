@@ -119,13 +119,14 @@ export function App({ module }: { module: CoreModule }) {
   else screen = <Groups client={client} sync={sync} />;
 
   return (
-    <Shell signedIn onLink={onLink} syncing={sync.syncing} syncError={sync.error}>
+    <Shell signedIn onLink={onLink} syncing={sync.syncing} syncError={sync.error} offline={sync.offline}>
       {screen}
     </Shell>
   );
 }
 
-function Shell({ children, signedIn, onLink, syncing, syncError }: { children: React.ReactNode; signedIn: boolean; onLink: ReturnType<typeof useLinkClick>; syncing?: boolean; syncError?: string }) {
+/** The frame of every screen: the brand, the navigation and, signed in, the sync indicator. */
+export function Shell({ children, signedIn, onLink, syncing, syncError, offline }: { children: React.ReactNode; signedIn: boolean; onLink: ReturnType<typeof useLinkClick>; syncing?: boolean; syncError?: string; offline?: boolean }) {
   return (
     <>
       <header className="topbar">
@@ -145,7 +146,7 @@ function Shell({ children, signedIn, onLink, syncing, syncError }: { children: R
                 This browser
               </a>
               <span className="sync" title={syncError}>
-                {syncing ? "syncing…" : syncError ? "sync failed" : ""}
+                {syncing ? "syncing…" : offline ? "offline" : syncError ? "sync failed" : ""}
               </span>
             </>
           )}
