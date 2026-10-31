@@ -1,0 +1,16 @@
+# The six seams the core needs from the platform (core/src/shell.rs,
+# core/src/transport.rs), in Swift: entropy, the clock, the Keychain, the
+# device key, the file store and URLSession. No logic of the core's: the
+# shell never parses an object value, never holds a group key, never
+# speaks to the server itself.
+load("@rules_swift//swift:swift.bzl", "swift_library")
+load("//ios:defs.bzl", "IOS_ONLY")
+
+swift_library(
+    name = "shell",
+    srcs = glob(["*.swift"]),
+    module_name = "DeappjeShell",
+    target_compatible_with = IOS_ONLY,
+    visibility = ["//ios:__subpackages__"],
+    deps = ["//ios/core"],
+)

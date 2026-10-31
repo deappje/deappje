@@ -1,0 +1,22 @@
+# The app: SwiftUI screens over observable models that hold the one Core.
+# The models are public so the tests reach them without `@testable`, which
+# an optimised (--config=ci) build does not allow.
+load("@rules_swift//swift:swift.bzl", "swift_library")
+load("//ios:defs.bzl", "IOS_ONLY", "deployment_swift")
+
+deployment_swift(
+    name = "deployment",
+    out = "Deployment.swift",
+)
+
+swift_library(
+    name = "application",
+    srcs = glob(["*.swift"]) + [":deployment"],
+    module_name = "DeappjeApp",
+    target_compatible_with = IOS_ONLY,
+    visibility = ["//ios:__subpackages__"],
+    deps = [
+        "//ios/core",
+        "//ios/shell",
+    ],
+)

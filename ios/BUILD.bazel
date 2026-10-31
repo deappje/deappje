@@ -1,0 +1,22 @@
+# The iOS app (docs/01-deappje/05-deployment.md, "The apps"): SwiftUI over
+# the client core, for the simulator. `bazel build --//:apps //ios:app`
+# builds it, `bazel test --//:apps //ios/...` runs every test under here on
+# the simulator; without the flag everything here is skipped. A device
+# build is a provisioning profile and signing away (ios/README.md).
+load("@rules_apple//apple:ios.bzl", "ios_application")
+load("//ios:defs.bzl", "IOS_ONLY", "MINIMUM_OS_VERSION")
+
+ios_application(
+    name = "app",
+    bundle_id = "nl.deappje.app",
+    bundle_name = "deappje",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["Info.plist"],
+    minimum_os_version = MINIMUM_OS_VERSION,
+    target_compatible_with = IOS_ONLY,
+    visibility = ["//visibility:public"],
+    deps = ["//ios/application"],
+)

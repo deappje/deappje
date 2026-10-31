@@ -1,0 +1,40 @@
+# The core as Swift sees it: the UniFFI bindings //core:bindings_swift
+# generates from the host build, over the C header and the static library
+# built for the iOS platform of the build (//core:core_ios). The module
+# the bindings import is `deappje_coreFFI` (the name the generator put in
+# its `#if canImport`); rules_swift writes its module map from the header.
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_swift//swift:swift.bzl", "swift_interop_hint", "swift_library")
+load("//ios:defs.bzl", "IOS_ONLY", "host_files")
+
+host_files(
+    name = "ffi_header",
+    srcs = ["//core:bindings/swift/deappje_coreFFI.h"],
+)
+
+host_files(
+    name = "bindings",
+    srcs = ["//core:bindings/swift/deappje_core.swift"],
+)
+
+cc_library(
+    name = "ffi",
+    hdrs = [":ffi_header"],
+    aspect_hints = [":ffi_interop"],
+    target_compatible_with = IOS_ONLY,
+    deps = ["//core:core_ios"],
+)
+
+swift_interop_hint(
+    name = "ffi_interop",
+    module_name = "deappje_coreFFI",
+)
+
+swift_library(
+    name = "core",
+    srcs = [":bindings"],
+    module_name = "DeappjeCore",
+    target_compatible_with = IOS_ONLY,
+    visibility = ["//ios:__subpackages__"],
+    deps = [":ffi"],
+)
